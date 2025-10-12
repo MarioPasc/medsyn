@@ -19,7 +19,7 @@ class ConvBlock(nn.Module):
         self.act  = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.bn(self.conv(x)))
+        return self.act(self.bn(self.conv(x))) # type: ignore
 
 # --------------------------- Model --------------------------------------------
 

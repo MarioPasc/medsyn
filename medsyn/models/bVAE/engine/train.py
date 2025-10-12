@@ -14,6 +14,8 @@ from ..config import load_bvae_config
 from ..dataloader import make_loaders
 from ..model import BetaVAE
 from ..loss import bvae_loss
+from ..metrics import EpochAverager, make_batch_metrics_dict
+from ..training_logging import CSVTrainingLogger
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +80,11 @@ def train(cfg_path: str) -> None:
 
     best_val = float("inf")
 
+    csv_logger = CSVTrainingLogger(str(out / "training_metrics.csv"))
     for epoch in range(cfg.train.epochs):
         model.train()
         running = {"loss": 0.0, "recon": 0.0, "kld": 0.0}
+        train_avg = EpochAverager()
         for step, (x, _) in enumerate(loaders.train, 1):
             x = x.to(device, non_blocking=True)
 
@@ -89,6 +93,11 @@ def train(cfg_path: str) -> None:
                 out = model(x)
                 losses = bvae_loss(out["x_hat"], x, out["mu"], out["logv"],
                                    cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
+            bm = make_batch_metrics_dict(
+                loss_total=losses["loss"], loss_recon=losses["recon"], loss_kld=losses["kld"],
+                x_hat=out["x_hat"], x=x, mu=out["mu"], logv=out["logv"], latent_dim=cfg.model.latent_dim
+            )
+            train_avg.update(bm, batch_size=x.size(0))
             scaler.scale(losses["loss"]).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip_norm)
             scaler.step(opt)
@@ -114,6 +123,28 @@ def train(cfg_path: str) -> None:
                 val_loss += float(l["loss"])
         val_loss /= max(1, len(loaders.val))
         logger.info(f"val_loss={val_loss:.4f}")
+
+        # Aggregate validation metrics too
+        val_avg = EpochAverager()
+        with torch.no_grad(), torch.autocast(device_type=device.type, enabled=use_amp):
+            for x, _ in loaders.val:
+                x = x.to(device, non_blocking=True)
+                o = model(x)
+                l = bvae_loss(o["x_hat"], x, o["mu"], o["logv"],
+                            cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
+                bm = make_batch_metrics_dict(
+                    loss_total=l["loss"], loss_recon=l["recon"], loss_kld=l["kld"],
+                    x_hat=o["x_hat"], x=x, mu=o["mu"], logv=o["logv"], latent_dim=cfg.model.latent_dim
+                )
+                val_avg.update(bm, batch_size=x.size(0))
+
+        # LR for logging
+        curr_lr = next(iter(opt.param_groups))["lr"]
+
+        # Write CSV rows
+        csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_avg.means())
+        csv_logger.log_epoch(epoch=epoch, split="val",   lr=curr_lr, metrics=val_avg.means())
+
 
         # ---- Checkpointing ----
         is_best = val_loss < best_val
