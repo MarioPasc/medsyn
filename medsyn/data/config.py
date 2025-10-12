@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Literal
-import yaml
+import yaml # type: ignore
 import logging
 
 logger = logging.getLogger(__name__)

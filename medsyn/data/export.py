@@ -33,7 +33,7 @@ def export_split_to_pngs_and_index(dataset: Dataset, out_dir: Path) -> Dict[int,
     out: Dict[int, Dict[str, Any]] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for i in range(len(dataset)):
+    for i in range(len(dataset)): # type: ignore
         x, y = dataset[i]                      # x: Tensor CxHxW, y: Tensor o int
         label = int(y) if not isinstance(y, int) else y
         fname = f"{i:06d}_{label}.png"
@@ -49,6 +49,6 @@ def export_split_to_pngs_and_index(dataset: Dataset, out_dir: Path) -> Dict[int,
         }
 
         if (i + 1) % 1000 == 0:
-            logger.info("  %d muestras procesadas...", i + 1)
+            logger.info("  %d  processed samples ...", i + 1)
 
     return out

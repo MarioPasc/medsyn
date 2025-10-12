@@ -5,11 +5,10 @@ from typing import Dict, List, Sequence, Tuple
 from pathlib import Path
 import logging
 import numpy as np
-import torch
 from torch.utils.data import Dataset, Subset
 from torchvision import transforms
 from medmnist import PathMNIST  # API: PathMNIST(split=..., download=..., size=...)  :contentReference[oaicite:2]{index=2}
-from .config import ProjectCfg
+from medsyn.data.config import ProjectCfg
 
 logger = logging.getLogger(__name__)
 

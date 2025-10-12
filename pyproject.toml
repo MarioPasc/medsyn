@@ -85,5 +85,7 @@ module = [
     "medmnist.*",
     "torch.*",
     "torchvision.*",
+    "yaml",
+    "pandas",
 ]
 ignore_missing_imports = true
