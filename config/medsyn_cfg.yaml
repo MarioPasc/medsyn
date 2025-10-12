@@ -1,0 +1,15 @@
+# medsyn_config.yaml (añadidos para exportación e índice)
+data:
+  flag: pathmnist
+  size: 28
+  download_dir: /home/mpascual/research/datasets/medsyn/PathMNIST/data_raw         # guarda pathmnist.npz
+  processed_dir: /home/mpascual/research/datasets/medsyn/PathMNIST/data_processed  # almacena PNGs por split
+  index_json: /home/mpascual/research/datasets/medsyn/PathMNIST/indexes/pathmnist_index.json
+  seed: 23102003
+  num_workers: 4
+  reduction:
+    strategy: fraction
+    train: 0.20
+    val: 1.00
+    test: 1.00
+    max_per_class: null

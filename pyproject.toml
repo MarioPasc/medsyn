@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medsyn"
+version = "0.1.0"
+description = "Medical Image Synthesis project for in-depth evaluation of synthesis models (bVAE) on medical image datasets (PathMNIST)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+keywords = [
+    "medical-imaging",
+    "image-synthesis",
+    "VAE",
+    "beta-VAE",
+    "PathMNIST",
+    "MedMNIST",
+    "class-balancing",
+    "deep-learning",
+    "pytorch",
+]
+authors = [
+    {name = "M.Pascual-González", email = "mpascual@uma.es"},
+    {name = "Martina Cebolla Salas", email = "martinacesalas@gmail.com"}
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "medmnist>=2.2.0",
+    "pyyaml>=6.0",
+    "pillow>=9.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/MarioPasc/medsyn"
+Documentation = "https://github.com/MarioPasc/medsyn#readme"
+Repository = "https://github.com/MarioPasc/medsyn"
+"Bug Tracker" = "https://github.com/MarioPasc/medsyn/issues"
+Changelog = "https://github.com/MarioPasc/medsyn/releases"
+
+[project.scripts]
+medsyn-prepare-data = "medsyn.cli.data:main"
+
+[tool.setuptools]
+packages = ["medsyn", "medsyn.data", "medsyn.model"]
+
+[tool.setuptools.package-data]
+medsyn = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+follow_imports = "normal"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "medmnist.*",
+    "torch.*",
+    "torchvision.*",
+]
+ignore_missing_imports = true
