@@ -14,13 +14,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BVAEModelCfg:
-    """β-VAE model hyperparameters."""
+    """β-VAE model hyperparameters (conditional-ready)."""
     in_channels: int = 3
     img_size: int = 28
     latent_dim: int = 16
     base_channels: int = 32          # width of the first conv stage
     num_down: int = 3                # downsampling stages (×2 per stage)
     decoder_sigmoid: bool = True     # apply sigmoid at output
+    # --- conditional params ---
+    num_classes: int = 9
+    conditioning: Literal["film","none"] = "film"
+    class_embed_dim: int = 32
 
 @dataclass(frozen=True)
 class BVAETrainCfg:

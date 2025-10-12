@@ -12,24 +12,26 @@ from torchvision.utils import save_image
 
 from ..config import load_bvae_config
 from ..dataloader import make_loaders
-from ..model import BetaVAE
+from ..model import ConditionalBetaVAE
 from ..loss import bvae_loss
-from ..metrics import EpochAverager, make_batch_metrics_dict
+from ..metrics import EpochAverager, ClasswiseAverager, make_batch_metrics_dict, make_classwise_metrics_dict
 from ..training_logging import CSVTrainingLogger
 
 logger = logging.getLogger(__name__)
 
-def _build_model(cfg) -> BetaVAE:
-    mcfg = cfg.model
-    model = BetaVAE(
-        in_channels=mcfg.in_channels,
-        img_size=mcfg.img_size,
-        latent_dim=mcfg.latent_dim,
-        base_channels=mcfg.base_channels,
-        num_down=mcfg.num_down,
-        decoder_sigmoid=(cfg.loss.recon_type == "bce") or mcfg.decoder_sigmoid,
+def _build_model(cfg) -> ConditionalBetaVAE:
+    m = cfg.model
+    return ConditionalBetaVAE(
+        in_channels=m.in_channels,
+        img_size=m.img_size,
+        latent_dim=m.latent_dim,
+        base_channels=m.base_channels,
+        num_down=m.num_down,
+        num_classes=m.num_classes,
+        conditioning=m.conditioning,
+        class_embed_dim=m.class_embed_dim,
+        decoder_sigmoid=(cfg.loss.recon_type == "bce") or m.decoder_sigmoid,
     )
-    return model
 
 def _build_optimizer(cfg, model: torch.nn.Module):
     ocfg = cfg.optim
@@ -80,17 +82,24 @@ def train(cfg_path: str) -> None:
 
     best_val = float("inf")
 
-    csv_logger = CSVTrainingLogger(str(out / "training_metrics.csv"))
+    # Prepare extra fields for per-class metrics
+    extra_fields = []
+    for k in range(cfg.model.num_classes):
+        for mname in ("psnr","recon","kld","count"):
+            extra_fields.append(f"{mname}_c{k}")
+
+    csv_logger = CSVTrainingLogger(str(out / "training_metrics.csv"), extra_fields=extra_fields)
     for epoch in range(cfg.train.epochs):
         model.train()
         running = {"loss": 0.0, "recon": 0.0, "kld": 0.0}
         train_avg = EpochAverager()
-        for step, (x, _) in enumerate(loaders.train, 1):
-            x = x.to(device, non_blocking=True)
+        train_cavg = ClasswiseAverager()
+        for step, (x, y) in enumerate(loaders.train, 1):
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, enabled=use_amp):
-                out = model(x)
+                out = model(x, y)
                 losses = bvae_loss(out["x_hat"], x, out["mu"], out["logv"],
                                    cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
             bm = make_batch_metrics_dict(
@@ -98,6 +107,10 @@ def train(cfg_path: str) -> None:
                 x_hat=out["x_hat"], x=x, mu=out["mu"], logv=out["logv"], latent_dim=cfg.model.latent_dim
             )
             train_avg.update(bm, batch_size=x.size(0))
+
+            cm = make_classwise_metrics_dict(out["x_hat"], x, out["mu"], out["logv"], y, cfg.model.num_classes)
+            train_cavg.update(cm)
+
             scaler.scale(losses["loss"]).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip_norm)
             scaler.step(opt)
@@ -115,9 +128,9 @@ def train(cfg_path: str) -> None:
         model.eval()
         val_loss = 0.0
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=use_amp):
-            for x, _ in loaders.val:
-                x = x.to(device, non_blocking=True)
-                out = model(x)
+            for x, y in loaders.val:
+                x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+                out = model(x, y)
                 l = bvae_loss(out["x_hat"], x, out["mu"], out["logv"],
                               cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
                 val_loss += float(l["loss"])
@@ -126,10 +139,11 @@ def train(cfg_path: str) -> None:
 
         # Aggregate validation metrics too
         val_avg = EpochAverager()
+        val_cavg = ClasswiseAverager()
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=use_amp):
-            for x, _ in loaders.val:
-                x = x.to(device, non_blocking=True)
-                o = model(x)
+            for x, y in loaders.val:
+                x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+                o = model(x, y)
                 l = bvae_loss(o["x_hat"], x, o["mu"], o["logv"],
                             cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
                 bm = make_batch_metrics_dict(
@@ -138,12 +152,18 @@ def train(cfg_path: str) -> None:
                 )
                 val_avg.update(bm, batch_size=x.size(0))
 
+                cm = make_classwise_metrics_dict(o["x_hat"], x, o["mu"], o["logv"], y, cfg.model.num_classes)
+                val_cavg.update(cm)
+
         # LR for logging
         curr_lr = next(iter(opt.param_groups))["lr"]
 
-        # Write CSV rows
-        csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_avg.means())
-        csv_logger.log_epoch(epoch=epoch, split="val",   lr=curr_lr, metrics=val_avg.means())
+        # Write CSV rows with per-class metrics
+        train_row = train_avg.means() | train_cavg.means(cfg.model.num_classes)
+        val_row = val_avg.means() | val_cavg.means(cfg.model.num_classes)
+
+        csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_row)
+        csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_row)
 
 
         # ---- Checkpointing ----
@@ -155,9 +175,11 @@ def train(cfg_path: str) -> None:
         _save_ckpt({"epoch": epoch, "model": model.state_dict(), "opt": opt.state_dict(), "val_loss": val_loss},
                    out / "ckpts" / f"last.pt")
 
-        # ---- Periodic sampling ----
+        # ---- Periodic sampling (conditional, 8 samples per class) ----
         with torch.no_grad():
-            samples = model.sample(n=64, device=device)
-            save_image(samples, out / "samples" / f"epoch_{epoch:04d}.png", nrow=8)
+            n_per_class = 8
+            ys = torch.arange(cfg.model.num_classes, device=device).repeat_interleave(n_per_class)
+            samples = model.sample(n=ys.numel(), y=ys, device=device)
+            save_image(samples, out / "samples" / f"epoch_{epoch:04d}_cond.png", nrow=n_per_class)
 
     logger.info("Training completed. Best val loss: %.4f", best_val)

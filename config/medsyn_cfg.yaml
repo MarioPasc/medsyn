@@ -21,29 +21,37 @@ bVAE:
     base_channels: 32
     num_down: 3
     decoder_sigmoid: true
+    # --- conditional params ---
+    num_classes: 9            # PathMNIST
+    conditioning: "film"      # "film" o "none"
+    class_embed_dim: 32       # para FiLM
+
   train:
     epochs: 50
     batch_size: 128
     num_workers: 4
-    device: cuda
+    device: "cuda"
     mixed_precision: true
     grad_clip_norm: 1.0
     seed: 17
-    output_dir: ./outputs/bvae_pathmnist
+    output_dir: "./outputs/bvae"
+
   optim:
-    optimizer: adamw
-    lr_init: 1.0e-4
-    weight_decay: 1.0e-4
+    optimizer: "adamw"
+    lr_init: 0.0001
+    weight_decay: 0.0001
     betas: [0.9, 0.999]
     eps: 1.0e-8
+
   sched:
     use_onecycle: true
-    max_lr: 3.0e-4
+    max_lr: 0.0003
     pct_start: 0.3
     div_factor: 25.0
     final_div_factor: 10000.0
+
   loss:
     beta: 2.0
-    recon_type: mse         # or: bce
+    recon_type: "mse"
     recon_weight: 1.0
     kld_weight: 1.0

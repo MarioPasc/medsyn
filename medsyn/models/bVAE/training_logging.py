@@ -1,8 +1,7 @@
-# medsyn/models/bVAE/training_logging.py
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 import csv
 import time
 
@@ -16,21 +15,17 @@ DEFAULT_FIELDS: List[str] = [
 @dataclass
 class CSVTrainingLogger:
     """
-    CSV epoch-level logger.
-
-    Args:
-        csv_path: target CSV file path
-        fieldnames: ordered column names; defaults include losses and latent stats
-
-    Methods:
-        log_epoch(epoch, split, lr, metrics): append one row
+    CSV epoch-level logger with optional extra fields (e.g., per-class metrics).
     """
     csv_path: str
-    fieldnames: List[str] = None
+    fieldnames: Optional[List[str]] = None
+    extra_fields: Optional[List[str]] = None
 
     def __post_init__(self) -> None:
-        if self.fieldnames is None:
-            self.fieldnames = list(DEFAULT_FIELDS)
+        fields = list(DEFAULT_FIELDS)
+        if self.extra_fields:
+            fields.extend(self.extra_fields)
+        self.fieldnames = fields if self.fieldnames is None else self.fieldnames
         p = Path(self.csv_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         if not p.exists():
