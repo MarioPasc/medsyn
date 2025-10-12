@@ -37,6 +37,7 @@ class BVAETrainCfg:
     grad_clip_norm: float = 1.0
     seed: int = 17
     output_dir: str = "./outputs/bvae"
+    save_every_epoch: int = 10
 
 @dataclass(frozen=True)
 class BVAEOptimCfg:

@@ -9,6 +9,7 @@ import torch
 from torch import optim
 from torch.optim.lr_scheduler import OneCycleLR
 from torchvision.utils import save_image
+from tqdm import tqdm
 
 from ..config import load_bvae_config
 from ..dataloader import make_loaders
@@ -63,9 +64,9 @@ def _save_ckpt(state: Dict[str, Any], path: Path) -> None:
 
 def train(cfg_path: str) -> None:
     cfg = load_bvae_config(cfg_path)
-    out = Path(cfg.train.output_dir)
-    (out / "ckpts").mkdir(parents=True, exist_ok=True)
-    (out / "samples").mkdir(parents=True, exist_ok=True)
+    output_dir = Path(cfg.train.output_dir)
+    (output_dir / "ckpts").mkdir(parents=True, exist_ok=True)
+    (output_dir / "samples").mkdir(parents=True, exist_ok=True)
 
     # Data
     loaders = make_loaders(cfg.data.index_json, cfg.model.img_size, cfg.train.batch_size, cfg.train.num_workers, cfg.train.seed)
@@ -76,9 +77,9 @@ def train(cfg_path: str) -> None:
     opt = _build_optimizer(cfg, model)
     sched = _build_scheduler(cfg, opt, steps_per_epoch=len(loaders.train))
 
-    # AMP
+    # AMP - use the new torch.amp.GradScaler API (torch>=2.0)
     use_amp = cfg.train.mixed_precision and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
 
     best_val = float("inf")
 
@@ -88,13 +89,19 @@ def train(cfg_path: str) -> None:
         for mname in ("psnr","recon","kld","count"):
             extra_fields.append(f"{mname}_c{k}")
 
-    csv_logger = CSVTrainingLogger(str(out / "training_metrics.csv"), extra_fields=extra_fields)
+    csv_logger = CSVTrainingLogger(str(output_dir / "training_metrics.csv"), extra_fields=extra_fields)
     for epoch in range(cfg.train.epochs):
         model.train()
         running = {"loss": 0.0, "recon": 0.0, "kld": 0.0}
         train_avg = EpochAverager()
         train_cavg = ClasswiseAverager()
-        for step, (x, y) in enumerate(loaders.train, 1):
+
+        # Progress bar for the training epoch
+        pbar = tqdm(enumerate(loaders.train, 1), total=len(loaders.train),
+                    desc=f"Epoch {epoch+1}/{cfg.train.epochs}",
+                    unit="batch", leave=True)
+
+        for step, (x, y) in pbar:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
             opt.zero_grad(set_to_none=True)
@@ -121,8 +128,13 @@ def train(cfg_path: str) -> None:
             for k in running:
                 running[k] += float(losses[k])
 
+            # Update progress bar with current loss
+            pbar.set_postfix({"loss": f"{losses['loss']:.4f}",
+                            "recon": f"{losses['recon']:.4f}",
+                            "kld": f"{losses['kld']:.4f}"})
+
+        pbar.close()
         n = len(loaders.train)
-        logger.info(f"epoch={epoch} loss={running['loss']/n:.4f} recon={running['recon']/n:.4f} kld={running['kld']/n:.4f}")
 
         # ---- Validation ----
         model.eval()
@@ -165,28 +177,49 @@ def train(cfg_path: str) -> None:
         csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_row)
         csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_row)
 
+        # Print performance metrics at the end of each epoch
+        print(f"\n{'='*80}")
+        print(f"Epoch {epoch+1}/{cfg.train.epochs} Summary:")
+        print(f"{'='*80}")
+        print(f"Training:")
+        print(f"  Total Loss: {running['loss']/n:.4f}")
+        print(f"  Recon Loss: {running['recon']/n:.4f}")
+        print(f"  KLD Loss:   {running['kld']/n:.4f}")
+        print(f"  PSNR:       {train_row.get('psnr', 0.0):.2f} dB")
+        print(f"\nValidation:")
+        print(f"  Total Loss: {val_loss:.4f}")
+        print(f"  PSNR:       {val_row.get('psnr', 0.0):.2f} dB")
+        print(f"  Learning Rate: {curr_lr:.6f}")
+        print(f"{'='*80}\n")
+
 
         # ---- Checkpointing ----
         is_best = val_loss < best_val
         if is_best:
             best_val = val_loss
             _save_ckpt({"epoch": epoch, "model": model.state_dict(), "opt": opt.state_dict(), "val_loss": val_loss},
-                       out / "ckpts" / "best.pt")
+                       output_dir / "ckpts" / "best.pt")
         _save_ckpt({"epoch": epoch, "model": model.state_dict(), "opt": opt.state_dict(), "val_loss": val_loss},
-                   out / "ckpts" / f"last.pt")
+                   output_dir / "ckpts" / f"last.pt")
 
-        # ---- Periodic sampling (conditional, 8 samples per class) ----
+        # ---- Periodic checkpoint saving every X epochs ----
+        if (epoch + 1) % cfg.train.save_every_epoch == 0:
+            _save_ckpt({"epoch": epoch, "model": model.state_dict(), "opt": opt.state_dict(), "val_loss": val_loss},
+                       output_dir / "ckpts" / f"epoch_{epoch+1:04d}.pt")
+            logger.info(f"Saved checkpoint at epoch {epoch+1}")
+
+        # ---- Generate 1 image per label for tracking progress ----
         with torch.no_grad():
-            n_per_class = 8
-            ys = torch.arange(cfg.model.num_classes, device=device).repeat_interleave(n_per_class)
+            n_per_class = 1
+            ys = torch.arange(cfg.model.num_classes, device=device)
             samples = model.sample(n=ys.numel(), y=ys, device=device)
-            save_image(samples, out / "samples" / f"epoch_{epoch:04d}_cond.png", nrow=n_per_class)
+            save_image(samples, output_dir / "samples" / f"epoch_{epoch+1:04d}_progress.png", nrow=cfg.model.num_classes)
 
     logger.info("Training completed. Best val loss: %.4f", best_val)
 
     # ---- Final evaluation on test set with best model ----
     logger.info("Loading best checkpoint for final test evaluation...")
-    best_ckpt = torch.load(out / "ckpts" / "best.pt", map_location=device)
+    best_ckpt = torch.load(output_dir / "ckpts" / "best.pt", map_location=device)
     model.load_state_dict(best_ckpt["model"])
     model.eval()
 

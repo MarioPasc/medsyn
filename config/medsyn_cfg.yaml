@@ -34,7 +34,8 @@ bVAE:
     mixed_precision: true
     grad_clip_norm: 1.0
     seed: 17
-    output_dir: "./outputs/bvae"
+    output_dir: "/home/mpascual/research/datasets/medsyn/bVAE"
+    save_every_epoch: 10
 
   optim:
     optimizer: "adamw"
@@ -58,7 +59,7 @@ bVAE:
 
 # Generation configuration (outside bVAE section)
 generate:
-  checkpoint: "/home/mpascual/research/code/medsyn/outputs/bvae/ckpts/best.pt"  # absolute path to checkpoint
+  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
   classes:
     0: 100
     1: 100

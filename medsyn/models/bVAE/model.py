@@ -78,11 +78,33 @@ class ConditionalBetaVAE(nn.Module):
         # Decoder: concatenate one-hot(y) to z
         self.fc_dec = nn.Linear(D + self.num_classes, self.flat_dim)
         dec_blocks = []
-        for i in reversed(range(num_down)):
+
+        # Calculate output_padding per layer to match encoder dimensions exactly
+        # For img_size=28, num_down=3: encoder gives 28→14→7→3
+        # Decoder should reverse: 3→7→14→28
+        # Formula: out = (in-1)*stride - 2*pad + kernel + out_pad
+        # For stride=2, pad=1, kernel=4: out = 2*in + out_pad
+        # So: 3→6 (need +1), 6→12 (need +2), 12→24 (need +4)
+        # We need: 3→7 (out_pad=1), 7→14 (out_pad=0), 14→28 (out_pad=0)
+
+        # Calculate the target sizes at each decoder stage
+        target_sizes = [S // (2 ** i) for i in range(num_down + 1)]  # [S, S/2, S/4, ..., s_out]
+        target_sizes = list(reversed(target_sizes[:-1]))  # reverse and exclude the last (starting) size
+
+        for idx, i in enumerate(reversed(range(num_down))):
             in_c = B * (2 ** max(i, 0))
             out_c = B * (2 ** (i - 1)) if i > 0 else B
+
+            # Determine output_padding needed for this specific layer
+            # Current size is target_sizes[idx-1] if idx > 0 else self.s_out
+            current_size = target_sizes[idx - 1] if idx > 0 else self.s_out
+            target_size = target_sizes[idx]
+            # Expected output with out_pad=0: (current_size - 1) * 2 - 2 + 4 = 2*current_size
+            expected_out = 2 * current_size
+            out_pad = target_size - expected_out
+
             dec_blocks += [
-                nn.ConvTranspose2d(in_c, in_c, 4, stride=2, padding=1),
+                nn.ConvTranspose2d(in_c, in_c, 4, stride=2, padding=1, output_padding=out_pad),
                 nn.BatchNorm2d(in_c),
                 nn.ReLU(inplace=True),
                 nn.Conv2d(in_c, out_c, 3, padding=1),
