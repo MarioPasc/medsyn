@@ -65,6 +65,13 @@ class BVAELossCfg:
     kld_weight: float = 1.0           # multiplies beta*KLD
 
 @dataclass(frozen=True)
+class BVAEGenerateCfg:
+    """Generation configuration."""
+    class_ids: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7, 8)
+    samples_per_class: int = 100
+    checkpoint: str = "best.pt"
+
+@dataclass(frozen=True)
 class DataPathsCfg:
     """Data paths from the global config."""
     index_json: str                   # path to the PathMNIST JSON index
@@ -78,6 +85,7 @@ class BVAEConfig:
     optim: BVAEOptimCfg
     sched: BVAESchedCfg
     loss:  BVAELossCfg
+    generate: BVAEGenerateCfg
     data:  DataPathsCfg
 
 # --------------------------- Loader -------------------------------------------
@@ -96,8 +104,13 @@ def load_bvae_config(yaml_path: str | Path) -> BVAEConfig:
     optim = BVAEOptimCfg(**b.get("optim", {}))
     sched = BVAESchedCfg(**b.get("sched", {}))
     loss  = BVAELossCfg(**b.get("loss",  {}))
+    gen_cfg = b.get("generate", {})
+    # Convert class_ids list to tuple for frozen dataclass
+    if "class_ids" in gen_cfg and isinstance(gen_cfg["class_ids"], list):
+        gen_cfg["class_ids"] = tuple(gen_cfg["class_ids"])
+    generate = BVAEGenerateCfg(**gen_cfg)
     data  = DataPathsCfg(index_json=d["index_json"], processed_dir=d.get("processed_dir"))
-    cfg = BVAEConfig(model=model, train=train, optim=optim, sched=sched, loss=loss, data=data)
+    cfg = BVAEConfig(model=model, train=train, optim=optim, sched=sched, loss=loss, generate=generate, data=data)
 
     out = Path(cfg.train.output_dir)
     out.mkdir(parents=True, exist_ok=True)

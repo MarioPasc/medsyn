@@ -183,3 +183,33 @@ def train(cfg_path: str) -> None:
             save_image(samples, out / "samples" / f"epoch_{epoch:04d}_cond.png", nrow=n_per_class)
 
     logger.info("Training completed. Best val loss: %.4f", best_val)
+
+    # ---- Final evaluation on test set with best model ----
+    logger.info("Loading best checkpoint for final test evaluation...")
+    best_ckpt = torch.load(out / "ckpts" / "best.pt", map_location=device)
+    model.load_state_dict(best_ckpt["model"])
+    model.eval()
+
+    test_avg = EpochAverager()
+    test_cavg = ClasswiseAverager()
+    with torch.no_grad(), torch.autocast(device_type=device.type, enabled=use_amp):
+        for x, y in loaders.test:
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            o = model(x, y)
+            l = bvae_loss(o["x_hat"], x, o["mu"], o["logv"],
+                        cfg.loss.recon_type, cfg.loss.beta, cfg.loss.recon_weight, cfg.loss.kld_weight)
+            bm = make_batch_metrics_dict(
+                loss_total=l["loss"], loss_recon=l["recon"], loss_kld=l["kld"],
+                x_hat=o["x_hat"], x=x, mu=o["mu"], logv=o["logv"], latent_dim=cfg.model.latent_dim
+            )
+            test_avg.update(bm, batch_size=x.size(0))
+            cm = make_classwise_metrics_dict(o["x_hat"], x, o["mu"], o["logv"], y, cfg.model.num_classes)
+            test_cavg.update(cm)
+
+    # Write test metrics to CSV
+    test_row = test_avg.means() | test_cavg.means(cfg.model.num_classes)
+    csv_logger.log_epoch(epoch=cfg.train.epochs, split="test", lr=0.0, metrics=test_row)
+
+    test_loss = test_row.get("loss", 0.0)
+    test_psnr = test_row.get("psnr", 0.0)
+    logger.info("Test evaluation: loss=%.4f psnr=%.2f", test_loss, test_psnr)

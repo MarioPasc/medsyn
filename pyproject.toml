@@ -59,9 +59,18 @@ Changelog = "https://github.com/MarioPasc/medsyn/releases"
 
 [project.scripts]
 medsyn-prepare-data = "medsyn.cli.data:main"
+bvae-train = "medsyn.cli.train_bVAE:main"
+bvae-generate = "medsyn.cli.generate_bVAE:main"
 
 [tool.setuptools]
-packages = ["medsyn", "medsyn.data", "medsyn.model"]
+packages = [
+    "medsyn",
+    "medsyn.cli",
+    "medsyn.data",
+    "medsyn.models",
+    "medsyn.models.bVAE",
+    "medsyn.models.bVAE.engine"
+]
 
 [tool.setuptools.package-data]
 medsyn = ["py.typed"]

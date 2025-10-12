@@ -55,3 +55,17 @@ bVAE:
     recon_type: "mse"
     recon_weight: 1.0
     kld_weight: 1.0
+
+# Generation configuration (outside bVAE section)
+generate:
+  checkpoint: "/home/mpascual/research/code/medsyn/outputs/bvae/ckpts/best.pt"  # absolute path to checkpoint
+  classes:
+    0: 100
+    1: 100
+    2: 100
+    3: 100
+    4: 100
+    5: 100
+    6: 100
+    7: 100
+    8: 100
