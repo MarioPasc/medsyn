@@ -6,9 +6,42 @@ import csv
 import time
 
 DEFAULT_FIELDS: List[str] = [
-    "epoch", "split", "time_s", "lr",
+    # Basic training info
+    "epoch", "split", "time_s", "lr", "beta",
+
+    # Core losses
     "loss", "recon", "kld", "kld_per_dim",
-    "psnr", "mu_abs_mean", "logv_mean", "logv_std", "z_var_mean",
+
+    # Reconstruction quality
+    "psnr", "ssim", "mse", "mae",
+
+    # Decoder output health
+    "output_mean", "output_std", "output_saturated_ratio",
+
+    # Posterior statistics
+    "mu_abs_mean", "mu_max", "mu_std",
+    "logv_mean", "logv_std", "logv_min", "logv_max",
+    "z_var_mean",
+
+    # Posterior collapse detection
+    "active_units", "kld_max", "kld_min",
+
+    # Prior drift (class-conditional)
+    "prior_mu_max", "prior_mu_std",
+    "prior_logv_min", "prior_logv_max",
+    "prior_kld_avg",
+
+    # Gradient & weight health
+    "grad_norm", "grad_norm_max", "grad_norm_std",
+    "enc_weight_norm", "dec_weight_norm",
+    "weight_updates_ratio",
+
+    # Batch statistics (outlier detection)
+    "loss_max_batch", "loss_min_batch", "recon_max_batch",
+
+    # Capacity & telemetry
+    "capacity_t", "prior_mu_l2", "prior_logv_mean",
+
     "total_count"
 ]
 

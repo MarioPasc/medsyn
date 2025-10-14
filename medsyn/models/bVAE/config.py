@@ -16,15 +16,17 @@ logger = logging.getLogger(__name__)
 class BVAEModelCfg:
     """β-VAE model hyperparameters (conditional-ready)."""
     in_channels: int = 3
-    img_size: int = 28
-    latent_dim: int = 16
-    base_channels: int = 32          # width of the first conv stage
-    num_down: int = 3                # downsampling stages (×2 per stage)
+    img_size: int = 64
+    latent_dim: int = 32
+    base_channels: int = 64          # width of the first conv stage
+    num_down: int = 4                # downsampling stages (×2 per stage)
     decoder_sigmoid: bool = True     # apply sigmoid at output
     # --- conditional params ---
     num_classes: int = 9
     conditioning: Literal["film","none"] = "film"
-    class_embed_dim: int = 32
+    class_embed_dim: int = 64
+    use_class_prior: bool = False    # start vanilla; enable after recon stabilizes
+    decoder_conditioning: bool = False  # off in decoder until KL>0
 
 @dataclass(frozen=True)
 class BVAETrainCfg:
@@ -38,6 +40,9 @@ class BVAETrainCfg:
     seed: int = 17
     output_dir: str = "./outputs/bvae"
     save_every_epoch: int = 10
+    # Lagging-inference mitigation: extra encoder updates to prevent collapse
+    encoder_extra_steps: int = 2      # mitigate lagging inference
+    encoder_heavy_epochs: int = 5     # first epochs only
 
 @dataclass(frozen=True)
 class BVAEOptimCfg:
@@ -58,12 +63,51 @@ class BVAESchedCfg:
     final_div_factor: float = 1e4
 
 @dataclass(frozen=True)
+class BetaSchedCfg:
+    type: Literal["monotonic","cyclical"] = "monotonic"
+    cycles: int = 4
+    ratio_increase: float = 0.5
+    beta_min: float = 0.0
+    beta_max: float = 1.0
+
+@dataclass(frozen=True)
+class CapacityCfg:
+    use: bool = False               # start disabled to avoid early KL pinning
+    C_max: float = 5.0              # target KL per-dim scalar (nats averaged)
+    steps_to_max: int = 30000       # steps to reach C_max
+    gamma: float = 50.0             # gentler pull when enabled
+
+@dataclass(frozen=True)
+class InfoVAECfg:
+    use: bool = False
+    weight: float = 10.0
+    kernel: Literal["rbf","imq"] = "rbf"
+
+@dataclass(frozen=True)
 class BVAELossCfg:
     """Loss weights and types."""
-    beta: float = 2.0                 # KLD weight
-    recon_type: Literal["mse","bce"] = "mse"
+    beta: float = 1.0                 # KLD weight (techo)
+    recon_type: Literal["mse","bce","l1","l1_ssim"] = "l1"  # SSIM later after stability
     recon_weight: float = 1.0
     kld_weight: float = 1.0           # multiplies beta*KLD
+    l1_weight: float = 1.0
+    ssim_weight: float = 0.85
+    free_bits_nats: float = 0.03
+    beta_schedule: Optional[BetaSchedCfg] = None
+    infovae_mmd: Optional[InfoVAECfg] = None
+    prior_reg_w: float = 1e-4
+    capacity: Optional[CapacityCfg] = None
+    per_class_mmd_use: bool = False   # per-class MMD regularization
+    per_class_mmd_w: float = 1.0      # weight for per-class MMD
+
+    def __post_init__(self):
+        # Provide defaults for nested configs if None
+        if self.beta_schedule is None:
+            object.__setattr__(self, 'beta_schedule', BetaSchedCfg())
+        if self.infovae_mmd is None:
+            object.__setattr__(self, 'infovae_mmd', InfoVAECfg())
+        if self.capacity is None:
+            object.__setattr__(self, 'capacity', CapacityCfg())
 
 @dataclass(frozen=True)
 class BVAEGenerateCfg:
@@ -104,7 +148,19 @@ def load_bvae_config(yaml_path: str | Path) -> BVAEConfig:
     train = BVAETrainCfg(**b.get("train", {}))
     optim = BVAEOptimCfg(**b.get("optim", {}))
     sched = BVAESchedCfg(**b.get("sched", {}))
-    loss  = BVAELossCfg(**b.get("loss",  {}))
+
+    # Parse nested configs for loss
+    loss_dict = b.get("loss", {})
+    sched_loss = loss_dict.pop("beta_schedule", {})
+    infommd = loss_dict.pop("infovae_mmd", {})
+    capacity_dict = loss_dict.pop("capacity", {})
+    loss = BVAELossCfg(
+        **loss_dict,
+        beta_schedule=BetaSchedCfg(**sched_loss),
+        infovae_mmd=InfoVAECfg(**infommd),
+        capacity=CapacityCfg(**capacity_dict)
+    )
+
     gen_cfg = b.get("generate", {})
     # Convert class_ids list to tuple for frozen dataclass
     if "class_ids" in gen_cfg and isinstance(gen_cfg["class_ids"], list):
