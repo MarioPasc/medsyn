@@ -1,9 +1,9 @@
 data:
   flag: pathmnist
   size: 64
-  download_dir: /home/mpascual/research/datasets/medsyn/PathMNIST/data_raw         # guarda pathmnist.npz
-  processed_dir: /home/mpascual/research/datasets/medsyn/PathMNIST/data_processed  # almacena PNGs por split
-  index_json: /home/mpascual/research/datasets/medsyn/PathMNIST/indexes/pathmnist_index.json
+  download_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_raw         # guarda pathmnist.npz
+  processed_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_processed  # almacena PNGs por split
+  index_json: /media/mpascual/PortableSSD/medsyn/PathMNIST/indexes/pathmnist_index.json
   seed: 23102003
   num_workers: 8
   reduction:
