@@ -106,17 +106,21 @@ def _build_model(cfg) -> ConditionalBetaVAE:
 
 def _build_optimizer(cfg, model: torch.nn.Module):
     ocfg = cfg.optim
-    # lower LR for learned class prior
+    # group params: encoder, decoder, prior
     prior_params = []
     if getattr(model, "use_class_prior", False):
         if hasattr(model, "prior_mu"):   prior_params += list(model.prior_mu.parameters())
         if hasattr(model, "prior_logv"): prior_params += list(model.prior_logv.parameters())
     # Use id-based filtering to avoid hashing issues
     prior_ids = set(id(p) for p in prior_params)
-    base_params = [p for p in model.parameters() if id(p) not in prior_ids]
+    enc_params = [p for n,p in model.named_parameters()
+                  if (n.startswith("enc") or n.startswith("fc_mu") or n.startswith("fc_logv")) and id(p) not in prior_ids]
+    dec_params = [p for n,p in model.named_parameters()
+                  if (n.startswith("dec") or n.startswith("out") or n.startswith("fc_dec")) and id(p) not in prior_ids]
     groups = [
-        {"params": base_params, "lr": ocfg.lr_init, "weight_decay": ocfg.weight_decay},
-        {"params": prior_params, "lr": ocfg.lr_init * 0.1, "weight_decay": ocfg.weight_decay},
+        {"params": enc_params, "lr": ocfg.lr_init,        "weight_decay": ocfg.weight_decay},
+        {"params": dec_params, "lr": ocfg.lr_init * 0.5,  "weight_decay": ocfg.weight_decay},  # slower decoder
+        {"params": prior_params, "lr": ocfg.lr_init * 0.1,"weight_decay": ocfg.weight_decay},
     ]
     if ocfg.optimizer == "adamw":
         return optim.AdamW(groups, betas=ocfg.betas, eps=ocfg.eps)
