@@ -4,6 +4,7 @@ data:
   download_dir: "C:\\Users\\User\\MyDocs\\Universidad\\CUARTO_2026\\Almacenes de Datos\\proyecto\\medsyn\\PathMNIST\\data_raw"         # guarda pathmnist.npz
   processed_dir: "C:\\Users\\User\\MyDocs\\Universidad\\CUARTO_2026\\Almacenes de Datos\\proyecto\\medsyn\\PathMNIST\\data_processed"  # almacena PNGs por split
   index_json: "C:\\Users\\User\\MyDocs\\Universidad\\CUARTO_2026\\Almacenes de Datos\\proyecto\\medsyn\\PathMNIST\\indexes\\pathmnist_index.json"
+  yolo_folder_dataset: "C:\\Users\\User\\MyDocs\\Universidad\\CUARTO_2026\\Almacenes de Datos\\proyecto\\medsyn\\PathMNIST\\yolo_cls_dataset"  # NEW: symlinked YOLO classification dataset
   seed: 23102003
   num_workers: 8
   reduction:

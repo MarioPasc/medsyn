@@ -15,7 +15,10 @@ from typing import Dict, Any
 from medsyn.data.config import load_config, ensure_dirs, ProjectCfg
 from medsyn.data.pathmnist import prepare_pathmnist, SplitDatasets
 from medsyn.data.export import export_split_to_pngs_and_index
-
+from medsyn.data.yolo_dataset import (
+    generate_yolo_classification_from_index,
+    build_pathmnist_class_map,
+)
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("medsyn.cli.data")
 
@@ -65,6 +68,15 @@ def main() -> None:
         json.dump(final_idx, fh, ensure_ascii=False, indent=2)
     logger.info("Index JSON written to: %s", index_path)
 
+    if cfg.data.yolo_folder_dataset:
+        # 4) Generar dataset de clasificación YOLO con symlinks
+        yolo_root = Path(args.yolo_root) if args.yolo_root else Path(cfg.data.yolo_folder_dataset)
+        yolo_root = yolo_root.resolve()
+        yolo_root.mkdir(parents=True, exist_ok=True)
+        class_map = build_pathmnist_class_map()
+        rep = generate_yolo_classification_from_index(index_path, yolo_root, class_map)
+        logger.info("YOLO dataset at %s", yolo_root)
+        logger.info("Counts: %s", rep.counts)
 
 if __name__ == "__main__":
     main()

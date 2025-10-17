@@ -28,6 +28,7 @@ class DataCfg:
     seed: int = 17
     num_workers: int = 4
     reduction: ReductionCfg = ReductionCfg()
+    yolo_folder_dataset: str = "./yolo_cls"  # root for YOLO classification symlink dataset
 
 @dataclass(frozen=True)
 class ProjectCfg:
@@ -57,3 +58,4 @@ def ensure_dirs(cfg: ProjectCfg) -> None:
     Path(cfg.data.download_dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.data.processed_dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.data.index_json).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.data.yolo_folder_dataset).mkdir(parents=True, exist_ok=True)

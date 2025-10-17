@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Dict
-import yaml
+import yaml # type: ignore
 
 logging.basicConfig(
     level=logging.INFO,
