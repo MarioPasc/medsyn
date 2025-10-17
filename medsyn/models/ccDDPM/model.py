@@ -23,7 +23,12 @@ class ClassEmbedder(nn.Module):
     def forward(self, labels: Optional[torch.Tensor], shape_hw: tuple[int, int], device: torch.device) -> torch.Tensor:
         if labels is None:
             return torch.zeros((1, self.emb_channels, *shape_hw), device=device)
-        v = self.emb(labels)  # [B, C_emb]
+        # labels may contain -1 to indicate unconditional tokens (per-sample classifier-free guidance)
+        mask_uncond = (labels == -1)
+        # clamp to valid range for embedding lookup
+        labels_clamped = labels.clamp_min(0)
+        v = self.emb(labels_clamped)  # [B, C_emb]
+        v[mask_uncond] = 0  # zero vectors for uncond rows
         v = v[..., None, None]  # [B, C_emb, 1, 1]
         return v.expand(-1, -1, shape_hw[0], shape_hw[1])
 

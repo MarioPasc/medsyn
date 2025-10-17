@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Dict
 import csv
 import time
+import math
 import logging
 import torch
 import torch.nn as nn
@@ -16,7 +17,8 @@ from tqdm import tqdm
 from torchvision.utils import save_image
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from medsyn.models.ccDDPM.config import ProjectCfg, load_cfg
-from medsyn.models.ccDDPM.dataloader import build_loader
+from medsyn.models.ccDDPM.dataloaders.json import build_json_loader
+from medsyn.models.ccDDPM.dataloaders.npz import build_npz_loader
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
@@ -238,9 +240,18 @@ def train(yaml_path: str, split: str = "train") -> None:
     scfg = cfg.ccddpm.sched
     ocfg = cfg.ccddpm.optim
 
-    # Data
-    train_loader = build_loader(cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
-    val_loader = build_loader(cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+    # Data - select dataloader based on config
+    dl_cfg = cfg.ccddpm.dataloader
+    if dl_cfg.type.lower() == "npz":
+        logger.info("Using NPZ dataloader from: %s", dl_cfg.npz_path)
+        if dl_cfg.npz_path is None:
+            raise ValueError("NPZ dataloader selected but npz_path is not specified in config")
+        train_loader = build_npz_loader(dl_cfg.npz_path, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+        val_loader = build_npz_loader(dl_cfg.npz_path, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+    else:  # default to JSON
+        logger.info("Using JSON dataloader from: %s", cfg.data_index_json)
+        train_loader = build_json_loader(cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+        val_loader = build_json_loader(cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
 
     # Model
     mcfg = CCDDPMInit(
@@ -262,13 +273,14 @@ def train(yaml_path: str, split: str = "train") -> None:
 
     # Optim
     opt = optim.AdamW(model.parameters(), lr=ocfg.lr, betas=ocfg.betas, eps=ocfg.eps, weight_decay=ocfg.wd)
-    scaler = GradScaler('cuda', enabled=tcfg.mixed_precision)
+    scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
     ema = EMA(model, decay=tcfg.ema_decay) if tcfg.ema_use else None
     loss_fn = DDPMNoiseMSE(num_classes=tcfg.num_classes)
 
     out_dir = Path(tcfg.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "samples").mkdir(parents=True, exist_ok=True)
+    (out_dir / "ckpts").mkdir(parents=True, exist_ok=True)
     
     # Initialize CSV logger with per-class metrics
     extra_fields = []
@@ -282,6 +294,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         with open(csv_path, "w", newline="") as fh:
             csv.writer(fh).writerow(["epoch","step","loss","lr","time_s"])
 
+    # Track best validation loss for best.pt and early stopping
+    best_val_loss = float("inf")
+    best_epoch = 0
+    epochs_without_improvement = 0
+    
     global_step = 0
     model.train()
     for epoch in range(1, tcfg.epochs + 1):
@@ -304,22 +321,28 @@ def train(yaml_path: str, split: str = "train") -> None:
             noise = torch.randn_like(x0)
             x_t = noise_scheduler.add_noise(x0, noise, t) # type: ignore
 
-            # classifier-free: drop labels with prob p
+            # classifier-free: drop labels with prob p (set to sentinel -1 for unconditional)
             class_labels = labels.clone()
             if tcfg.guidance_p_uncond > 0:
-                drop_mask = torch.rand(bsz, device=device) < tcfg.guidance_p_uncond
-                if drop_mask.any():
-                    class_labels[drop_mask] = 0  # value unused
+                drop = torch.rand(bsz, device=device) < tcfg.guidance_p_uncond
+                class_labels[drop] = -1  # sentinel for uncond
             # forward
-            with autocast('cuda', enabled=tcfg.mixed_precision):
-                pred = model(x_t, t, class_labels if tcfg.guidance_p_uncond < 1.0 else None)
+            with autocast(device_type='cuda', enabled=tcfg.mixed_precision):
+                pred = model(x_t, t, class_labels)
                 loss = loss_fn(pred, noise, labels)
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             if tcfg.grad_clip_norm:
                 scaler.unscale_(opt)
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), tcfg.grad_clip_norm)
+                # Clip gradients; error_if_nonfinite=False prevents crashes on overflow
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), tcfg.grad_clip_norm, error_if_nonfinite=False
+                )
+                grad_norm_val = float(grad_norm)
+                # Mark non-finite grad norms as NaN for proper averaging
+                if not math.isfinite(grad_norm_val):
+                    grad_norm_val = float("nan")
             else:
                 # Compute gradient norm for logging
                 total_norm = 0.0
@@ -327,7 +350,9 @@ def train(yaml_path: str, split: str = "train") -> None:
                     if p.grad is not None:
                         param_norm = p.grad.detach().data.norm(2)
                         total_norm += param_norm.item() ** 2
-                grad_norm = total_norm ** 0.5
+                grad_norm_val = total_norm ** 0.5
+                if not math.isfinite(grad_norm_val):
+                    grad_norm_val = float("nan")
             scaler.step(opt)
             scaler.update()
             if ema:
@@ -344,7 +369,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 
                 # Compute batch metrics
                 batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
-                batch_metrics["grad_norm"] = float(grad_norm) if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+                batch_metrics["grad_norm"] = grad_norm_val
                 batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
                 
                 # Update epoch averager
@@ -445,12 +470,49 @@ def train(yaml_path: str, split: str = "train") -> None:
         
         model.train()
 
-        # checkpoint
+        # ---- Checkpointing & Early Stopping ----
+        val_loss = val_metrics.get('loss', float('inf'))
+        checkpoint_data = {
+            "model": model.state_dict(),
+            "opt": opt.state_dict(),
+            "epoch": epoch,
+            "val_loss": val_loss,
+            "ema": (ema.shadow if ema else None),
+            "cfg": tcfg.__dict__
+        }
+        
+        # Always save last.pt
+        torch.save(checkpoint_data, out_dir / "ckpts" / "last.pt")
+        
+        # Save best.pt if this is the best validation loss so far
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_val_loss = val_loss
+            best_epoch = epoch
+            epochs_without_improvement = 0
+            torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
+            logger.info(f"✓ New best model at epoch {epoch} with val_loss={val_loss:.4f}")
+        else:
+            epochs_without_improvement += 1
+            logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
+        
+        # Early stopping check
+        if epochs_without_improvement >= tcfg.patience:
+            logger.info(f"⚠ Early stopping triggered! No improvement for {tcfg.patience} epochs.")
+            logger.info(f"Best model was at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+            print(f"\n{'='*80}")
+            print(f"⚠ Early Stopping at Epoch {epoch}")
+            print(f"{'='*80}")
+            print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
+            print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+            print(f"{'='*80}\n")
+            break
+        
+        # Save periodic checkpoint every X epochs
         if (epoch % tcfg.ckpt_every_epochs) == 0:
-            ck = out_dir / f"ccddpm_ep{epoch}.pt"
-            to_save = {"model": model.state_dict(), "opt": opt.state_dict(), "epoch": epoch, "ema": (ema.shadow if ema else None), "cfg": tcfg.__dict__}
-            torch.save(to_save, ck)
-            logger.info("Saved %s", ck)
+            ck = out_dir / "ckpts" / f"epoch_{epoch:04d}.pt"
+            torch.save(checkpoint_data, ck)
+            logger.info(f"Saved periodic checkpoint: {ck.name}")
         
         # ---- Visualizations ----
         # Use EMA weights for better quality if available
@@ -558,4 +620,19 @@ def train(yaml_path: str, split: str = "train") -> None:
         
         model.train()
     
-    logger.info("Training completed!")
+    # Training complete summary
+    print(f"\n{'='*80}")
+    print("🎉 Training Completed!")
+    print(f"{'='*80}")
+    print(f"Best Validation Loss: {best_val_loss:.4f} (Epoch {best_epoch})")
+    print(f"Completed Epochs: {epoch}/{tcfg.epochs}")
+    if epochs_without_improvement >= tcfg.patience:
+        print(f"Stopped early: No improvement for {tcfg.patience} epochs")
+    print(f"\nCheckpoints saved in: {out_dir / 'ckpts'}")
+    print(f"  - best.pt: Best model (epoch {best_epoch}, val_loss={best_val_loss:.4f})")
+    print(f"  - last.pt: Final epoch model (epoch {epoch})")
+    print(f"  - epoch_XXXX.pt: Periodic checkpoints every {tcfg.ckpt_every_epochs} epochs")
+    print(f"\nVisualizations saved in: {out_dir / 'samples'}")
+    print(f"Metrics logged in: {out_dir / 'training_metrics.csv'}")
+    print(f"{'='*80}\n")
+    logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")

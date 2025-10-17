@@ -48,9 +48,9 @@ class PathMNISTIndexDataset(Dataset):
         x = self.transform(img)
         return {"pixel_values": x, "labels": torch.tensor(s.label, dtype=torch.long), "path": str(s.path), "is_synth": s.is_synth}
 
-def build_loader(index_json: Path, split: str, image_size: int, batch_size: int, num_workers: int, normalize: bool = True) -> DataLoader:
+def build_json_loader(index_json: Path, split: str, image_size: int, batch_size: int, num_workers: int, normalize: bool = True) -> DataLoader:
     """
-    Build torch DataLoader with sane defaults.
+    Build torch DataLoader from JSON index with sane defaults.
     """
     ds = PathMNISTIndexDataset(index_json, split=split, image_size=image_size, normalize=normalize)
     return DataLoader(ds, batch_size=batch_size, shuffle=(split=="train"), num_workers=num_workers, pin_memory=True, drop_last=(split=="train"))

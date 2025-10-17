@@ -84,6 +84,12 @@ bVAE:
     per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
 
 ccddpm:
+  dataloader:
+    type: npz # Options are JSON, if we are using the index json file, 
+              # or NPZ. If we use npz, we translate from the JSON indexes to a NPZ file
+              # and save it in the next field:
+    npz_path: /home/mpascual/research/datasets/medsyn/PathMNIST/PathMNIST.npz # Only used if type is NPZ
+    
   train:
     image_size: 64
     in_channels: 3
@@ -95,18 +101,20 @@ ccddpm:
     guidance_p_uncond: 0.1
     ema_use: true
     ema_decay: 0.999
+    ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
+    patience: 15               # Early stopping: stop if no improvement for 15 epochs
     output_dir: /home/mpascual/research/medsyn/ccddpm/outputs
   optim:
-    lr: 2.0e-4
+    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
     wd: 0.0
   sched:
     num_train_timesteps: 1000
     beta_start: 1.0e-4
     beta_end: 2.0e-2
-    beta_schedule: linear
+    beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon
   infer:
-    guidance_scale: 2.0
+    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
     num_inference_steps: 1000
     out_dir: /home/mpascual/research/medsyn/ccddpm/samples
 

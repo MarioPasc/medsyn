@@ -44,6 +44,7 @@ class TrainCfg:
     guidance_p_uncond: float = 0.1  # classifier-free label drop prob
     log_every: int = 100
     ckpt_every_epochs: int = 1
+    patience: int = 15  # Early stopping: number of epochs without improvement
     output_dir: Path = Path("./outputs/ccddpm")
 
 @dataclass
@@ -52,6 +53,11 @@ class InferenceCfg:
     num_inference_steps: int = 1000
     save_grid: bool = True
     out_dir: Path = Path("./samples/ccddpm")
+
+@dataclass
+class DataloaderCfg:
+    type: str = "json"  # "json" or "npz"
+    npz_path: Optional[Path] = None  # Path to NPZ file (required if type="npz")
 
 @dataclass
 class DataCfg:
@@ -66,6 +72,7 @@ class CCDDPmCfg:
     optim: OptimCfg = field(default_factory=OptimCfg)
     sched: SchedCfg = field(default_factory=SchedCfg)
     infer: InferenceCfg = field(default_factory=InferenceCfg)
+    dataloader: DataloaderCfg = field(default_factory=DataloaderCfg)
     data: DataCfg | None = None  # set after reading YAML
 
 @dataclass
@@ -100,7 +107,15 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     optim = OptimCfg(**{**OptimCfg().__dict__, **cc.get("optim", {})})
     sched = SchedCfg(**{**SchedCfg().__dict__, **cc.get("sched", {})})
     infer = InferenceCfg(**{**InferenceCfg().__dict__, **cc.get("infer", {})})
-    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, data=data_cfg)
+    
+    # dataloader configuration
+    dl_cfg_dict = cc.get("dataloader", {})
+    dataloader_cfg = DataloaderCfg(
+        type=dl_cfg_dict.get("type", "json"),
+        npz_path=_as_path(dl_cfg_dict.get("npz_path")) if dl_cfg_dict.get("npz_path") else None
+    )
+    
+    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg)
 
     proj = ProjectCfg(data_index_json=index_json_path, ccddpm=cc_cfg)
     logger.info("Loaded ccDDPM config. image_size=%d, classes=%d, timesteps=%d",
