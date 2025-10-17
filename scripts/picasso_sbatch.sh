@@ -85,7 +85,7 @@ if command -v ccddpm-train >/dev/null 2>&1; then
   srun ccddpm-train --config config/medsyn_cfg.yaml
 else
   echo "[warn] ccddpm-train not on PATH; using python -m fallback."
-  srun python -m medsyn.cli.ccddpm_train --config config/medsyn_cfg.yaml
+  srun python -m medsyn.cli.ccddpm_train --config config/picasso_cfg.yaml
 fi
 
 # ---------- 5) Sync results back ----------
