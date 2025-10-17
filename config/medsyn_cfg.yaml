@@ -30,7 +30,7 @@ bVAE:
 
   train:
     epochs: 100               # UPDATED: longer training for cyclical schedule (was 80)
-    batch_size: 64
+    batch_size: 16
     num_workers: 4
     device: "cuda"
     mixed_precision: true
@@ -83,8 +83,37 @@ bVAE:
     per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
     per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
 
+ccddpm:
+  train:
+    image_size: 128
+    in_channels: 3
+    class_embed_dim: 16
+    num_classes: 9
+    batch_size: 64
+    epochs: 80
+    mixed_precision: true
+    guidance_p_uncond: 0.1
+    ema_use: true
+    ema_decay: 0.999
+    output_dir: /home/mpascual/research/medsyn/ccddpm/outputs
+  optim:
+    lr: 2.0e-4
+    wd: 0.0
+  sched:
+    num_train_timesteps: 1000
+    beta_start: 1.0e-4
+    beta_end: 2.0e-2
+    beta_schedule: linear
+    prediction_type: epsilon
+  infer:
+    guidance_scale: 2.0
+    num_inference_steps: 1000
+    out_dir: /home/mpascual/research/medsyn/ccddpm/samples
+
+
 # Generation configuration (outside bVAE section)
 generate:
+  model: "bVAE" # or "ccDDPM"
   checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
   classes:
     0: 100
