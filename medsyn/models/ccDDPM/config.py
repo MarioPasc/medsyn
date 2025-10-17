@@ -46,6 +46,7 @@ class TrainCfg:
     log_every: int = 100
     ckpt_every_epochs: int = 1
     patience: int = 15  # Early stopping: number of epochs without improvement
+    use_tqdm: bool = True  # Enable/disable tqdm progress bars (useful for HPC logs)
     output_dir: Path = Path("./outputs/ccddpm")
 
 @dataclass

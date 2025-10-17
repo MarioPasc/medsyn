@@ -306,10 +306,14 @@ def train(yaml_path: str, split: str = "train") -> None:
         running_loss = 0.0
         train_avg = EpochAverager()
         
-        # Progress bar for the training epoch
-        pbar = tqdm(enumerate(train_loader, 1), total=len(train_loader),
-                    desc=f"Epoch {epoch}/{tcfg.epochs}",
-                    unit="batch", leave=True)
+        # Progress bar for the training epoch (conditional based on use_tqdm)
+        train_iter = enumerate(train_loader, 1)
+        if tcfg.use_tqdm:
+            pbar = tqdm(train_iter, total=len(train_loader),
+                        desc=f"Epoch {epoch}/{tcfg.epochs}",
+                        unit="batch", leave=True)
+        else:
+            pbar = train_iter
         
         for step, batch in pbar:
             x0 = batch["pixel_values"].to(device)  # [-1,1]
@@ -378,17 +382,19 @@ def train(yaml_path: str, split: str = "train") -> None:
             # Update running loss
             running_loss += float(loss.item())
             
-            # Update progress bar with current loss
-            pbar.set_postfix({"loss": f"{loss.item():.4f}",
-                            "avg_loss": f"{running_loss/step:.4f}",
-                            "psnr": f"{batch_metrics['psnr']:.2f}dB"})
+            # Update progress bar with current loss (only if tqdm enabled)
+            if tcfg.use_tqdm:
+                pbar.set_postfix({"loss": f"{loss.item():.4f}",
+                                "avg_loss": f"{running_loss/step:.4f}",
+                                "psnr": f"{batch_metrics['psnr']:.2f}dB"})
             
             if global_step % tcfg.log_every == 0:
                 with open(csv_path, "a", newline="") as fh:
                     csv.writer(fh).writerow([epoch, global_step, float(loss.item()), opt.param_groups[0]["lr"], round(time.time()-t0, 2)])
                 logger.info("ep=%d step=%d loss=%.4f", epoch, global_step, float(loss.item()))
         
-        pbar.close()
+        if tcfg.use_tqdm:
+            pbar.close()
         
         # Get per-class losses from loss_fn
         per_class_losses = loss_fn.per_class()
@@ -418,8 +424,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         val_avg = EpochAverager()
         val_loss_fn = DDPMNoiseMSE(num_classes=tcfg.num_classes)
         
-        # Validation progress bar
-        val_pbar = tqdm(val_loader, desc=f"Validation", unit="batch", leave=False)
+        # Validation progress bar (conditional based on use_tqdm)
+        if tcfg.use_tqdm:
+            val_pbar = tqdm(val_loader, desc=f"Validation", unit="batch", leave=False)
+        else:
+            val_pbar = val_loader
         
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
             for batch in val_pbar:
@@ -447,10 +456,12 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
                 val_avg.update(val_batch_metrics, batch_size=bsz)
                 
-                # Update progress bar
-                val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
+                # Update progress bar (only if tqdm enabled)
+                if tcfg.use_tqdm:
+                    val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
         
-        val_pbar.close()
+        if tcfg.use_tqdm:
+            val_pbar.close()
         
         # Get per-class validation losses
         val_per_class_losses = val_loss_fn.per_class()
