@@ -5,6 +5,7 @@ from typing import Dict, Iterable, Tuple
 import json
 import logging
 import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,10 @@ def build_pathmnist_class_map() -> Dict[int, str]:
     }
 
 
-def _safe_symlink(src: Path, dst: Path, use_relative: bool = True) -> None:
+def _safe_symlink(src: Path, dst: Path, use_relative: bool = True, allow_copy: bool = True) -> None:
     """
     Create a symlink at dst pointing to src. Parents are created. Idempotent if link exists.
+    If symlink creation fails and allow_copy is True, falls back to copying the file.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     # Remove broken or wrong existing links/files
@@ -58,8 +60,16 @@ def _safe_symlink(src: Path, dst: Path, use_relative: bool = True) -> None:
     try:
         link_target = os.path.relpath(src, dst.parent) if use_relative else str(src)
         os.symlink(link_target, dst)
-    except Exception as e:
-        raise YOLOSymlinkError(f"symlink failed: {src} -> {dst}: {e}")
+    except (OSError, NotImplementedError) as e:
+        if allow_copy:
+            # Filesystem doesn't support symlinks; fall back to copying
+            logger.warning("Symlink failed (%s), falling back to copying: %s -> %s", e, src, dst)
+            try:
+                shutil.copy2(src, dst)
+            except Exception as copy_err:
+                raise YOLOSymlinkError(f"Both symlink and copy failed: {src} -> {dst}: {copy_err}")
+        else:
+            raise YOLOSymlinkError(f"symlink failed: {src} -> {dst}: {e}")
 
 def _iter_index_entries(index_split: Dict[str, Dict[str, object]]) -> Iterable[Tuple[int, Path, int]]:
     """
@@ -78,11 +88,15 @@ def generate_yolo_classification_from_index(
     class_map: Dict[int, str],
     splits: Tuple[str, ...] = ("train", "val", "test"),
     use_relative_symlinks: bool = True,
+    allow_copy_fallback: bool = True,
 ) -> YOLOBuildReport:
     """
     Build a Ultralytics-compatible classification dataset using symlinks.
     Reads the MedSyn index JSON and places links at:
       out_root/{train,val,test}/{class_name}/*.png
+    
+    If symlink creation fails (e.g., on filesystems that don't support symlinks)
+    and allow_copy_fallback is True, files will be copied instead.
     """
     with Path(index_json).open("r", encoding="utf-8") as fh:
         idx = json.load(fh)
@@ -106,7 +120,7 @@ def generate_yolo_classification_from_index(
             dst_dir = out_root / split / cls
             # Name ensures uniqueness even if basenames repeat across splits
             dst = dst_dir / f"{i:06d}_{src.name}"
-            _safe_symlink(src, dst, use_relative=use_relative_symlinks)
+            _safe_symlink(src, dst, use_relative=use_relative_symlinks, allow_copy=allow_copy_fallback)
             counts[split][cls] = counts[split].get(cls, 0) + 1
 
         logger.info("Split %s -> %d total", split, sum(counts[split].values()))

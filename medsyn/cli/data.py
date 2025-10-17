@@ -70,7 +70,7 @@ def main() -> None:
 
     if cfg.data.yolo_folder_dataset:
         # 4) Generar dataset de clasificación YOLO con symlinks
-        yolo_root = Path(args.yolo_root) if args.yolo_root else Path(cfg.data.yolo_folder_dataset)
+        yolo_root = Path(cfg.data.yolo_folder_dataset)
         yolo_root = yolo_root.resolve()
         yolo_root.mkdir(parents=True, exist_ok=True)
         class_map = build_pathmnist_class_map()
