@@ -89,7 +89,7 @@ ccddpm:
     in_channels: 3
     class_embed_dim: 16
     num_classes: 9
-    batch_size: 64
+    batch_size: 4
     epochs: 80
     mixed_precision: true
     guidance_p_uncond: 0.1

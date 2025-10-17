@@ -20,11 +20,16 @@ class DDPMNoiseMSE:
         loss = F.mse_loss(pred_eps, true_eps, reduction="none").mean(dim=(1,2,3))
         # update stats
         with torch.no_grad():
+            # Move accumulator tensors to the same device as loss if needed
+            if self.sum_per_class.device != loss.device:
+                self.sum_per_class = self.sum_per_class.to(loss.device)
+                self.count_per_class = self.count_per_class.to(loss.device)
+            
             for c in range(self.num_classes):
                 mask = (labels == c)
                 if mask.any():
                     self.sum_per_class[c] += loss[mask].sum().double()
-                    self.count_per_class[c] += int(mask.sum())
+                    self.count_per_class[c] += mask.sum().long()
         return loss.mean()
 
     def per_class(self) -> Dict[int, float]:
