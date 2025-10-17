@@ -50,7 +50,7 @@ dependencies = [
     "pillow>=9.0.0",
     "tqdm>=4.64.0",
     "pytorch_msssim",
-    
+    "diffusers>=0.21.0",
 ]
 
 [project.urls]
@@ -64,6 +64,8 @@ Changelog = "https://github.com/MarioPasc/medsyn/releases"
 medsyn-prepare-data = "medsyn.cli.data:main"
 bvae-train = "medsyn.cli.train_bVAE:main"
 bvae-generate = "medsyn.cli.generate_bVAE:main"
+ccddpm-train = "medsyn.cli.train_ccDDPM:main"
+ccddpm-generate = "medsyn.cli.generate_ccDDPM:main"
 
 [tool.setuptools]
 packages = [
@@ -72,7 +74,9 @@ packages = [
     "medsyn.data",
     "medsyn.models",
     "medsyn.models.bVAE",
-    "medsyn.models.bVAE.engine"
+    "medsyn.models.bVAE.engine",
+    "medsyn.models.ccDDPM",
+    "medsyn.models.ccDDPM.engine"
 ]
 
 [tool.setuptools.package-data]

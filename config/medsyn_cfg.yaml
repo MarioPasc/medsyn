@@ -85,7 +85,7 @@ bVAE:
 
 ccddpm:
   train:
-    image_size: 128
+    image_size: 64
     in_channels: 3
     class_embed_dim: 16
     num_classes: 9
@@ -113,7 +113,6 @@ ccddpm:
 
 # Generation configuration (outside bVAE section)
 generate:
-  model: "bVAE" # or "ccDDPM"
   checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
   classes:
     0: 100
