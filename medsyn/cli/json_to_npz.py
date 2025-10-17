@@ -22,6 +22,12 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
+# Pillow 10+ moved resampling filters to Image.Resampling; keep compatibility with older versions
+try:
+    RESAMPLE_BILINEAR = Image.Resampling.BILINEAR  # Pillow >= 9.1
+except AttributeError:
+    RESAMPLE_BILINEAR = Image.BILINEAR  # Pillow < 10
+
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -65,10 +71,16 @@ def load_split_from_json(
         if not img_path.exists():
             logger.warning(f"Image not found: {img_path}, skipping...")
             continue
-        
+
         # Load and convert image
         img = Image.open(img_path).convert("RGB")
+
+        # Resize if needed
+        if target_size is not None and img.size != target_size:
+            img = img.resize(target_size, RESAMPLE_BILINEAR)
         
+        # Convert to numpy array
+        img_array = np.array(img, dtype=np.uint8)  # [H, W, C]
         # Resize if needed
         if target_size is not None and img.size != target_size:
             img = img.resize(target_size, Image.BILINEAR)

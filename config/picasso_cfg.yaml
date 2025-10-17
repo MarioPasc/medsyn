@@ -1,0 +1,135 @@
+data:
+  flag: pathmnist
+  size: 64
+  download_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_raw         # guarda pathmnist.npz
+  save_png:
+    enabled: false
+    processed_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_processed  # almacena PNGs por split
+    index_json: /media/mpascual/PortableSSD/medsyn/PathMNIST/indexes/pathmnist_index.json
+    yolo_folder_dataset: /home/mpascual/research/datasets/medsyn/PathMNIST/yolo_cls_dataset  # NEW: symlinked YOLO classification dataset
+  postprocess_npz:
+    enabled: true
+    npz_path: ${DATASET_PATH}
+  seed: 23102003
+  num_workers: 8
+  reduction:
+    strategy: fraction
+    train: 1.00
+    val: 1.00
+    test: 1.00
+    max_per_class: null
+
+bVAE:
+  model:
+    in_channels: 3
+    img_size: 64
+    latent_dim: 32
+    base_channels: 64
+    num_down: 4
+    decoder_sigmoid: true
+    num_classes: 9
+    conditioning: "film"           # keep FiLM in encoder
+    decoder_conditioning: false    # NEW: off in decoder until KL>0
+    class_embed_dim: 64
+    use_class_prior: false    # UPDATED: start vanilla; enable after recon stabilizes
+
+  train:
+    epochs: 100               # UPDATED: longer training for cyclical schedule (was 80)
+    batch_size: 16
+    num_workers: 4
+    device: "cuda"
+    mixed_precision: true
+    grad_clip_norm: 5.0            # UPDATED: less aggressive clipping (was 1.0)
+    seed: 17
+    output_dir: "/home/mpascual/research/datasets/medsyn/bVAE"
+    save_every_epoch: 10
+    # Lagging-inference mitigation: extra encoder updates in early training
+    encoder_extra_steps: 2    # UPDATED: mitigate lagging inference (was 1)
+    encoder_heavy_epochs: 5   # UPDATED: first epochs only (was 15)
+
+  optim:
+    optimizer: "adamw"
+    lr_init: 0.0001           # UPDATED: lower init LR for stability (was 0.0002)
+    weight_decay: 0.0001      # UPDATED: moderate regularization (was 0.001)
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  sched:
+    use_onecycle: true
+    max_lr: 0.0001            # UPDATED: capped at 1e-4 for stability (was 2e-4)
+    pct_start: 0.5            # UPDATED: longer warm-up, later peak (was 0.4)
+    div_factor: 10.0          # UPDATED: smoother start (was 25.0)
+    final_div_factor: 1000.0  # UPDATED: gentler final decay (was 10000.0)
+
+  loss:
+    recon_type: "l1"          # UPDATED: SSIM later after stability (was l1_ssim)
+    l1_weight: 1.0            # para l1|l1_ssim
+    ssim_weight: 0.85         # para l1_ssim (1-SSIM)
+    beta: 1.0                 # valor techo; el scheduler lo modula
+    kld_weight: 1.0
+    recon_weight: 1.0
+    free_bits_nats: 0.5            # UPDATED: per-dim; stops tiny-KL from shrinking further (was 0.0)
+    beta_schedule:            # cyclical β to avoid vanishing KL
+      type: "cyclical"        # UPDATED: cyclical to prevent KL vanishing (was monotonic)
+      beta_min: 0.0
+      beta_max: 0.3           # UPDATED: gentler ceiling for 64×64 tiles (was 0.6)
+      cycles: 4               # UPDATED: 4 cycles for gradual KL recovery (was 3)
+      ratio_increase: 0.7     # UPDATED: longer warm-up phase (was 0.5)
+    capacity:
+      use: false              # UPDATED: start disabled to avoid early KL pinning (was true)
+      C_max: 1.0              # UPDATED: modest per-dim target (was 2.0)
+      steps_to_max: 70000     # UPDATED: ramp over ~70% of training (was 30000)
+      gamma: 50.0             # UPDATED: gentler pull when enabled (was 200.0)
+    prior_reg_w: 0.0001       # L2 regularization on class prior parameters
+    infovae_mmd:              # InfoVAE-MMD: regulariza q(z) hacia p(z|y)
+      use: false              # UPDATED: disable until KL stabilizes (was true)
+      weight: 0.5             # UPDATED: conservative weight (was 3.0)
+      kernel: "rbf"
+    per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
+    per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
+
+ccddpm:
+  dataloader:
+    type: npz # Options are JSON, if we are using the index json file or NPZ. 
+  train:
+    image_size: 64
+    in_channels: 3
+    class_embed_dim: 16
+    num_classes: 9
+    batch_size: 4
+    epochs: 80
+    mixed_precision: true
+    guidance_p_uncond: 0.1
+    ema_use: true
+    ema_decay: 0.999
+    ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
+    patience: 15               # Early stopping: stop if no improvement for 15 epochs
+    output_dir: ${OUTPUT_DIR}
+  optim:
+    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
+    wd: 0.0
+  sched:
+    num_train_timesteps: 1000
+    beta_start: 1.0e-4
+    beta_end: 2.0e-2
+    beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
+    prediction_type: epsilon
+  infer:
+    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
+    num_inference_steps: 1000
+    out_dir: ${OUTPUT_DIR}/samples
+
+
+# Generation configuration (outside bVAE section)
+generate:
+  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
+  classes:
+    0: 100
+    1: 100
+    2: 100
+    3: 100
+    4: 100
+    5: 100
+    6: 100
+    7: 100
+    8: 100
