@@ -18,17 +18,30 @@ class ReductionCfg:
     max_per_class: Optional[int] = None
 
 @dataclass(frozen=True)
+class SavePngCfg:
+    """Configuration for PNG extraction."""
+    enabled: bool = True
+    processed_dir: str = "./data_processed"  # where PNGs are stored by split
+    index_json: str = "./indexes/pathmnist_index.json"  # index file path
+    yolo_folder_dataset: Optional[str] = None  # root for YOLO classification symlink dataset
+
+@dataclass(frozen=True)
+class PostprocessNpzCfg:
+    """Configuration for NPZ postprocessing."""
+    enabled: bool = False
+    npz_path: str = "./PathMNIST.npz"  # output path for custom NPZ with splits
+
+@dataclass(frozen=True)
 class DataCfg:
     """Data configuration for MedMNIST PathMNIST dataset."""
     flag: Literal["pathmnist"] = "pathmnist"
     size: int = 28                    # 28 is default MedMNIST size
-    download_dir: str = "./data_raw"  # where .npz will live
-    processed_dir: str = "./data_processed"  # where PNGs are stored by split
-    index_json: str = "./indexes/pathmnist_index.json"  # index file path
+    download_dir: str = "./data_raw"  # where original .npz will live
     seed: int = 17
     num_workers: int = 4
     reduction: ReductionCfg = ReductionCfg()
-    yolo_folder_dataset: str = "./yolo_cls"  # root for YOLO classification symlink dataset
+    save_png: SavePngCfg = SavePngCfg()
+    postprocess_npz: PostprocessNpzCfg = PostprocessNpzCfg()
 
 @dataclass(frozen=True)
 class ProjectCfg:
@@ -37,7 +50,9 @@ class ProjectCfg:
 def _to_dataclass(d: dict) -> ProjectCfg:
     """Recursively cast dict -> dataclasses for strong typing."""
     red = ReductionCfg(**d["data"].get("reduction", {}))
-    data = DataCfg(**{**d["data"], "reduction": red})
+    save_png = SavePngCfg(**d["data"].get("save_png", {}))
+    postprocess_npz = PostprocessNpzCfg(**d["data"].get("postprocess_npz", {}))
+    data = DataCfg(**{**d["data"], "reduction": red, "save_png": save_png, "postprocess_npz": postprocess_npz})
     return ProjectCfg(data=data)
 
 def load_config(path: str | Path) -> ProjectCfg:
@@ -56,6 +71,10 @@ def ensure_dirs(cfg: ProjectCfg) -> None:
     Create expected directories if missing.
     """
     Path(cfg.data.download_dir).mkdir(parents=True, exist_ok=True)
-    Path(cfg.data.processed_dir).mkdir(parents=True, exist_ok=True)
-    Path(cfg.data.index_json).parent.mkdir(parents=True, exist_ok=True)
-    Path(cfg.data.yolo_folder_dataset).mkdir(parents=True, exist_ok=True)
+    if cfg.data.save_png.enabled:
+        Path(cfg.data.save_png.processed_dir).mkdir(parents=True, exist_ok=True)
+        Path(cfg.data.save_png.index_json).parent.mkdir(parents=True, exist_ok=True)
+        if cfg.data.save_png.yolo_folder_dataset:
+            Path(cfg.data.save_png.yolo_folder_dataset).mkdir(parents=True, exist_ok=True)
+    if cfg.data.postprocess_npz.enabled:
+        Path(cfg.data.postprocess_npz.npz_path).parent.mkdir(parents=True, exist_ok=True)

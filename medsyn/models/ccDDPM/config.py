@@ -87,19 +87,35 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     """
     Load YAML config and build a ProjectCfg with ccDDPM fields.
     Expects:
-      data.index_json: path to JSON index built by medsyn/cli/data.py
+      data.save_png.index_json: path to JSON index built by medsyn/cli/data.py (for JSON dataloader)
+      data.postprocess_npz.npz_path: path to custom NPZ file (for NPZ dataloader)
       ccddpm: optional section overriding defaults.
     """
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
 
     # data section
-    idx = raw.get("data", {}).get("index_json")
-    if not idx:
-        raise ValueError("YAML missing data.index_json for ccDDPM dataloader.")
-    index_json_path = _as_path(idx)
-    assert index_json_path is not None
-    data_cfg = DataCfg(index_json=index_json_path, processed_root=_as_path(raw.get("data", {}).get("processed_dir")), split=split)
+    data_dict = raw.get("data", {})
+    
+    # Get index_json from save_png section (for JSON dataloader compatibility)
+    save_png = data_dict.get("save_png", {})
+    idx = save_png.get("index_json")
+    if idx:
+        index_json_path = _as_path(idx)
+    else:
+        # Fallback for backward compatibility
+        idx = data_dict.get("index_json")
+        if idx:
+            index_json_path = _as_path(idx)
+        else:
+            logger.warning("No index_json found in YAML. JSON dataloader may not work.")
+            index_json_path = None
+    
+    data_cfg = DataCfg(
+        index_json=index_json_path if index_json_path else Path("./dummy.json"),
+        processed_root=_as_path(save_png.get("processed_dir")) if save_png.get("processed_dir") else None,
+        split=split
+    )
 
     # ccddpm section with deep defaults
     cc = raw.get("ccddpm", {}) or {}
@@ -108,16 +124,33 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     sched = SchedCfg(**{**SchedCfg().__dict__, **cc.get("sched", {})})
     infer = InferenceCfg(**{**InferenceCfg().__dict__, **cc.get("infer", {})})
     
-    # dataloader configuration
+    # dataloader configuration - read NPZ path from data.postprocess_npz section
     dl_cfg_dict = cc.get("dataloader", {})
+    dataloader_type = dl_cfg_dict.get("type", "json")
+    
+    # Get NPZ path from data.postprocess_npz if type is npz
+    npz_path = None
+    if dataloader_type.lower() == "npz":
+        postprocess_npz = data_dict.get("postprocess_npz", {})
+        npz_path_str = postprocess_npz.get("npz_path")
+        if npz_path_str:
+            npz_path = _as_path(npz_path_str)
+        else:
+            raise ValueError("NPZ dataloader selected but data.postprocess_npz.npz_path not found in YAML")
+    
     dataloader_cfg = DataloaderCfg(
-        type=dl_cfg_dict.get("type", "json"),
-        npz_path=_as_path(dl_cfg_dict.get("npz_path")) if dl_cfg_dict.get("npz_path") else None
+        type=dataloader_type,
+        npz_path=npz_path
     )
     
     cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg)
 
-    proj = ProjectCfg(data_index_json=index_json_path, ccddpm=cc_cfg)
-    logger.info("Loaded ccDDPM config. image_size=%d, classes=%d, timesteps=%d",
-                cc_cfg.train.image_size, cc_cfg.train.num_classes, cc_cfg.sched.num_train_timesteps)
+    proj = ProjectCfg(
+        data_index_json=index_json_path if index_json_path else Path("./dummy.json"),
+        ccddpm=cc_cfg
+    )
+    logger.info("Loaded ccDDPM config. image_size=%d, classes=%d, timesteps=%d, dataloader=%s",
+                cc_cfg.train.image_size, cc_cfg.train.num_classes, cc_cfg.sched.num_train_timesteps, dataloader_type)
+    if npz_path:
+        logger.info("NPZ dataloader path: %s", npz_path)
     return proj

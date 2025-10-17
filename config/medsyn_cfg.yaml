@@ -2,14 +2,19 @@ data:
   flag: pathmnist
   size: 64
   download_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_raw         # guarda pathmnist.npz
-  processed_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_processed  # almacena PNGs por split
-  index_json: /media/mpascual/PortableSSD/medsyn/PathMNIST/indexes/pathmnist_index.json
-  yolo_folder_dataset: /home/mpascual/research/datasets/medsyn/PathMNIST/yolo_cls_dataset  # NEW: symlinked YOLO classification dataset
+  save_png:
+    enabled: false
+    processed_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_processed  # almacena PNGs por split
+    index_json: /media/mpascual/PortableSSD/medsyn/PathMNIST/indexes/pathmnist_index.json
+    yolo_folder_dataset: /home/mpascual/research/datasets/medsyn/PathMNIST/yolo_cls_dataset  # NEW: symlinked YOLO classification dataset
+  postprocess_npz:
+    enabled: true
+    npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/PathMNIST.npz
   seed: 23102003
   num_workers: 8
   reduction:
     strategy: fraction
-    train: 0.20
+    train: 1.00
     val: 1.00
     test: 1.00
     max_per_class: null
@@ -85,11 +90,7 @@ bVAE:
 
 ccddpm:
   dataloader:
-    type: npz # Options are JSON, if we are using the index json file, 
-              # or NPZ. If we use npz, we translate from the JSON indexes to a NPZ file
-              # and save it in the next field:
-    npz_path: /home/mpascual/research/datasets/medsyn/PathMNIST/PathMNIST.npz # Only used if type is NPZ
-    
+    type: npz # Options are JSON, if we are using the index json file or NPZ. 
   train:
     image_size: 64
     in_channels: 3
