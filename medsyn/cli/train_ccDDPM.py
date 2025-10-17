@@ -28,6 +28,7 @@ def main():
 Examples:
   ccddpm-train medsyn_config.yaml
   ccddpm-train --config path/to/config.yaml
+  ccddpm-train --config config.yaml --dataset /path/to/data.npz --outdir /path/to/output
         """
     )
     parser.add_argument(
@@ -42,6 +43,18 @@ Examples:
         type=str,
         dest="config_alt",
         help="Alternative way to specify config path"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Absolute path to NPZ dataset. Overrides YAML config (data.postprocess_npz.npz_path)."
+    )
+    parser.add_argument(
+        "--outdir",
+        type=str,
+        default=None,
+        help="Absolute output directory. Overrides YAML config (ccddpm.train.output_dir)."
     )
     args = parser.parse_args()
 
@@ -64,6 +77,23 @@ Examples:
 
         # Load and display configuration
         cfg = load_cfg(str(config_path))
+        
+        # Apply CLI overrides (takes precedence over YAML and env vars)
+        if args.dataset:
+            logger.info("🔧 Overriding dataset path from CLI: %s", args.dataset)
+            # Try to set npz_path in dataloader config
+            if hasattr(cfg.ccddpm, "dataloader") and hasattr(cfg.ccddpm.dataloader, "npz_path"):
+                cfg.ccddpm.dataloader.npz_path = Path(args.dataset)
+            else:
+                logger.warning("⚠️  Config has no ccddpm.dataloader.npz_path field. Override may not take effect.")
+        
+        if args.outdir:
+            logger.info("🔧 Overriding output directory from CLI: %s", args.outdir)
+            # Try to set output_dir in train config
+            if hasattr(cfg.ccddpm, "train") and hasattr(cfg.ccddpm.train, "output_dir"):
+                cfg.ccddpm.train.output_dir = Path(args.outdir)
+            else:
+                logger.warning("⚠️  Config has no ccddpm.train.output_dir field. Override may not take effect.")
 
         print("\n📋 Training Configuration:")
         print(f"  • Epochs: {cfg.ccddpm.train.epochs}")

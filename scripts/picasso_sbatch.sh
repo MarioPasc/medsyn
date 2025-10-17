@@ -82,10 +82,16 @@ nvidia-smi || true
 
 # Prefer console entry point, fallback to module form if not present
 if command -v ccddpm-train >/dev/null 2>&1; then
-  srun ccddpm-train --config config/medsyn_cfg.yaml
+  srun ccddpm-train \
+    --config config/picasso_cfg.yaml \
+    --dataset "${DATA_DST}" \
+    --outdir  "${OUT_DIR}"
 else
   echo "[warn] ccddpm-train not on PATH; using python -m fallback."
-  srun python -m medsyn.cli.ccddpm_train --config config/picasso_cfg.yaml
+  srun python -m medsyn.cli.train_ccDDPM \
+    --config config/picasso_cfg.yaml \
+    --dataset "${DATA_DST}" \
+    --outdir  "${OUT_DIR}"
 fi
 
 # ---------- 5) Sync results back ----------

@@ -2,8 +2,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Any, Mapping
 import yaml # type: ignore
+import os
 import logging
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,30 @@ def _to_dataclass(d: dict) -> ProjectCfg:
     data = DataCfg(**{**d["data"], "reduction": red, "save_png": save_png, "postprocess_npz": postprocess_npz})
     return ProjectCfg(data=data)
 
+def _expand_env(obj: Any) -> Any:
+    """
+    Recursively expand ${ENV} and $ENV in strings within mappings/lists.
+    Ensures backward compatibility with absolute paths.
+    """
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    if isinstance(obj, Mapping):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        expanded = [_expand_env(v) for v in obj]
+        return type(obj)(expanded) if isinstance(obj, tuple) else expanded
+    return obj
+
 def load_config(path: str | Path) -> ProjectCfg:
     """
     Load YAML configuration (medsyn_config.yaml) into typed dataclasses.
+    Supports environment variable expansion (${VAR} or $VAR) in YAML values.
     """
     p = Path(path)
     with p.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    # Expand environment variables in all string values
+    raw = _expand_env(raw)
     cfg = _to_dataclass(raw)
     logger.info("Loaded config from %s", p)
     return cfg

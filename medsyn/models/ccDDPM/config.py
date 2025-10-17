@@ -6,8 +6,9 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Mapping, Sequence
 import yaml
+import os
 import logging
 
 logger = logging.getLogger(__name__)
@@ -83,9 +84,24 @@ class ProjectCfg:
 def _as_path(p: Optional[str]) -> Optional[Path]:
     return None if p is None else Path(p).expanduser().resolve()
 
+def _expand_env(obj: Any) -> Any:
+    """
+    Recursively expand ${ENV} and $ENV in strings within mappings/lists.
+    Ensures backward compatibility with absolute paths.
+    """
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    if isinstance(obj, Mapping):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        expanded = [_expand_env(v) for v in obj]
+        return type(obj)(expanded) if isinstance(obj, tuple) else expanded
+    return obj
+
 def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     """
     Load YAML config and build a ProjectCfg with ccDDPM fields.
+    Supports environment variable expansion (${VAR} or $VAR) in YAML values.
     Expects:
       data.save_png.index_json: path to JSON index built by medsyn/cli/data.py (for JSON dataloader)
       data.postprocess_npz.npz_path: path to custom NPZ file (for NPZ dataloader)
@@ -93,6 +109,9 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     """
     with open(yaml_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    
+    # Expand environment variables in all string values
+    raw = _expand_env(raw)
 
     # data section
     data_dict = raw.get("data", {})
