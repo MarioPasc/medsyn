@@ -95,99 +95,104 @@ else
 fi
 
 # ---------- 5) Sync results back ----------
-copy_back() {
-  echo "[sync] copying results back to ${RESULTS_DST}"
-  mkdir -p "${RESULTS_DST}"
+echo ""
+echo "================================================================================"
+echo "📦 Syncing Results Back to Permanent Storage"
+echo "================================================================================"
+echo "[sync] copying results back to ${RESULTS_DST}"
+mkdir -p "${RESULTS_DST}"
 
-  # Debug: Show current working directory and environment
-  echo "[debug] Current directory: $(pwd)"
-  echo "[debug] WORKDIR=${WORKDIR}"
-  echo "[debug] REPO_DIR=${REPO_DIR}"
-  echo "[debug] OUT_DIR=${OUT_DIR}"
-  echo ""
+# Debug: Show current working directory and environment
+echo "[debug] Current directory: $(pwd)"
+echo "[debug] WORKDIR=${WORKDIR}"
+echo "[debug] REPO_DIR=${REPO_DIR}"
+echo "[debug] OUT_DIR=${OUT_DIR}"
+echo ""
 
-  # Debug: List what's actually in key directories
-  echo "[debug] Checking WORKDIR structure:"
-  ls -la "${WORKDIR}" 2>/dev/null || echo "  (not accessible)"
-  echo ""
-  
-  echo "[debug] Checking REPO_DIR structure:"
-  ls -la "${REPO_DIR}" 2>/dev/null || echo "  (not accessible)"
-  echo ""
-  
-  echo "[debug] Looking for outputs/ in REPO_DIR:"
-  if [ -d "${REPO_DIR}/outputs" ]; then
-    find "${REPO_DIR}/outputs" -type d -maxdepth 3 2>/dev/null | head -20
-  else
-    echo "  ${REPO_DIR}/outputs does not exist"
-  fi
-  echo ""
+# Debug: List what's actually in key directories
+echo "[debug] Checking WORKDIR structure:"
+ls -la "${WORKDIR}" 2>/dev/null || echo "  (not accessible)"
+echo ""
 
-  # Known candidates where medsyn ccDDPM writes outputs
-  # Priority order: explicit CLI outdir > default locations
-  CANDIDATES=(
-    "${OUT_DIR}"                                      # CLI --outdir (highest priority)
-    "$(pwd)/outputs/ccddpm"                           # Relative to current directory
-    "$(pwd)/outputs"                                  # Current dir outputs parent
-    "${REPO_DIR}/outputs/ccddpm"                      # Default from config: ./outputs/ccddpm
-    "${REPO_DIR}/outputs"                             # Parent outputs directory
-    "${REPO_DIR}/samples/ccddpm"                      # Inference/generation outputs
-    "${REPO_DIR}/samples"                             # Inference parent directory
-    "${REPO_DIR}/medsyn/outputs/ccddpm"               # Fallback pkg-relative path
-    "${WORKDIR}/outputs/ccddpm"                       # Workdir-relative path
-    "${WORKDIR}/outputs"                              # Workdir outputs parent
-    "${WORKDIR}/medsyn/outputs/ccddpm"                # Full workdir path to repo outputs
-    "${WORKDIR}/medsyn/outputs"                       # Full workdir path to repo outputs parent
-  )
+echo "[debug] Checking REPO_DIR structure:"
+ls -la "${REPO_DIR}" 2>/dev/null || echo "  (not accessible)"
+echo ""
 
-  echo "[sync] Searching for outputs in candidate directories..."
-  found_any=0
-  for src in "${CANDIDATES[@]}"; do
-    echo "[sync] Checking: ${src}"
-    if [ -d "${src}" ]; then
-      echo "  → Directory exists!"
-      
-      # List contents for debugging
-      echo "  → Contents:"
-      ls -la "${src}" 2>/dev/null | head -10
-      
-      # Check for typical ccDDPM output structure
-      if [ -d "${src}/ckpts" ] || [ -d "${src}/samples" ] || [ -f "${src}/training_metrics.csv" ]; then
-        echo "  ✓ Contains ccDDPM outputs (ckpts/, samples/, or CSV logs)"
-        echo "  → syncing to ${RESULTS_DST}"
-        rsync -av "${src}/" "${RESULTS_DST}/"
-        found_any=1
-      elif [ -d "${src}/class_0" ] || [ -d "${src}/class_1" ]; then
-        echo "  ✓ Contains generation outputs (class_X/ directories)"
-        echo "  → syncing to ${RESULTS_DST}"
-        rsync -av "${src}/" "${RESULTS_DST}/"
-        found_any=1
-      else
-        echo "  ℹ Directory exists but no recognizable ccDDPM structure, syncing anyway"
-        rsync -av "${src}/" "${RESULTS_DST}/"
-        found_any=1
-      fi
+echo "[debug] Looking for outputs/ in REPO_DIR:"
+if [ -d "${REPO_DIR}/outputs" ]; then
+  echo "  Found! Contents:"
+  find "${REPO_DIR}/outputs" -type d -maxdepth 3 2>/dev/null | head -20
+else
+  echo "  ${REPO_DIR}/outputs does not exist"
+fi
+echo ""
+
+# Known candidates where medsyn ccDDPM writes outputs
+# Priority order: explicit CLI outdir > default locations
+CANDIDATES=(
+  "${OUT_DIR}"                                      # CLI --outdir (highest priority)
+  "${REPO_DIR}/outputs/ccddpm"                      # Default from config: ./outputs/ccddpm
+  "${REPO_DIR}/outputs"                             # Parent outputs directory
+  "${REPO_DIR}/samples/ccddpm"                      # Inference/generation outputs
+  "${REPO_DIR}/samples"                             # Inference parent directory
+  "${WORKDIR}/outputs/ccddpm"                       # Workdir-relative path
+  "${WORKDIR}/outputs"                              # Workdir outputs parent
+)
+
+echo "[sync] Searching for outputs in candidate directories..."
+found_any=0
+for src in "${CANDIDATES[@]}"; do
+  echo "[sync] Checking: ${src}"
+  if [ -d "${src}" ]; then
+    echo "  → Directory exists!"
+    
+    # List contents for debugging
+    echo "  → Contents:"
+    ls -la "${src}" 2>/dev/null | head -10
+    echo ""
+    
+    # Check for typical ccDDPM output structure
+    if [ -d "${src}/ckpts" ] || [ -d "${src}/samples" ] || [ -f "${src}/training_metrics.csv" ]; then
+      echo "  ✓ Contains ccDDPM outputs (ckpts/, samples/, or CSV logs)"
+      echo "  → Syncing to ${RESULTS_DST}"
+      rsync -av "${src}/" "${RESULTS_DST}/"
+      found_any=1
+      break  # Stop after first successful sync
+    elif [ -d "${src}/class_0" ] || [ -d "${src}/class_1" ]; then
+      echo "  ✓ Contains generation outputs (class_X/ directories)"
+      echo "  → Syncing to ${RESULTS_DST}"
+      rsync -av "${src}/" "${RESULTS_DST}/"
+      found_any=1
+      break  # Stop after first successful sync
     else
-      echo "  ✗ Directory does not exist"
+      echo "  ℹ Directory exists but no recognizable ccDDPM structure"
+      # Don't sync unknown directories automatically
     fi
-  done
-
-  if [ $found_any -eq 0 ]; then
-    echo ""
-    echo "[ERROR] ❌ No output directories found in expected locations!"
-    echo "        Searched: ${CANDIDATES[*]}"
-    echo ""
-    echo "Attempting broader search in WORKDIR and REPO_DIR..."
-    find "${WORKDIR}" -name "*.pt" -o -name "training_metrics.csv" 2>/dev/null | head -20
   else
-    echo ""
-    echo "[sync] ✓ Results successfully copied to ${RESULTS_DST}"
+    echo "  ✗ Directory does not exist"
   fi
-}
+done
 
-trap copy_back EXIT
+if [ $found_any -eq 0 ]; then
+  echo ""
+  echo "[ERROR] ❌ No output directories found in expected locations!"
+  echo "        Searched: ${CANDIDATES[*]}"
+  echo ""
+  echo "Attempting broader search in WORKDIR and REPO_DIR..."
+  find "${WORKDIR}" -name "*.pt" -o -name "training_metrics.csv" 2>/dev/null | head -20
+  echo ""
+  echo "⚠️  Results may have been lost. Check training output paths."
+else
+  echo ""
+  echo "================================================================================"
+  echo "✅ Results successfully copied to ${RESULTS_DST}"
+  echo "================================================================================"
+  echo ""
+fi
 
 # ---------- 6) Cleanup ----------
+echo "🧹 Cleaning up localscratch..."
 if cd "${LOCALSCRATCH%/}/${USER}"; then
   [ -n "${MYLOCALSCRATCH:-}" ] && rm -rf --one-file-system "${MYLOCALSCRATCH}"
+  echo "✓ Cleanup complete"
 fi
