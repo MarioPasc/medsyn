@@ -99,21 +99,63 @@ copy_back() {
   echo "[sync] copying results back to ${RESULTS_DST}"
   mkdir -p "${RESULTS_DST}"
 
-  # Known candidates where medsyn may write
+  # Known candidates where medsyn ccDDPM writes outputs
+  # Priority order: explicit CLI outdir > default locations
   CANDIDATES=(
-    "${OUT_DIR}"                                      # your intended outdir, if honored
-    "${REPO_DIR}/outputs"                             # console-script default
-    "${REPO_DIR}/medsyn/outputs"                      # pkg-relative default
-    "${WORKDIR}/medsyn/outputs"                       # common pattern
-    "${WORKDIR}/medsyn/outputs/ccddpm"                # your run log shows this one
+    "${OUT_DIR}"                                      # CLI --outdir (highest priority)
+    "${REPO_DIR}/outputs/ccddpm"                      # Default from config: ./outputs/ccddpm
+    "${REPO_DIR}/outputs"                             # Parent outputs directory
+    "${REPO_DIR}/samples/ccddpm"                      # Inference/generation outputs
+    "${REPO_DIR}/samples"                             # Inference parent directory
+    "${REPO_DIR}/medsyn/outputs/ccddpm"               # Fallback pkg-relative path
+    "${WORKDIR}/outputs/ccddpm"                       # Workdir-relative path
   )
 
+  found_any=0
   for src in "${CANDIDATES[@]}"; do
     if [ -d "${src}" ]; then
-      echo "[sync] found ${src} -> ${RESULTS_DST}"
-      rsync -a "${src}/" "${RESULTS_DST}/"
+      echo "[sync] found ${src}"
+      
+      # Check for typical ccDDPM output structure
+      if [ -d "${src}/ckpts" ] || [ -d "${src}/samples" ] || [ -f "${src}/training_metrics.csv" ]; then
+        echo "  ✓ Contains ccDDPM outputs (ckpts/, samples/, or CSV logs)"
+        echo "  → syncing to ${RESULTS_DST}"
+        rsync -av --relative "${src}/./" "${RESULTS_DST}/"
+        found_any=1
+      elif [ -d "${src}/class_0" ] || [ -d "${src}/class_1" ]; then
+        echo "  ✓ Contains generation outputs (class_X/ directories)"
+        echo "  → syncing to ${RESULTS_DST}"
+        rsync -av --relative "${src}/./" "${RESULTS_DST}/"
+        found_any=1
+      else
+        echo "  ℹ No recognizable ccDDPM output structure, syncing anyway"
+        rsync -av --relative "${src}/./" "${RESULTS_DST}/"
+        found_any=1
+      fi
     fi
   done
+
+  if [ $found_any -eq 0 ]; then
+    echo "[warn] No output directories found in expected locations!"
+    echo "       Searched: ${CANDIDATES[*]}"
+  else
+    echo "[sync] ✓ Results successfully copied to ${RESULTS_DST}"
+    echo ""
+    echo "Expected output structure:"
+    echo "  ${RESULTS_DST}/"
+    echo "  ├── training_metrics.csv    # Detailed epoch metrics"
+    echo "  ├── train_log.csv           # Step-level training log"
+    echo "  ├── ckpts/                  # Model checkpoints"
+    echo "  │   ├── best.pt             # Best validation model"
+    echo "  │   ├── last.pt             # Latest epoch model"
+    echo "  │   └── epoch_XXXX.pt       # Periodic checkpoints"
+    echo "  └── samples/                # Training visualizations"
+    echo "      ├── epoch_XXXX_recon.png"
+    echo "      ├── epoch_XXXX_noising.png"
+    echo "      ├── epoch_XXXX_denoising.png"
+    echo "      ├── epoch_XXXX_multistep.png"
+    echo "      └── epoch_XXXX_classes.png"
+  fi
 }
 
 trap copy_back EXIT
