@@ -95,8 +95,28 @@ else
 fi
 
 # ---------- 5) Sync results back ----------
-mkdir -p "${RESULTS_DST}"
-rsync -a "${OUT_DIR}/" "${RESULTS_DST}/"
+copy_back() {
+  echo "[sync] copying results back to ${RESULTS_DST}"
+  mkdir -p "${RESULTS_DST}"
+
+  # Known candidates where medsyn may write
+  CANDIDATES=(
+    "${OUT_DIR}"                                      # your intended outdir, if honored
+    "${REPO_DIR}/outputs"                             # console-script default
+    "${REPO_DIR}/medsyn/outputs"                      # pkg-relative default
+    "${WORKDIR}/medsyn/outputs"                       # common pattern
+    "${WORKDIR}/medsyn/outputs/ccddpm"                # your run log shows this one
+  )
+
+  for src in "${CANDIDATES[@]}"; do
+    if [ -d "${src}" ]; then
+      echo "[sync] found ${src} -> ${RESULTS_DST}"
+      rsync -a "${src}/" "${RESULTS_DST}/"
+    fi
+  done
+}
+
+trap copy_back EXIT
 
 # ---------- 6) Cleanup ----------
 if cd "${LOCALSCRATCH%/}/${USER}"; then
