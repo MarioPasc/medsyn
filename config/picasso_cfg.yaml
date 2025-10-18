@@ -97,7 +97,7 @@ ccddpm:
     class_embed_dim: 32
     num_classes: 9
     batch_size: 128
-    epochs: 1
+    epochs: 200
     mixed_precision: true
     guidance_p_uncond: 0.05
     ema_use: true
