@@ -21,6 +21,52 @@ data:
     test: 1.00
     max_per_class: null
 
+ccddpm:
+  dataloader:
+    type: npz # Options are JSON, if we are using the index json file or NPZ. 
+  train:
+    image_size: 64
+    in_channels: 3
+    class_embed_dim: 32
+    num_classes: 9
+    batch_size: 4
+    epochs: 200
+    mixed_precision: true
+    guidance_p_uncond: 0.1
+    ema_use: true
+    ema_decay: 0.999
+    ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
+    patience: 30               # Early stopping: stop if no improvement for 15 epochs
+    use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
+    output_dir: ${OUTPUT_DIR}
+  optim:
+    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
+    wd: 0.0
+  sched:
+    num_train_timesteps: 1000
+    beta_start: 1.0e-4
+    beta_end: 2.0e-2
+    beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
+    prediction_type: epsilon
+  infer:
+    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
+    num_inference_steps: 1000
+    out_dir: ${OUTPUT_DIR}/samples
+
+# Generation configuration (outside bVAE section)
+generate:
+  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
+  classes:
+    0: 100
+    1: 100
+    2: 100
+    3: 100
+    4: 100
+    5: 100
+    6: 100
+    7: 100
+    8: 100
+
 bVAE:
   model:
     in_channels: 3
@@ -89,49 +135,3 @@ bVAE:
       kernel: "rbf"
     per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
     per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
-
-ccddpm:
-  dataloader:
-    type: npz # Options are JSON, if we are using the index json file or NPZ. 
-  train:
-    image_size: 64
-    in_channels: 3
-    class_embed_dim: 32
-    num_classes: 9
-    batch_size: 128
-    epochs: 200
-    mixed_precision: true
-    guidance_p_uncond: 0.05
-    ema_use: true
-    ema_decay: 0.9995
-    ckpt_every_epochs: 10
-    patience: 25
-    use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
-  optim:
-    lr: 3.0e-4
-    wd: 0.0
-  sched:
-    num_train_timesteps: 1000
-    beta_start: 1.0e-4
-    beta_end: 2.0e-2
-    beta_schedule: squaredcos_cap_v2
-    prediction_type: epsilon
-  infer:
-    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
-    num_inference_steps: 1000
-    out_dir: ${OUTPUT_DIR}/samples
-
-
-# Generation configuration (outside bVAE section)
-generate:
-  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
-  classes:
-    0: 100
-    1: 100
-    2: 100
-    3: 100
-    4: 100
-    5: 100
-    6: 100
-    7: 100
-    8: 100

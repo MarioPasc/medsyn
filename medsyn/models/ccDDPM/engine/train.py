@@ -31,7 +31,9 @@ class EMA:
     """Exponential moving average of model parameters."""
     def __init__(self, model: nn.Module, decay: float = 0.999):
         self.decay = decay
-        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items() if v.requires_grad}
+        # Don't filter by requires_grad - state_dict() tensors are always detached
+        # We want all parameters, not just trainable ones (they're all trainable anyway)
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
@@ -42,6 +44,83 @@ class EMA:
     @torch.no_grad()
     def copy_to(self, model: nn.Module) -> None:
         model.load_state_dict({**model.state_dict(), **self.shadow}, strict=False)
+
+@torch.no_grad()
+def compute_training_diagnostics(
+    model: nn.Module,
+    x0_batch: torch.Tensor,
+    labels_batch: torch.Tensor,
+    noise_scheduler: DDPMScheduler,
+    device: torch.device,
+    num_samples: int = 16,
+) -> Dict[str, float]:
+    """
+    Compute diagnostic metrics to detect training issues.
+
+    Returns:
+        Dictionary with:
+        - input_output_correlation: Correlation between noisy input and model prediction (should be LOW)
+        - reconstruction_mse_t100: MSE at early timestep (high noise)
+        - reconstruction_mse_t500: MSE at mid timestep
+        - reconstruction_psnr_t500: PSNR at mid timestep
+        - prediction_std: Std of model outputs (should be ~1.0 for normalized data)
+    """
+    model.eval()
+
+    # Take subset of batch
+    x0 = x0_batch[:num_samples]
+    labels = labels_batch[:num_samples]
+
+    # Test at different timesteps
+    correlations = []
+    recon_mse_t100 = []
+    recon_mse_t500 = []
+    recon_psnr_t500 = []
+    pred_stds = []
+
+    for t_val in [100, 500]:
+        t = torch.full((len(x0),), t_val, device=device, dtype=torch.long)
+        noise = torch.randn_like(x0)
+        x_t = noise_scheduler.add_noise(x0, noise, t)
+
+        # Model prediction
+        eps_pred = model(x_t, t, labels)
+
+        # Correlation between input and output (should be LOW/negative if learning)
+        corr = torch.corrcoef(torch.stack([
+            x_t.flatten(),
+            eps_pred.flatten()
+        ]))[0, 1].item()
+        correlations.append(corr)
+
+        # Prediction std
+        pred_stds.append(eps_pred.std().item())
+
+        # Reconstruct x0
+        sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt().view(-1, 1, 1, 1)
+        sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt().view(-1, 1, 1, 1)
+        x0_pred = (x_t - sqrt_one_minus_alpha_prod * eps_pred) / sqrt_alpha_prod
+        x0_pred = torch.clamp(x0_pred, -1.0, 1.0)
+
+        # Reconstruction metrics
+        mse = F.mse_loss(x0_pred, x0).item()
+        psnr = compute_psnr(x0_pred, x0)
+
+        if t_val == 100:
+            recon_mse_t100.append(mse)
+        else:
+            recon_mse_t500.append(mse)
+            recon_psnr_t500.append(psnr)
+
+    model.train()
+
+    return {
+        "input_output_correlation": float(np.mean(correlations)),  # Should be << 0.5, ideally negative
+        "reconstruction_mse_t100": float(np.mean(recon_mse_t100)),
+        "reconstruction_mse_t500": float(np.mean(recon_mse_t500)),
+        "reconstruction_psnr_t500": float(np.mean(recon_psnr_t500)),
+        "prediction_std": float(np.mean(pred_stds)),  # Should be ~0.8-1.2 for normalized data
+    }
 
 @torch.no_grad()
 def visualize_noising_process(
@@ -88,51 +167,61 @@ def visualize_denoising_process(
 ) -> torch.Tensor:
     """
     Visualize the reverse denoising process from pure noise to clean image.
-    
+
     Args:
         model: DDPM model
         scheduler: DDPM scheduler
         shape: Image shape (C, H, W)
         class_label: Class label for conditional generation
-        num_steps: Number of intermediate steps to visualize
+        num_steps: Number of intermediate steps to visualize (>= 1)
         device: Device
         guidance_scale: Classifier-free guidance scale
-    
+
     Returns:
-        Tensor of shape [num_steps+1, C, H, W] showing progressive denoising
+        Tensor showing progressive denoising: [initial_noise, *intermediate_steps, final_image]
+        Shape: [num_steps+2, C, H, W] with initial noise + num_steps + final frame
     """
     model.eval()
-    
+
     # Start from pure noise
     x_t = torch.randn((1, *shape), device=device)
     class_label = class_label.to(device)
-    
+
     total_timesteps = scheduler.config.num_train_timesteps
     scheduler.set_timesteps(total_timesteps)
-    
-    # Collect images at evenly spaced intervals
-    save_indices = set(torch.linspace(0, len(scheduler.timesteps) - 1, num_steps, dtype=torch.long).tolist())
-    denoised_images = [x_t.cpu()]
-    
+
+    # Ensure at least 1 intermediate step to maintain schedule compatibility
+    save_indices = set(torch.linspace(
+        0, len(scheduler.timesteps) - 1,
+        max(1, num_steps),  # ensure >= 1 for proper step scheduling
+        dtype=torch.long
+    ).tolist())
+
+    frames = [x_t.cpu()]  # keep initial noise for context
+
     for i, t in enumerate(scheduler.timesteps):
         # Predict noise
         t_batch = t.unsqueeze(0).to(device)
-        
-        if guidance_scale != 1.0:
+
+        if guidance_scale == 1.0:
+            noise_pred = model(x_t, t_batch, class_label)
+        else:
             # Classifier-free guidance
             noise_pred_cond = model(x_t, t_batch, class_label)
             noise_pred_uncond = model(x_t, t_batch, None)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-        else:
-            noise_pred = model(x_t, t_batch, class_label)
-        
+
         # Denoise one step
         x_t = scheduler.step(noise_pred, t, x_t).prev_sample
-        
+
         if i in save_indices:
-            denoised_images.append(x_t.cpu())
-    
-    return torch.cat(denoised_images, dim=0)
+            frames.append(x_t.detach().cpu())
+
+    # Safeguard: ensure we always have the final denoised image
+    if len(frames) == 1 or frames[-1] is not x_t.cpu():
+        frames.append(x_t.detach().cpu())
+
+    return torch.cat(frames, dim=0)
 
 @torch.no_grad()
 def visualize_multistep_reconstruction(
@@ -191,6 +280,56 @@ def _maybe_drop_labels(labels: torch.Tensor, p: float) -> Optional[torch.Tensor]
     out[mask] = 0  # value unused
     # Return None for unconditional; model handles None as zeros
     return None if mask.all() else out
+
+@torch.no_grad()
+def conditioning_sanity_check(
+    model: nn.Module,
+    scheduler: DDPMScheduler,
+    num_classes: int,
+    image_shape: tuple,
+    device: torch.device,
+    num_samples: int = 3
+) -> Dict[str, float]:
+    """
+    Verify that class conditioning is working by checking that different labels
+    produce different noise predictions for the same input.
+
+    Args:
+        model: DDPM model
+        scheduler: DDPM scheduler
+        num_classes: Number of classes
+        image_shape: (C, H, W)
+        device: Device
+        num_samples: Number of random samples to test
+
+    Returns:
+        Dictionary with conditioning gap statistics
+    """
+    model.eval()
+    gaps = []
+
+    for _ in range(num_samples):
+        # Sample fixed noise and random timestep
+        x_t = torch.randn((1, *image_shape), device=device)
+        t = torch.randint(100, scheduler.config.num_train_timesteps // 2, (1,), device=device)
+
+        # Get predictions for two different classes
+        class_0 = torch.tensor([0], device=device)
+        class_1 = torch.tensor([min(1, num_classes - 1)], device=device)
+
+        eps_0 = model(x_t, t, class_0)
+        eps_1 = model(x_t, t, class_1)
+
+        # Compute L2 distance between predictions
+        gap = torch.norm(eps_0 - eps_1, p=2).item()
+        gaps.append(gap)
+
+    return {
+        "conditioning_gap_mean": float(torch.tensor(gaps).mean()),
+        "conditioning_gap_std": float(torch.tensor(gaps).std()),
+        "conditioning_gap_min": float(torch.tensor(gaps).min()),
+        "conditioning_gap_max": float(torch.tensor(gaps).max()),
+    }
 
 def compute_batch_metrics(
     pred_noise: torch.Tensor,
@@ -275,7 +414,11 @@ def train(yaml_path: str, split: str = "train") -> None:
     opt = optim.AdamW(model.parameters(), lr=ocfg.lr, betas=ocfg.betas, eps=ocfg.eps, weight_decay=ocfg.wd)
     scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
     ema = EMA(model, decay=tcfg.ema_decay) if tcfg.ema_use else None
-    loss_fn = DDPMNoiseMSE(num_classes=tcfg.num_classes)
+    loss_fn = DDPMNoiseMSE(
+        num_classes=tcfg.num_classes,
+        use_min_snr=tcfg.use_min_snr,
+        min_snr_gamma=tcfg.min_snr_gamma
+    )
 
     out_dir = Path(tcfg.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -333,7 +476,11 @@ def train(yaml_path: str, split: str = "train") -> None:
             # forward
             with autocast(device_type='cuda', enabled=tcfg.mixed_precision):
                 pred = model(x_t, t, class_labels)
-                loss = loss_fn(pred, noise, labels)
+                loss = loss_fn(
+                    pred, noise, labels,
+                    timesteps=t,
+                    alphas_cumprod=noise_scheduler.alphas_cumprod
+                )
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -422,7 +569,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         # ---- Validation ----
         model.eval()
         val_avg = EpochAverager()
-        val_loss_fn = DDPMNoiseMSE(num_classes=tcfg.num_classes)
+        val_loss_fn = DDPMNoiseMSE(
+            num_classes=tcfg.num_classes,
+            use_min_snr=tcfg.use_min_snr,
+            min_snr_gamma=tcfg.min_snr_gamma
+        )
         
         # Validation progress bar (conditional based on use_tqdm)
         if tcfg.use_tqdm:
@@ -443,7 +594,11 @@ def train(yaml_path: str, split: str = "train") -> None:
                 
                 # Forward
                 pred = model(x_t, t, labels)
-                loss = val_loss_fn(pred, noise, labels)
+                loss = val_loss_fn(
+                    pred, noise, labels,
+                    timesteps=t,
+                    alphas_cumprod=noise_scheduler.alphas_cumprod
+                )
                 
                 # Reconstruct x0 for metrics
                 sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
@@ -469,16 +624,64 @@ def train(yaml_path: str, split: str = "train") -> None:
         for c, loss_c in val_per_class_losses.items():
             val_metrics[f"loss_c{c}"] = loss_c
         
+        # ---- CRITICAL: Compute Training Diagnostics ----
+        # These metrics detect common training failures
+        # Get a batch for diagnostics
+        val_batch_for_diag = next(iter(val_loader))
+        x0_diag = val_batch_for_diag["pixel_values"].to(device)
+        labels_diag = val_batch_for_diag["labels"].to(device)
+
+        diagnostics = compute_training_diagnostics(
+            model=model,
+            x0_batch=x0_diag,
+            labels_batch=labels_diag,
+            noise_scheduler=noise_scheduler,
+            device=device,
+            num_samples=min(16, len(x0_diag))
+        )
+
         # Log validation metrics
         csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)
-        
+
+        # Log diagnostics separately
+        csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
+
         print(f"\nValidation:")
         print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f}")
         print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
         print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
         print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
+
+        print(f"\n🔍 Training Diagnostics (detecting issues):")
+        corr = diagnostics['input_output_correlation']
+        pred_std = diagnostics['prediction_std']
+        recon_psnr = diagnostics['reconstruction_psnr_t500']
+
+        # Color-coded warnings
+        print(f"  Input-Output Correlation: {corr:.4f}", end="")
+        if corr > 0.7:
+            print(f" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
+        elif corr > 0.5:
+            print(f" ⚠️  High correlation, model may not be learning properly")
+        else:
+            print(f" ✓ (healthy)")
+
+        print(f"  Prediction Std: {pred_std:.4f}", end="")
+        if pred_std < 0.5 or pred_std > 1.5:
+            print(f" ⚠️  Unusual (should be ~0.8-1.2)")
+        else:
+            print(f" ✓")
+
+        print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
+        if recon_psnr < 15.0:
+            print(f" ⚠️  Low quality (should improve over epochs)")
+        else:
+            print(f" ✓")
+
+        print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
+        print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
         print(f"{'='*80}\n")
-        
+
         model.train()
 
         # ---- Checkpointing & Early Stopping ----
@@ -489,7 +692,14 @@ def train(yaml_path: str, split: str = "train") -> None:
             "epoch": epoch,
             "val_loss": val_loss,
             "ema": (ema.shadow if ema else None),
-            "cfg": tcfg.__dict__
+            "cfg": tcfg.__dict__,
+            # Save diagnostics for post-training analysis
+            "diagnostics": diagnostics,
+            "train_metrics": train_metrics,
+            "val_metrics": val_metrics,
+            # EMA verification
+            "ema_enabled": ema is not None,
+            "ema_num_params": len(ema.shadow) if ema else 0,
         }
         
         # Always save last.pt
@@ -590,9 +800,11 @@ def train(yaml_path: str, split: str = "train") -> None:
                     device=device,
                     guidance_scale=1.0
                 )
+                # Now returns initial + 10 intermediate + final = 12 images
                 denoising_steps_01 = (denoising_steps + 1.0) / 2.0
                 save_image(denoising_steps_01, out_dir / "samples" / f"epoch_{epoch:04d}_denoising.png",
-                          nrow=11, normalize=False, value_range=(0, 1))
+                          nrow=12, normalize=False, value_range=(0, 1))
+                logger.info(f"Denoising visualization: generated {denoising_steps.shape[0]} steps")
                 
                 # 3. Multi-timestep reconstruction visualization
                 timesteps_to_vis = [50, 150, 300, 500, 700, 900]
@@ -606,23 +818,42 @@ def train(yaml_path: str, split: str = "train") -> None:
                 
                 # 4. Class-conditional samples (one per class)
                 class_samples = []
+                logger.info(f"Generating class-conditional samples for {tcfg.num_classes} classes...")
                 for c in range(tcfg.num_classes):
                     class_label_sample = torch.tensor([c], device=device)
                     sample = visualize_denoising_process(
                         model, noise_scheduler,
                         shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                         class_label=class_label_sample,
-                        num_steps=0,  # Only final result
+                        num_steps=1,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
                         device=device,
                         guidance_scale=1.0
                     )
-                    class_samples.append(sample[-1:])  # Take only final image
-                
+                    # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
+                    # Take only the final denoised image
+                    final_image = sample[-1:]
+                    class_samples.append(final_image)
+                    logger.info(f"  Class {c}: sample shape={sample.shape}, final shape={final_image.shape}, " +
+                               f"value range=[{final_image.min():.3f}, {final_image.max():.3f}]")
+
                 class_samples_tensor = torch.cat(class_samples, dim=0)
                 class_samples_01 = (class_samples_tensor + 1.0) / 2.0
                 save_image(class_samples_01, out_dir / "samples" / f"epoch_{epoch:04d}_classes.png",
                           nrow=tcfg.num_classes, normalize=False, value_range=(0, 1))
-                
+                logger.info(f"Saved class-conditional samples: {class_samples_tensor.shape}")
+
+                # 5. Conditioning sanity check - verify class labels affect predictions
+                cond_stats = conditioning_sanity_check(
+                    model, noise_scheduler,
+                    num_classes=tcfg.num_classes,
+                    image_shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
+                    device=device,
+                    num_samples=5
+                )
+                logger.info(f"Conditioning check: gap_mean={cond_stats['conditioning_gap_mean']:.4f}, " +
+                           f"gap_std={cond_stats['conditioning_gap_std']:.4f} " +
+                           f"(should be >0 and growing over epochs)")
+
                 logger.info(f"Saved detailed visualizations for epoch {epoch}")
         
         # Restore training weights if we used EMA for visualization

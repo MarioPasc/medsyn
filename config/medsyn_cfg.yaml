@@ -92,18 +92,21 @@ bVAE:
 
 ccddpm:
   dataloader:
-    type: npz # Options are JSON, if we are using the index json file or NPZ. 
+    type: npz # Options are JSON, if we are using the index json file or NPZ.
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 16
+    class_embed_dim: 32  # MUST match checkpoint! Was trained with 32
     num_classes: 9
     batch_size: 4
     epochs: 80
     mixed_precision: true
-    guidance_p_uncond: 0.1
+    grad_clip_norm: 10.0       # FIXED: Was 1.0 (too aggressive), now 10.0 to allow learning
+    guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
     ema_use: true
     ema_decay: 0.999
+    use_min_snr: true          # ENABLED: Min-SNR loss weighting stabilizes training
+    min_snr_gamma: 5.0         # Standard value for Min-SNR
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     patience: 15               # Early stopping: stop if no improvement for 15 epochs
     use_tqdm: true             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
@@ -118,21 +121,22 @@ ccddpm:
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon
   infer:
-    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
+    guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     num_inference_steps: 1000
-    out_dir: /home/mpascual/research/medsyn/ccddpm/samples
+    out_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM/synth
 
 
 # Generation configuration (outside bVAE section)
 generate:
-  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
+  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py
+  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM/ckpts/best.pt"  # absolute path to checkpoint
   classes:
-    0: 100
-    1: 100
-    2: 100
-    3: 100
-    4: 100
-    5: 100
-    6: 100
-    7: 100
-    8: 100
+    0: 1
+    1: 1
+    2: 1
+    3: 1
+    4: 1
+    5: 1
+    6: 1
+    7: 1
+    8: 1

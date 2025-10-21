@@ -125,6 +125,9 @@ Examples:
         print(f"  • Classifier-free guidance: {'✅ enabled' if cfg.ccddpm.train.guidance_p_uncond > 0 else '❌ disabled'}")
         if cfg.ccddpm.train.guidance_p_uncond > 0:
             print(f"    - Unconditional prob: {cfg.ccddpm.train.guidance_p_uncond}")
+        print(f"  • Min-SNR loss weighting: {'✅ enabled' if cfg.ccddpm.train.use_min_snr else '❌ disabled'}")
+        if cfg.ccddpm.train.use_min_snr:
+            print(f"    - Gamma: {cfg.ccddpm.train.min_snr_gamma}")
 
         print("\n" + "=" * 80)
         print("⏳ Training in progress...")

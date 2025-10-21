@@ -10,26 +10,69 @@ class DDPMNoiseMSE:
     """
     Compute the simplified DDPM training objective: E[ ||ε - ε_θ(x_t, t, y)||^2 ].
     Keeps running means per class for interpretability.
+
+    Optionally applies Min-SNR loss weighting (Hang et al. 2023) to balance early/late timesteps.
     """
-    def __init__(self, num_classes: int):
+    def __init__(self, num_classes: int, use_min_snr: bool = False, min_snr_gamma: float = 5.0):
         self.num_classes = num_classes
+        self.use_min_snr = use_min_snr
+        self.min_snr_gamma = min_snr_gamma
         self.sum_per_class = torch.zeros(num_classes, dtype=torch.float64)
         self.count_per_class = torch.zeros(num_classes, dtype=torch.long)
 
-    def __call__(self, pred_eps: torch.Tensor, true_eps: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        loss = F.mse_loss(pred_eps, true_eps, reduction="none").mean(dim=(1,2,3))
-        # update stats
+    def __call__(
+        self,
+        pred_eps: torch.Tensor,
+        true_eps: torch.Tensor,
+        labels: torch.Tensor,
+        timesteps: Optional[torch.Tensor] = None,
+        alphas_cumprod: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute MSE loss with optional Min-SNR weighting.
+
+        Args:
+            pred_eps: Predicted noise [B, C, H, W]
+            true_eps: Ground truth noise [B, C, H, W]
+            labels: Class labels [B]
+            timesteps: Timestep indices [B] (required if use_min_snr=True)
+            alphas_cumprod: Cumulative alphas from scheduler [T] (required if use_min_snr=True)
+
+        Returns:
+            Scalar loss tensor
+        """
+        # Compute per-sample MSE
+        loss = F.mse_loss(pred_eps, true_eps, reduction="none").mean(dim=(1,2,3))  # [B]
+
+        # Apply Min-SNR loss weighting if enabled
+        if self.use_min_snr:
+            if timesteps is None or alphas_cumprod is None:
+                raise ValueError("timesteps and alphas_cumprod required when use_min_snr=True")
+
+            # Compute SNR: alpha_t / (1 - alpha_t)
+            alphas_t = alphas_cumprod[timesteps]  # [B]
+            snr = alphas_t / (1 - alphas_t + 1e-8)  # [B]
+
+            # Clamp SNR to gamma (typical 2-5) and compute weights
+            snr_clamped = snr.clamp(max=self.min_snr_gamma)
+            weights = snr_clamped / (snr + 1e-8)  # [B]
+
+            # Weight the loss
+            loss = loss * weights
+
+        # Update per-class statistics (before weighting for interpretability)
         with torch.no_grad():
             # Move accumulator tensors to the same device as loss if needed
             if self.sum_per_class.device != loss.device:
                 self.sum_per_class = self.sum_per_class.to(loss.device)
                 self.count_per_class = self.count_per_class.to(loss.device)
-            
+
             for c in range(self.num_classes):
                 mask = (labels == c)
                 if mask.any():
                     self.sum_per_class[c] += loss[mask].sum().double()
                     self.count_per_class[c] += mask.sum().long()
+
         return loss.mean()
 
     def per_class(self) -> Dict[int, float]:

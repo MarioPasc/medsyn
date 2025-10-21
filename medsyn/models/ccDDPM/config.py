@@ -43,6 +43,8 @@ class TrainCfg:
     ema_use: bool = True
     ema_decay: float = 0.999
     guidance_p_uncond: float = 0.1  # classifier-free label drop prob
+    use_min_snr: bool = False  # Min-SNR loss weighting (Hang et al. 2023)
+    min_snr_gamma: float = 5.0  # SNR clamp value for Min-SNR weighting (typical 2-5)
     log_every: int = 100
     ckpt_every_epochs: int = 1
     patience: int = 15  # Early stopping: number of epochs without improvement
