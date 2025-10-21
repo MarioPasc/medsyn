@@ -38,16 +38,22 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 # ----------------------------- Config -----------------------------------------
 
 # Thumbnail sizing controls
-IMG_HEIGHT_FRAC: float = 0.28   # fraction of the axes height reserved for each image box within the headroom
-IMG_WIDTH_SCALE: float = 1.6    # multiple of the bar width for image width
-HEADROOM_FRAC: float = 0.28     # fraction of max(total) reserved above bars for images + padding
+IMG_HEIGHT_FRAC: float = 0.50   # fraction of the axes height reserved for each image box within the headroom
+IMG_WIDTH_SCALE: float = 2.0    # multiple of the bar width for image width
+HEADROOM_FRAC: float = 0.60     # fraction of max(total) reserved above bars for images + padding
 IMAGE_GAP_FRAC: float = 0.04    # vertical gap fraction (of max total) between bar top and image box
-IMG_X_OFFSET: float = 5.0       # horizontal offset for images and class names (in bar-width units)
+IMG_X_OFFSET: float = 0.0       # horizontal offset for images and class names (in bar-width units)
+
+# Font sizes
+CLASS_NAME_FONTSIZE: int = 12    # font size for class name labels above images
+AXIS_LABEL_FONTSIZE: int = 13   #   font size for axis labels (x and y labels)
+AXIS_TICK_FONTSIZE: int = 12     # font size for axis tick labels
+LEGEND_FONTSIZE: int = 12        # font size for legend text
 
 # Colors (Train / Val / Test)
-COLOR_TRAIN = '#004488'
-COLOR_VAL   = '#DDAA33'
-COLOR_TEST  = '#BB5566'
+COLOR_TRAIN = '#009988' 
+COLOR_VAL   = '#EE7733'
+COLOR_TEST  = '#CC3311'
 
 # ----------------------------- Logging ----------------------------------------
 
@@ -190,13 +196,27 @@ def plot_bars_with_thumbnails(classes: np.ndarray,
                               seed: int = 123,
                               figsize: Tuple[float, float] = (12.0, 7.0),
                               dpi: int = 150,
-                              img_x_offset: float = IMG_X_OFFSET) -> plt.Figure:
+                              img_x_offset: float = IMG_X_OFFSET,
+                              img_width_scale: float = IMG_WIDTH_SCALE,
+                              img_height_frac: float = IMG_HEIGHT_FRAC,
+                              headroom_frac: float = HEADROOM_FRAC,
+                              class_name_fontsize: int = CLASS_NAME_FONTSIZE,
+                              axis_label_fontsize: int = AXIS_LABEL_FONTSIZE,
+                              axis_tick_fontsize: int = AXIS_TICK_FONTSIZE,
+                              legend_fontsize: int = LEGEND_FONTSIZE) -> plt.Figure:
     """
     Stacked bars with thumbnails centered above each bar. IEEE scienceplots style.
     
     Args:
         img_x_offset: Horizontal offset for images and class names (in bar-width units).
                      Positive values shift right, negative values shift left.
+        img_width_scale: Width of image as multiple of bar width.
+        img_height_frac: Height of image as fraction of axes height.
+        headroom_frac: Fraction of max(total) reserved above bars for images + padding.
+        class_name_fontsize: Font size for class name labels above images.
+        axis_label_fontsize: Font size for axis labels (x and y).
+        axis_tick_fontsize: Font size for axis tick labels.
+        legend_fontsize: Font size for legend text.
     """
     rng = np.random.RandomState(seed)
     K = classes.size
@@ -210,21 +230,29 @@ def plot_bars_with_thumbnails(classes: np.ndarray,
     b_test  = ax.bar(x, te, bottom=tr + va, color=COLOR_TEST, label="Test")
 
     # Axes labels and ticks
-    ax.set_xlabel("Class index")
-    ax.set_ylabel("Number of images")
+    ax.set_xlabel("Class index", fontsize=axis_label_fontsize)
+    ax.set_ylabel("Number of images", fontsize=axis_label_fontsize)
     ax.set_xticks(x)
-    ax.set_xticklabels([str(int(c)) for c in classes])
+    ax.set_xticklabels([str(int(c)) for c in classes], fontsize=axis_tick_fontsize)
+    ax.tick_params(axis='y', labelsize=axis_tick_fontsize)
 
     # Disable top/right spines
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
     # Legend below
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=3, frameon=False, 
+              fontsize=legend_fontsize)
 
     # Headroom for images
     ymax = float(np.max(tot)) if tot.size else 1.0
-    ax.set_ylim(0.0, ymax * (1.0 + HEADROOM_FRAC))
+    ax.set_ylim(0.0, ymax * (1.0 + headroom_frac))
+
+    # Get axis limits after all adjustments
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    ax_width_data = xlim[1] - xlim[0]
+    ax_height_data = ylim[1] - ylim[0]
 
     # Precise centering: compute bar centers from patches
     # All three stacks have identical x and width; use top stack patches.
@@ -239,20 +267,16 @@ def plot_bars_with_thumbnails(classes: np.ndarray,
         bar_top = float(tot[i])
 
         # Convert bar width to axis-fraction for inset sizing
-        xlim = ax.get_xlim()
-        ax_width_data = xlim[1] - xlim[0]
-        img_width_frac = (IMG_WIDTH_SCALE * bar_w) / ax_width_data
+        img_width_frac = (img_width_scale * bar_w) / ax_width_data
 
         # Image height as fraction of axes height reserved within headroom
-        img_height_frac = min(max(IMG_HEIGHT_FRAC, 0.05), HEADROOM_FRAC * 0.9)
+        img_height_frac_actual = min(max(img_height_frac, 0.05), headroom_frac * 0.9)
 
         # Convert center position (with offset) to axes fraction
         bar_center_frac = (bar_center_with_offset - xlim[0]) / ax_width_data
         x_left_frac = bar_center_frac - img_width_frac / 2.0
 
         # Vertical placement: start above the bar by a small gap
-        ylim = ax.get_ylim()
-        ax_height_data = ylim[1] - ylim[0]
         y0_data = bar_top + IMAGE_GAP_FRAC * ymax
         # Map y0_data to axes fraction baseline, then place an inset with fixed fractional height
         y0_frac = (y0_data - ylim[0]) / ax_height_data
@@ -260,9 +284,9 @@ def plot_bars_with_thumbnails(classes: np.ndarray,
         iax = inset_axes(
             ax,
             width=f"{img_width_frac*100:.4f}%",
-            height=f"{img_height_frac*100:.4f}%",
+            height=f"{img_height_frac_actual*100:.4f}%",
             bbox_transform=ax.transAxes,
-            bbox_to_anchor=(x_left_frac, y0_frac, img_width_frac, img_height_frac),
+            bbox_to_anchor=(x_left_frac, y0_frac, img_width_frac, img_height_frac_actual),
             loc="lower left",
             borderpad=0.0
         )
@@ -277,7 +301,7 @@ def plot_bars_with_thumbnails(classes: np.ndarray,
         # Class name centered above the image
         name = ds.class_names.get(int(cls), f"class {int(cls)}")
         iax.text(0.5, 1.02, name, ha="center", va="bottom", transform=iax.transAxes,
-                 fontsize=9, fontweight="bold")
+                 fontsize=class_name_fontsize, fontweight="bold")
 
     fig.tight_layout()
     return fig
@@ -296,6 +320,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--height", type=float, default=7.0, help="Figure height (in).")
     p.add_argument("--img-x-offset", type=float, default=0.0, 
                    help="Horizontal offset for images and class names (in bar-width units). Positive=right, negative=left.")
+    p.add_argument("--img-width-scale", type=float, default=IMG_WIDTH_SCALE,
+                   help=f"Width of image as multiple of bar width (default: {IMG_WIDTH_SCALE}).")
+    p.add_argument("--img-height-frac", type=float, default=IMG_HEIGHT_FRAC,
+                   help=f"Height of image as fraction of axes height (default: {IMG_HEIGHT_FRAC}).")
+    p.add_argument("--headroom-frac", type=float, default=HEADROOM_FRAC,
+                   help=f"Fraction of max(total) reserved above bars for images (default: {HEADROOM_FRAC}).")
+    p.add_argument("--class-name-fontsize", type=int, default=CLASS_NAME_FONTSIZE,
+                   help=f"Font size for class name labels (default: {CLASS_NAME_FONTSIZE}).")
+    p.add_argument("--axis-label-fontsize", type=int, default=AXIS_LABEL_FONTSIZE,
+                   help=f"Font size for axis labels (default: {AXIS_LABEL_FONTSIZE}).")
+    p.add_argument("--axis-tick-fontsize", type=int, default=AXIS_TICK_FONTSIZE,
+                   help=f"Font size for axis tick labels (default: {AXIS_TICK_FONTSIZE}).")
+    p.add_argument("--legend-fontsize", type=int, default=LEGEND_FONTSIZE,
+                   help=f"Font size for legend text (default: {LEGEND_FONTSIZE}).")
     return p.parse_args()
 
 
@@ -311,7 +349,14 @@ def main() -> None:
                                     seed=args.seed,
                                     figsize=(args.width, args.height),
                                     dpi=args.dpi,
-                                    img_x_offset=args.img_x_offset)
+                                    img_x_offset=args.img_x_offset,
+                                    img_width_scale=args.img_width_scale,
+                                    img_height_frac=args.img_height_frac,
+                                    headroom_frac=args.headroom_frac,
+                                    class_name_fontsize=args.class_name_fontsize,
+                                    axis_label_fontsize=args.axis_label_fontsize,
+                                    axis_tick_fontsize=args.axis_tick_fontsize,
+                                    legend_fontsize=args.legend_fontsize)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, bbox_inches="tight")
     plt.close(fig)
