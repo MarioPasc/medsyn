@@ -23,6 +23,7 @@ from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
+import numpy as np
 
 logger = logging.getLogger("medsyn.ccddpm.train")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
