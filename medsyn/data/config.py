@@ -24,7 +24,9 @@ class SavePngCfg:
     enabled: bool = True
     processed_dir: str = "./data_processed"  # where PNGs are stored by split
     index_json: str = "./indexes/pathmnist_index.json"  # index file path
-    yolo_folder_dataset: Optional[str] = None  # root for YOLO classification symlink dataset
+    yolo_folder_dataset: Optional[str] = None  # root for YOLO classification dataset
+    yolo_use_symlinks: bool = True  # true: create symlinks, false: copy files
+    yolo_allow_copy_fallback: bool = True  # if symlinks fail, fall back to copying
 
 @dataclass(frozen=True)
 class PostprocessNpzCfg:

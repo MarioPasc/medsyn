@@ -147,13 +147,26 @@ def main() -> None:
             json.dump(final_idx, fh, ensure_ascii=False, indent=2)
         logger.info("Index JSON written to: %s", index_path)
 
-        # 4) Generar dataset de clasificación YOLO con symlinks (if configured)
+        # 4) Generar dataset de clasificación YOLO (if configured)
         if cfg.data.save_png.yolo_folder_dataset:
             yolo_root = Path(cfg.data.save_png.yolo_folder_dataset)
             yolo_root = yolo_root.resolve()
             yolo_root.mkdir(parents=True, exist_ok=True)
             class_map = build_pathmnist_class_map()
-            rep = generate_yolo_classification_from_index(index_path, yolo_root, class_map)
+
+            # Determine whether to use symlinks or copies based on config
+            prefer_copy = not cfg.data.save_png.yolo_use_symlinks
+            mode_str = "copying files" if prefer_copy else "creating symlinks"
+            logger.info("Building YOLO dataset by %s...", mode_str)
+
+            rep = generate_yolo_classification_from_index(
+                index_path,
+                yolo_root,
+                class_map,
+                use_relative_symlinks=True,
+                allow_copy_fallback=cfg.data.save_png.yolo_allow_copy_fallback,
+                prefer_copy=prefer_copy,
+            )
             logger.info("YOLO dataset at %s", yolo_root)
             logger.info("Counts: %s", rep.counts)
     else:

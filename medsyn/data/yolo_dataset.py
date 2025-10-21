@@ -37,12 +37,29 @@ def build_pathmnist_class_map() -> Dict[int, str]:
     }
 
 
-def _safe_symlink(src: Path, dst: Path, use_relative: bool = True, allow_copy: bool = True) -> None:
+def _safe_symlink(src: Path, dst: Path, use_relative: bool = True, allow_copy: bool = True, prefer_copy: bool = False) -> None:
     """
     Create a symlink at dst pointing to src. Parents are created. Idempotent if link exists.
     If symlink creation fails and allow_copy is True, falls back to copying the file.
+    If prefer_copy is True, directly copies the file without attempting to create a symlink.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
+
+    # If prefer_copy is True, skip symlink attempt and go straight to copying
+    if prefer_copy:
+        # Remove existing file/link if present
+        if dst.exists() or dst.is_symlink():
+            try:
+                dst.unlink()
+            except Exception as e:
+                raise YOLOSymlinkError(f"Cannot replace existing path: {dst} -> {e}")
+
+        try:
+            shutil.copy2(src, dst)
+            return
+        except Exception as copy_err:
+            raise YOLOSymlinkError(f"Copy failed: {src} -> {dst}: {copy_err}")
+
     # Remove broken or wrong existing links/files
     if dst.exists() or dst.is_symlink():
         try:
@@ -89,14 +106,21 @@ def generate_yolo_classification_from_index(
     splits: Tuple[str, ...] = ("train", "val", "test"),
     use_relative_symlinks: bool = True,
     allow_copy_fallback: bool = True,
+    prefer_copy: bool = False,
 ) -> YOLOBuildReport:
     """
-    Build a Ultralytics-compatible classification dataset using symlinks.
-    Reads the MedSyn index JSON and places links at:
+    Build a Ultralytics-compatible classification dataset using symlinks or copies.
+    Reads the MedSyn index JSON and places links/files at:
       out_root/{train,val,test}/{class_name}/*.png
-    
-    If symlink creation fails (e.g., on filesystems that don't support symlinks)
-    and allow_copy_fallback is True, files will be copied instead.
+
+    Args:
+        index_json: Path to the classification index JSON file
+        out_root: Root directory for the YOLO dataset
+        class_map: Mapping from label integers to class names
+        splits: Tuple of split names to process
+        use_relative_symlinks: If True, use relative symlinks; if False, use absolute
+        allow_copy_fallback: If True and symlink fails, fall back to copying
+        prefer_copy: If True, directly copy files without attempting symlinks
     """
     with Path(index_json).open("r", encoding="utf-8") as fh:
         idx = json.load(fh)
@@ -120,7 +144,7 @@ def generate_yolo_classification_from_index(
             dst_dir = out_root / split / cls
             # Name ensures uniqueness even if basenames repeat across splits
             dst = dst_dir / f"{i:06d}_{src.name}"
-            _safe_symlink(src, dst, use_relative=use_relative_symlinks, allow_copy=allow_copy_fallback)
+            _safe_symlink(src, dst, use_relative=use_relative_symlinks, allow_copy=allow_copy_fallback, prefer_copy=prefer_copy)
             counts[split][cls] = counts[split].get(cls, 0) + 1
 
         logger.info("Split %s -> %d total", split, sum(counts[split].values()))

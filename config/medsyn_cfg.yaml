@@ -6,7 +6,9 @@ data:
     enabled: false
     processed_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/data_processed  # almacena PNGs por split
     index_json: /media/mpascual/PortableSSD/medsyn/PathMNIST/indexes/pathmnist_index.json
-    yolo_folder_dataset: /home/mpascual/research/datasets/medsyn/PathMNIST/yolo_cls_dataset  # NEW: symlinked YOLO classification dataset
+    yolo_folder_dataset: /home/mpascual/research/datasets/medsyn/PathMNIST/yolo_cls_dataset  # YOLO classification dataset root
+    yolo_use_symlinks: true           # true: create symlinks, false: copy files
+    yolo_allow_copy_fallback: true    # if symlinks fail, fall back to copying (only if yolo_use_symlinks=true)
   postprocess_npz:
     enabled: true
     npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/PathMNIST.npz
