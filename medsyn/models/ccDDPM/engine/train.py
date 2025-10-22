@@ -485,6 +485,9 @@ def train(yaml_path: str, split: str = "train") -> None:
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
+
+            # Compute gradient norm and check for NaN/Inf BEFORE optimizer step
+            skip_step = False
             if tcfg.grad_clip_norm:
                 scaler.unscale_(opt)
                 # Clip gradients; error_if_nonfinite=False prevents crashes on overflow
@@ -492,9 +495,11 @@ def train(yaml_path: str, split: str = "train") -> None:
                     model.parameters(), tcfg.grad_clip_norm, error_if_nonfinite=False
                 )
                 grad_norm_val = float(grad_norm)
-                # Mark non-finite grad norms as NaN for proper averaging
+                # Check if gradients are non-finite
                 if not math.isfinite(grad_norm_val):
+                    skip_step = True
                     grad_norm_val = float("nan")
+                    logger.warning(f"⚠️  Skipping step {global_step} due to non-finite gradients (grad_norm={grad_norm})")
             else:
                 # Compute gradient norm for logging
                 total_norm = 0.0
@@ -504,11 +509,21 @@ def train(yaml_path: str, split: str = "train") -> None:
                         total_norm += param_norm.item() ** 2
                 grad_norm_val = total_norm ** 0.5
                 if not math.isfinite(grad_norm_val):
+                    skip_step = True
                     grad_norm_val = float("nan")
-            scaler.step(opt)
-            scaler.update()
-            if ema:
-                ema.update(model)
+                    logger.warning(f"⚠️  Skipping step {global_step} due to non-finite gradients (grad_norm={grad_norm_val})")
+
+            # Only update model if gradients are finite
+            if not skip_step:
+                scaler.step(opt)
+                scaler.update()
+                if ema:
+                    ema.update(model)
+            else:
+                # Still update scaler state even when skipping
+                scaler.update()
+                # Zero out gradients to prevent accumulation
+                opt.zero_grad(set_to_none=True)
 
             global_step += 1
             
@@ -517,13 +532,20 @@ def train(yaml_path: str, split: str = "train") -> None:
                 # Use scheduler to predict x0 from noise
                 sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
                 sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
+
+                # Add epsilon to prevent division by zero
+                sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
                 x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
-                
+
+                # Clamp to prevent extreme values
+                x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+
                 # Compute batch metrics
                 batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
                 batch_metrics["grad_norm"] = grad_norm_val
                 batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
-                
+                batch_metrics["skipped_step"] = 1.0 if skip_step else 0.0
+
                 # Update epoch averager
                 train_avg.update(batch_metrics, batch_size=bsz)
             
@@ -604,7 +626,13 @@ def train(yaml_path: str, split: str = "train") -> None:
                 # Reconstruct x0 for metrics
                 sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
                 sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
+
+                # Add epsilon to prevent division by zero
+                sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
                 x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
+
+                # Clamp to prevent extreme values
+                x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
                 
                 # Compute metrics
                 val_batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)

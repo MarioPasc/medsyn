@@ -50,12 +50,17 @@ class DDPMNoiseMSE:
                 raise ValueError("timesteps and alphas_cumprod required when use_min_snr=True")
 
             # Compute SNR: alpha_t / (1 - alpha_t)
+            # Use larger epsilon for numerical stability
             alphas_t = alphas_cumprod[timesteps]  # [B]
-            snr = alphas_t / (1 - alphas_t + 1e-8)  # [B]
+            alphas_t = torch.clamp(alphas_t, min=1e-7, max=1.0 - 1e-7)  # Prevent extreme values
+            snr = alphas_t / (1 - alphas_t + 1e-6)  # [B] - increased epsilon from 1e-8
 
             # Clamp SNR to gamma (typical 2-5) and compute weights
             snr_clamped = snr.clamp(max=self.min_snr_gamma)
-            weights = snr_clamped / (snr + 1e-8)  # [B]
+            weights = snr_clamped / (snr + 1e-6)  # [B] - increased epsilon from 1e-8
+
+            # Ensure weights are finite and reasonable
+            weights = torch.clamp(weights, min=1e-6, max=1.0)
 
             # Weight the loss
             loss = loss * weights
