@@ -63,8 +63,10 @@ def generate(yaml_path: str, checkpoint: Path, class_id: int, k: int) -> List[Pa
         labels = torch.full((cur,), int(class_id), device=device, dtype=torch.long)
 
         for t in scheduler.timesteps:
-            eps = _cfg_step(model, scheduler, x, t, labels, icfg.guidance_scale)
-            x = scheduler.step(model_output=eps, timestep=t, sample=x).prev_sample # type: ignore
+            # Move timestep to device to avoid device mismatch
+            t_device = t.to(device)
+            eps = _cfg_step(model, scheduler, x, t_device, labels, icfg.guidance_scale)
+            x = scheduler.step(model_output=eps, timestep=t_device, sample=x).prev_sample # type: ignore
 
         # map from [-1,1] to [0,1]
         imgs = (x.clamp(-1, 1) + 1.0) / 2.0

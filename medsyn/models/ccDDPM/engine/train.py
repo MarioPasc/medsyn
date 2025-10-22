@@ -251,8 +251,8 @@ def visualize_denoising_process(
             noise_pred_uncond = model(x_t, t_batch, None)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
-        # Denoise one step
-        x_t = scheduler.step(noise_pred, t, x_t).prev_sample
+        # Denoise one step - move timestep to device to avoid device mismatch
+        x_t = scheduler.step(noise_pred, t.to(device), x_t).prev_sample
 
         if i in save_indices:
             frames.append(x_t.detach().cpu())
