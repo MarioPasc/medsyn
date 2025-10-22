@@ -153,9 +153,11 @@ def full_chain_reconstruction_psnr(model, scheduler, x0, y, device):
     scheduler.set_timesteps(T)
     # find index of closest scheduler timestep to t
     start_idx = int((scheduler.timesteps - t.cpu()).abs().argmin().item())
+    # Move scheduler timesteps to device to avoid device mismatch in scheduler.step()
+    scheduler.timesteps = scheduler.timesteps.to(device)
     x = x_t
     for i in range(start_idx, len(scheduler.timesteps)):
-        tt = scheduler.timesteps[i].unsqueeze(0).to(device)
+        tt = scheduler.timesteps[i].unsqueeze(0)
         eps = model(x, tt, y)
         x = scheduler.step(eps, tt, x).prev_sample
     x_rec = torch.clamp(x, -1, 1)
@@ -229,6 +231,8 @@ def visualize_denoising_process(
 
     total_timesteps = scheduler.config.num_train_timesteps
     scheduler.set_timesteps(total_timesteps)
+    # Move scheduler timesteps to device to avoid device mismatch in scheduler.step()
+    scheduler.timesteps = scheduler.timesteps.to(device)
 
     # Ensure at least 1 intermediate step to maintain schedule compatibility
     save_indices = set(torch.linspace(
@@ -241,7 +245,7 @@ def visualize_denoising_process(
 
     for i, t in enumerate(scheduler.timesteps):
         # Predict noise
-        t_batch = t.unsqueeze(0).to(device)
+        t_batch = t.unsqueeze(0)
 
         if guidance_scale == 1.0:
             noise_pred = model(x_t, t_batch, class_label)
@@ -251,8 +255,8 @@ def visualize_denoising_process(
             noise_pred_uncond = model(x_t, t_batch, None)
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
-        # Denoise one step - move timestep to device to avoid device mismatch
-        x_t = scheduler.step(noise_pred, t.to(device), x_t).prev_sample
+        # Denoise one step
+        x_t = scheduler.step(noise_pred, t, x_t).prev_sample
 
         if i in save_indices:
             frames.append(x_t.detach().cpu())
