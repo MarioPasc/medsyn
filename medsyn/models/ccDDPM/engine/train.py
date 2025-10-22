@@ -152,7 +152,7 @@ def full_chain_reconstruction_psnr(model, scheduler, x0, y, device):
     # run reverse from current t to 0
     scheduler.set_timesteps(T)
     # find index of closest scheduler timestep to t
-    start_idx = int((scheduler.timesteps - t).abs().argmin().item())
+    start_idx = int((scheduler.timesteps - t.cpu()).abs().argmin().item())
     x = x_t
     for i in range(start_idx, len(scheduler.timesteps)):
         tt = scheduler.timesteps[i].unsqueeze(0).to(device)
