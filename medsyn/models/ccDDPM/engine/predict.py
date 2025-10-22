@@ -45,7 +45,9 @@ def generate(yaml_path: str, checkpoint: Path, class_id: int, k: int) -> List[Pa
         beta_end=scfg.beta_end,
         beta_schedule=scfg.beta_schedule,
         prediction_type=scfg.prediction_type,
-        clip_sample=False,
+        clip_sample=True,
+        clip_sample_range=1.0,
+        thresholding=False,
     )
     scheduler.set_timesteps(icfg.num_inference_steps, device=device)
 

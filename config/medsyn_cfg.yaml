@@ -119,7 +119,7 @@ ccddpm:
     beta_start: 1.0e-4
     beta_end: 2.0e-2
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
-    prediction_type: epsilon
+    prediction_type: v_prediction  # Better conditioning and sample robustness (was epsilon)
   infer:
     guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     num_inference_steps: 1000

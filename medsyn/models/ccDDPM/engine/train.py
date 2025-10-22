@@ -87,11 +87,15 @@ def compute_training_diagnostics(
         # Model prediction
         eps_pred = model(x_t, t, labels)
 
-        # Correlation between input and output (should be LOW/negative if learning)
-        corr = torch.corrcoef(torch.stack([
-            x_t.flatten(),
-            eps_pred.flatten()
-        ]))[0, 1].item()
+        # Correlate ε̂ with true ε, not with x_t (avoids false "echoing" alarms)
+        eps_true = noise
+        x_vec = eps_pred.flatten()
+        y_vec = eps_true.flatten()
+        x_std = x_vec.std(); y_std = y_vec.std()
+        if x_std > 1e-8 and y_std > 1e-8:
+            corr = torch.corrcoef(torch.stack([x_vec, y_vec]))[0,1].item()
+        else:
+            corr = 0.0
         correlations.append(corr)
 
         # Prediction std
@@ -122,6 +126,41 @@ def compute_training_diagnostics(
         "reconstruction_psnr_t500": float(np.mean(recon_psnr_t500)),
         "prediction_std": float(np.mean(pred_stds)),  # Should be ~0.8-1.2 for normalized data
     }
+
+@torch.no_grad()
+def full_chain_reconstruction_psnr(model, scheduler, x0, y, device):
+    """
+    Full-chain reconstruction test: add noise at random t, sample back to t=0, compute PSNR.
+    This catches multi-step drift that single-step x̂₀ formulas miss.
+
+    Args:
+        model: DDPM model
+        scheduler: DDPM scheduler
+        x0: Clean image [N, C, H, W]
+        y: Class labels [N]
+        device: Device
+
+    Returns:
+        PSNR of reconstructed image
+    """
+    model.eval()
+    x0 = x0[:1].to(device); y = y[:1].to(device)
+    T = scheduler.config.num_train_timesteps
+    t = torch.randint(T//4, 3*T//4, (1,), device=device, dtype=torch.long)
+    noise = torch.randn_like(x0)
+    x_t = scheduler.add_noise(x0, noise, t)
+    # run reverse from current t to 0
+    scheduler.set_timesteps(T)
+    # find index of closest scheduler timestep to t
+    start_idx = int((scheduler.timesteps - t).abs().argmin().item())
+    x = x_t
+    for i in range(start_idx, len(scheduler.timesteps)):
+        tt = scheduler.timesteps[i].unsqueeze(0).to(device)
+        eps = model(x, tt, y)
+        x = scheduler.step(eps, tt, x).prev_sample
+    x_rec = torch.clamp(x, -1, 1)
+    psnr = compute_psnr((x_rec+1)/2, (x0+1)/2, max_val=1.0)
+    return float(psnr)
 
 @torch.no_grad()
 def visualize_noising_process(
@@ -408,7 +447,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         beta_end=scfg.beta_end,
         beta_schedule=scfg.beta_schedule,
         prediction_type=scfg.prediction_type,
-        clip_sample=False,
+        # keep samples bounded to [-1,1] to avoid value explosion in sampling
+        clip_sample=True,
+        clip_sample_range=1.0,
+        thresholding=False,
     )
 
     # Optim
@@ -475,13 +517,19 @@ def train(yaml_path: str, split: str = "train") -> None:
                 drop = torch.rand(bsz, device=device) < tcfg.guidance_p_uncond
                 class_labels[drop] = -1  # sentinel for uncond
             # forward
-            with autocast(device_type='cuda', enabled=tcfg.mixed_precision):
+            # prefer bf16 on Ampere+ (more stable than fp16); falls back if unavailable
+            autocast_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else None
+            with autocast(device_type='cuda', enabled=tcfg.mixed_precision, dtype=autocast_dtype):
                 pred = model(x_t, t, class_labels)
                 loss = loss_fn(
                     pred, noise, labels,
                     timesteps=t,
                     alphas_cumprod=noise_scheduler.alphas_cumprod
                 )
+            # Guard: skip non-finite loss early
+            if not torch.isfinite(loss):
+                logger.warning(f"⚠️  Skipping step {global_step} due to non-finite loss")
+                opt.zero_grad(set_to_none=True); scaler.update(); global_step += 1; continue
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -548,9 +596,12 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                 # Update epoch averager
                 train_avg.update(batch_metrics, batch_size=bsz)
-            
+
             # Update running loss
-            running_loss += float(loss.item())
+            # Accumulate only finite losses
+            li = float(loss.detach().cpu())
+            if math.isfinite(li):
+                running_loss += li
             
             # Update progress bar with current loss (only if tqdm enabled)
             if tcfg.use_tqdm:
@@ -668,6 +719,16 @@ def train(yaml_path: str, split: str = "train") -> None:
             device=device,
             num_samples=min(16, len(x0_diag))
         )
+
+        # Full-chain reconstruction test
+        full_chain_psnr = full_chain_reconstruction_psnr(
+            model=model,
+            scheduler=noise_scheduler,
+            x0=x0_diag,
+            y=labels_diag,
+            device=device
+        )
+        diagnostics["full_chain_psnr"] = full_chain_psnr
 
         # Log validation metrics
         csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)

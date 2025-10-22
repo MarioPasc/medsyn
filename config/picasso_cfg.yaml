@@ -32,12 +32,15 @@ ccddpm:
     batch_size: 4
     epochs: 200
     mixed_precision: true
+    grad_clip_norm: 10.0       # Allows proper gradient flow (was too aggressive at 1.0)
     guidance_p_uncond: 0.1
     ema_use: true
     ema_decay: 0.999
+    use_min_snr: true          # Min-SNR loss weighting stabilizes training
+    min_snr_gamma: 5.0         # Standard value for Min-SNR (balances early/late timesteps)
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
-    patience: 30               # Early stopping: stop if no improvement for 15 epochs
-    use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
+    patience: 30               # Early stopping: stop if no improvement for 30 epochs
+    use_tqdm: false            # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
     lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
@@ -47,7 +50,7 @@ ccddpm:
     beta_start: 1.0e-4
     beta_end: 2.0e-2
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
-    prediction_type: epsilon
+    prediction_type: v_prediction     # Better conditioning and sample robustness (Karras et al. 2022)
   infer:
     guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
     num_inference_steps: 1000

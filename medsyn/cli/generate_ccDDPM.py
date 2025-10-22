@@ -182,7 +182,9 @@ def load_model_and_scheduler(
         beta_end=scfg.beta_end,
         beta_schedule=scfg.beta_schedule,
         prediction_type=scfg.prediction_type,
-        clip_sample=False,
+        clip_sample=True,            # <- critical
+        clip_sample_range=1.0,
+        thresholding=False,
     )
     scheduler.set_timesteps(icfg.num_inference_steps, device=device)
 
