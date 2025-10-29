@@ -17,8 +17,18 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 @torch.no_grad()
 def _cfg_step(model: CCDDPM, scheduler: DDPMScheduler, x: torch.Tensor, t: torch.Tensor, class_labels: torch.Tensor, guidance_scale: float) -> torch.Tensor:
+    """
+    Classifier-free guidance step.
+
+    Args:
+        guidance_scale:
+            - 1.0: pure conditional (single forward pass)
+            - >1.0: enhanced conditional (CFG formula with two passes)
+            - <1.0: blend toward unconditional (rarely used)
+    """
     eps_cond = model(x, t, class_labels)
-    if guidance_scale <= 0:
+    # Optimization: skip unconditional pass when scale=1.0 (pure conditional)
+    if guidance_scale == 1.0:
         return eps_cond
     eps_uncond = model(x, t, None)
     return eps_uncond + guidance_scale * (eps_cond - eps_uncond)

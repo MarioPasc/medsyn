@@ -25,6 +25,17 @@ from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
 import numpy as np
 
+# Augmentation imports (optional, will only be used if augmentation is enabled in config)
+try:
+    from medsyn.models.ccDDPM.augmentation import (
+        create_augmentation_pipeline,
+        AugmentationStatistics
+    )
+    AUGMENTATION_AVAILABLE = True
+except ImportError:
+    AUGMENTATION_AVAILABLE = False
+    logger.warning("Augmentation module not available. Install albumentations to enable augmentation.")
+
 logger = logging.getLogger("medsyn.ccddpm.train")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
@@ -423,18 +434,57 @@ def train(yaml_path: str, split: str = "train") -> None:
     scfg = cfg.ccddpm.sched
     ocfg = cfg.ccddpm.optim
 
+    # Augmentation setup
+    augmentation_pipeline = None
+    augmentation_stats = None
+    if cfg.ccddpm.augmentation and AUGMENTATION_AVAILABLE:
+        aug_cfg = cfg.ccddpm.augmentation
+        if aug_cfg.enabled:
+            logger.info("Creating augmentation pipeline...")
+            augmentation_pipeline = create_augmentation_pipeline(aug_cfg, use_replay=True)
+            logger.info(f"  Enabled: {aug_cfg.enabled}")
+            logger.info(f"  Probability: {aug_cfg.probability}")
+            logger.info(f"  Transforms: {len(aug_cfg.transforms)}")
+
+            # Initialize statistics tracker if enabled
+            if aug_cfg.statistics.enabled:
+                stats_output_path = Path(aug_cfg.statistics.output_path)
+                # If relative path, resolve relative to output_dir
+                if not stats_output_path.is_absolute():
+                    stats_output_path = (Path(tcfg.output_dir) / stats_output_path.name).resolve()
+
+                transform_names = augmentation_pipeline.get_transform_names()
+                augmentation_stats = AugmentationStatistics(stats_output_path, transform_names)
+                logger.info(f"  Statistics tracking enabled: {stats_output_path}")
+        else:
+            logger.info("Augmentation is disabled in config")
+    elif cfg.ccddpm.augmentation and not AUGMENTATION_AVAILABLE:
+        logger.warning("Augmentation requested in config but module not available. Proceeding without augmentation.")
+
     # Data - select dataloader based on config
     dl_cfg = cfg.ccddpm.dataloader
     if dl_cfg.type.lower() == "npz":
         logger.info("Using NPZ dataloader from: %s", dl_cfg.npz_path)
         if dl_cfg.npz_path is None:
             raise ValueError("NPZ dataloader selected but npz_path is not specified in config")
-        train_loader = build_npz_loader(dl_cfg.npz_path, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
-        val_loader = build_npz_loader(dl_cfg.npz_path, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+        train_loader = build_npz_loader(
+            dl_cfg.npz_path, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=augmentation_pipeline
+        )
+        val_loader = build_npz_loader(
+            dl_cfg.npz_path, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=None  # No augmentation for validation
+        )
     else:  # default to JSON
         logger.info("Using JSON dataloader from: %s", cfg.data_index_json)
-        train_loader = build_json_loader(cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
-        val_loader = build_json_loader(cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers, normalize=True)
+        train_loader = build_json_loader(
+            cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=augmentation_pipeline
+        )
+        val_loader = build_json_loader(
+            cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=None  # No augmentation for validation
+        )
 
     # Model
     mcfg = CCDDPMInit(
@@ -495,6 +545,9 @@ def train(yaml_path: str, split: str = "train") -> None:
         t0 = time.time()
         running_loss = 0.0
         train_avg = EpochAverager()
+
+        # Collect augmentation statistics for this epoch
+        epoch_augmentation_transforms = []
         
         # Progress bar for the training epoch (conditional based on use_tqdm)
         train_iter = enumerate(train_loader, 1)
@@ -508,6 +561,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         for step, batch in pbar:
             x0 = batch["pixel_values"].to(device)  # [-1,1]
             labels = batch["labels"].to(device)
+
+            # Collect augmentation statistics if tracking is enabled
+            if augmentation_stats is not None and "applied_transforms" in batch:
+                epoch_augmentation_transforms.extend(batch["applied_transforms"])
 
             # sample t and noise
             bsz = x0.size(0)
@@ -778,6 +835,17 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         model.train()
 
+        # ---- Record Augmentation Statistics ----
+        if augmentation_stats is not None and len(epoch_augmentation_transforms) > 0:
+            augmentation_stats.record_batch(epoch_augmentation_transforms, epoch=epoch)
+
+            # Save statistics periodically if configured
+            aug_cfg = cfg.ccddpm.augmentation
+            if aug_cfg.statistics.save_every_n_epochs > 0:
+                if epoch % aug_cfg.statistics.save_every_n_epochs == 0:
+                    augmentation_stats.save_csv(final=False)
+                    logger.info(f"Saved augmentation statistics (epoch {epoch})")
+
         # ---- Checkpointing & Early Stopping ----
         val_loss = val_metrics.get('loss', float('inf'))
         checkpoint_data = {
@@ -955,7 +1023,13 @@ def train(yaml_path: str, split: str = "train") -> None:
             model.load_state_dict(original_state)
         
         model.train()
-    
+
+    # Save final augmentation statistics
+    if augmentation_stats is not None:
+        augmentation_stats.save_csv(final=True)
+        augmentation_stats.print_summary()
+        logger.info("Final augmentation statistics saved")
+
     # Training complete summary
     print(f"\n{'='*80}")
     print("🎉 Training Completed!")

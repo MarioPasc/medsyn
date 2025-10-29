@@ -324,7 +324,8 @@ def generate_with_denoising_steps(
     for i, t in enumerate(scheduler.timesteps):
         t_batch = t.unsqueeze(0) if t.dim() == 0 else t
 
-        if guidance_scale > 0:
+        # Consistent with main generation function: skip second pass when scale=1.0
+        if guidance_scale != 1.0:
             eps_cond = model(x_t, t_batch, labels)
             eps_uncond = model(x_t, t_batch, None)
             eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)

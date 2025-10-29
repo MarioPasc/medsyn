@@ -4,7 +4,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 import json
 import logging
 from PIL import Image
@@ -25,7 +25,14 @@ class PathMNISTIndexDataset(Dataset):
     Dataset backed by a MedSyn JSON index:
       { "PathMNIST": { "train": { "0": {"image": "...", "label": int, "is_synth": bool}, ... } } }
     """
-    def __init__(self, index_json: Path, split: str = "train", image_size: int = 128, normalize: bool = True):
+    def __init__(
+        self,
+        index_json: Path,
+        split: str = "train",
+        image_size: int = 128,
+        normalize: bool = True,
+        augmentation_pipeline: Optional[Any] = None
+    ):
         with open(index_json, "r", encoding="utf-8") as fh:
             data = json.load(fh)["PathMNIST"][split]
         self.items: List[Sample] = []
@@ -37,6 +44,7 @@ class PathMNISTIndexDataset(Dataset):
             T.ConvertImageDtype(torch.float32),
             T.Normalize(mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]) if normalize else (lambda x: x),
         ])
+        self.augmentation_pipeline = augmentation_pipeline if split == "train" else None
         logger.info("IndexDataset split=%s size=%d", split, len(self.items))
 
     def __len__(self) -> int:
@@ -46,11 +54,56 @@ class PathMNISTIndexDataset(Dataset):
         s = self.items[i]
         img = Image.open(s.path).convert("RGB")
         x = self.transform(img)
-        return {"pixel_values": x, "labels": torch.tensor(s.label, dtype=torch.long), "path": str(s.path), "is_synth": s.is_synth}
 
-def build_json_loader(index_json: Path, split: str, image_size: int, batch_size: int, num_workers: int, normalize: bool = True) -> DataLoader:
+        # Apply augmentation (only for training split)
+        applied_transforms = []
+        if self.augmentation_pipeline is not None:
+            x, applied_transforms = self.augmentation_pipeline(x, return_applied_transforms=True)
+
+        return {
+            "pixel_values": x,
+            "labels": torch.tensor(s.label, dtype=torch.long),
+            "path": str(s.path),
+            "is_synth": s.is_synth,
+            "applied_transforms": applied_transforms
+        }
+
+def build_json_loader(
+    index_json: Path,
+    split: str,
+    image_size: int,
+    batch_size: int,
+    num_workers: int,
+    normalize: bool = True,
+    augmentation_pipeline: Optional[Any] = None
+) -> DataLoader:
     """
     Build torch DataLoader from JSON index with sane defaults.
+
+    Args:
+        index_json: Path to JSON index file
+        split: 'train', 'val', or 'test'
+        image_size: Target image size
+        batch_size: Batch size
+        num_workers: Number of data loading workers
+        normalize: Whether to normalize to [-1, 1]
+        augmentation_pipeline: Optional augmentation pipeline (only applied to training split)
+
+    Returns:
+        DataLoader instance
     """
-    ds = PathMNISTIndexDataset(index_json, split=split, image_size=image_size, normalize=normalize)
-    return DataLoader(ds, batch_size=batch_size, shuffle=(split=="train"), num_workers=num_workers, pin_memory=True, drop_last=(split=="train"))
+    ds = PathMNISTIndexDataset(
+        index_json,
+        split=split,
+        image_size=image_size,
+        normalize=normalize,
+        augmentation_pipeline=augmentation_pipeline
+    )
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        shuffle=(split == "train"),
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=(split == "train")
+    )

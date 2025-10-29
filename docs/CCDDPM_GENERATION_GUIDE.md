@@ -1,8 +1,17 @@
 # ccDDPM Synthetic Image Generation Guide
 
+**Last Updated**: 2025-10-29
+
 ## Overview
 
 The `ccddpm-generate` CLI tool provides a comprehensive solution for generating synthetic medical images using trained class-conditioned DDPM models. This guide explains how to use the tool and understand its outputs.
+
+### Recent Updates (2025-10-29)
+
+✅ **Fixed critical bugs**:
+- Guidance scale logic corrected (was returning wrong predictions for `scale=0`)
+- Consistent CFG implementation across all generation functions
+- See [TRAINING_FIXES_AND_DIAGNOSTICS.md](TRAINING_FIXES_AND_DIAGNOSTICS.md) for details
 
 ## Features
 

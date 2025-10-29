@@ -1,15 +1,40 @@
 # ccDDPM Training Fixes & Diagnostic System
 
-**Date**: 2025-10-21
+**Date**: 2025-10-29 (Updated)
 **Status**: ✅ Ready for Retraining
 
 ## Summary
 
-Fixed critical training bugs and added comprehensive diagnostics to detect and prevent training failures. The previous model (epoch 90) learned to **echo its input** (correlation=0.99) instead of denoising, caused by too-aggressive gradient clipping and missing EMA weights.
+Fixed critical training bugs and added comprehensive diagnostics to detect and prevent training failures. The previous model (epoch 90) learned to **echo its input** (correlation=0.99) instead of denoising, caused by too-aggressive gradient clipping, missing EMA weights, **and incorrect prediction_type configuration**.
 
 ---
 
 ## 🐛 Critical Bugs Fixed
+
+### 0. **Prediction Type Mismatch** (CRITICAL - NEWLY FIXED)
+**Location**: `config/medsyn_cfg.yaml:53`
+
+**Problem**:
+- Config specified `prediction_type: v_prediction`
+- But entire codebase (loss function, diagnostics, generation) assumes epsilon prediction
+- **Impact**: Model was trained with completely wrong loss function
+
+**What v_prediction Requires**:
+```python
+# Model should predict velocity v, not noise ε
+v_true = sqrt_alpha_prod * noise - sqrt_one_minus_alpha_prod * x0
+loss = F.mse_loss(pred, v_true)  # NOT F.mse_loss(pred, noise)!
+```
+
+**Fix**:
+```yaml
+# Changed from v_prediction to epsilon
+prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε)
+```
+
+**Critical Note**: This mismatch means any model trained with v_prediction config was trained incorrectly and must be retrained with epsilon prediction.
+
+---
 
 ### 1. **EMA Weights Never Saved** (CRITICAL)
 **Location**: `medsyn/models/ccDDPM/engine/train.py:34`
@@ -203,12 +228,15 @@ epoch,split,lr,loss,psnr,ssim,input_output_correlation,reconstruction_psnr_t500,
 
 Before starting training, verify:
 
+- [x] **CRITICAL**: Config has `prediction_type: epsilon` (NOT v_prediction)
 - [x] Config has `grad_clip_norm: 10.0` (not 1.0)
 - [x] Config has `use_min_snr: true`
+- [x] Config has `guidance_scale: 2.0` (not 0.0)
 - [x] Config has `class_embed_dim: 32` (matches checkpoint architecture)
 - [x] EMA fix applied to `train.py:34`
 - [x] Diagnostics function added to `train.py:49-123`
 - [x] Checkpoint saves diagnostics at `train.py:697-702`
+- [x] Guidance scale logic fixed in `predict.py` and `generate_ccDDPM.py`
 
 During training, watch for:
 
@@ -272,6 +300,36 @@ else:
 ### 3. **Scheduler Config Logging**
 Logs all scheduler settings at generation time to verify they match training.
 
+### 4. **Incorrect Guidance Scale Logic in predict.py** (FIXED 2025-10-29)
+**Location**: `medsyn/models/ccDDPM/engine/predict.py:21`
+
+**Problem**:
+```python
+# OLD (WRONG)
+if guidance_scale <= 0:
+    return eps_cond  # Returns conditional when scale is 0!
+```
+- When `guidance_scale=0`, should be unconditional, not conditional
+- Should optimize by skipping second pass when `scale=1.0`
+
+**Fix**:
+```python
+# NEW (CORRECT)
+if guidance_scale == 1.0:
+    return eps_cond  # Pure conditional, skip unconditional pass
+eps_uncond = model(x, t, None)
+return eps_uncond + guidance_scale * (eps_cond - eps_uncond)
+```
+
+### 5. **Inconsistent Guidance Scale Check** (FIXED 2025-10-29)
+**Location**: `medsyn/cli/generate_ccDDPM.py:327`
+
+**Problem**:
+- Main generation function used `if guidance_scale != 1.0:` (correct)
+- Denoising visualization function used `if guidance_scale > 0:` (inconsistent)
+
+**Fix**: Made both functions use `if guidance_scale != 1.0:` for consistency
+
 ---
 
 ## 📚 References
@@ -300,6 +358,13 @@ Logs all scheduler settings at generation time to verify they match training.
 
 ---
 
-**Generated**: 2025-10-21
+## 📝 Change Log
+
+- **2025-10-21**: Initial fixes (EMA, gradient clipping, Min-SNR, generation bug)
+- **2025-10-29**: Critical prediction_type fix + guidance scale logic fixes
+
+---
+
+**Last Updated**: 2025-10-29
 **Author**: Claude Code
-**Status**: ✅ Ready for Production
+**Status**: ✅ All Critical Bugs Fixed - Ready for Retraining

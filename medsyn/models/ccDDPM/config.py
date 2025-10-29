@@ -78,6 +78,7 @@ class CCDDPmCfg:
     infer: InferenceCfg = field(default_factory=InferenceCfg)
     dataloader: DataloaderCfg = field(default_factory=DataloaderCfg)
     data: DataCfg | None = None  # set after reading YAML
+    augmentation: Any = None  # AugmentationConfig, set after reading YAML
 
 @dataclass
 class ProjectCfg:
@@ -164,8 +165,21 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
         type=dataloader_type,
         npz_path=npz_path
     )
-    
-    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg)
+
+    # Parse augmentation configuration
+    aug_dict = cc.get('augmentation', {})
+    augmentation_cfg = None
+    if aug_dict:
+        try:
+            from medsyn.models.ccDDPM.augmentation import AugmentationConfig
+            augmentation_cfg = AugmentationConfig.from_dict(aug_dict)
+            logger.info("Augmentation enabled: %s, probability: %.2f, transforms: %d",
+                       augmentation_cfg.enabled, augmentation_cfg.probability, len(augmentation_cfg.transforms))
+        except ImportError:
+            logger.warning("Augmentation config found but augmentation module not available. Skipping augmentation.")
+            augmentation_cfg = None
+
+    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg, augmentation=augmentation_cfg)
 
     proj = ProjectCfg(
         data_index_json=index_json_path if index_json_path else Path("./dummy.json"),

@@ -2,7 +2,7 @@
 # Purpose: NPZ-based dataloader for compressed datasets on supercomputers
 # Loads all data from a single .npz file containing images and metadata
 from __future__ import annotations
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
 import numpy as np
@@ -33,11 +33,12 @@ class NPZDataset(Dataset):
     }
     """
     def __init__(
-        self, 
-        npz_path: Path, 
-        split: str = "train", 
-        image_size: int = 64, 
-        normalize: bool = True
+        self,
+        npz_path: Path,
+        split: str = "train",
+        image_size: int = 64,
+        normalize: bool = True,
+        augmentation_pipeline: Optional[Any] = None
     ):
         """
         Args:
@@ -45,10 +46,12 @@ class NPZDataset(Dataset):
             split: One of 'train', 'val', 'test'
             image_size: Target image size (will resize if needed)
             normalize: If True, normalize to [-1, 1], else [0, 1]
+            augmentation_pipeline: Optional augmentation pipeline (only applied to training split)
         """
         self.split = split
         self.image_size = image_size
         self.normalize = normalize
+        self.augmentation_pipeline = augmentation_pipeline if split == "train" else None
         
         # Load NPZ file
         logger.info(f"Loading NPZ dataset from {npz_path} (split={split})...")
@@ -101,36 +104,44 @@ class NPZDataset(Dataset):
             - labels: Tensor scalar int64
             - is_synth: bool
             - idx: int (for debugging)
+            - applied_transforms: List[str] (transforms applied by augmentation, empty if none)
         """
         # Get image [H, W, C] uint8
         img = self.images[idx]
-        
+
         # Convert to torch tensor [C, H, W] float32 in [0, 1]
         img_tensor = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
-        
+
         # Apply transforms (resize, normalize)
         if self.transform is not None:
             img_tensor = self.transform(img_tensor)
-        
+
+        # Apply augmentation (only for training split)
+        applied_transforms = []
+        if self.augmentation_pipeline is not None:
+            img_tensor, applied_transforms = self.augmentation_pipeline(img_tensor, return_applied_transforms=True)
+
         return {
             "pixel_values": img_tensor,
             "labels": torch.tensor(self.labels[idx], dtype=torch.long),
             "is_synth": bool(self.is_synth[idx]),
-            "idx": idx
+            "idx": idx,
+            "applied_transforms": applied_transforms
         }
 
 
 def build_npz_loader(
-    npz_path: Path, 
-    split: str, 
-    image_size: int, 
-    batch_size: int, 
-    num_workers: int, 
-    normalize: bool = True
+    npz_path: Path,
+    split: str,
+    image_size: int,
+    batch_size: int,
+    num_workers: int,
+    normalize: bool = True,
+    augmentation_pipeline: Optional[Any] = None
 ) -> DataLoader:
     """
     Build DataLoader from NPZ file.
-    
+
     Args:
         npz_path: Path to .npz file
         split: 'train', 'val', or 'test'
@@ -138,16 +149,23 @@ def build_npz_loader(
         batch_size: Batch size
         num_workers: Number of data loading workers
         normalize: Whether to normalize to [-1, 1]
-    
+        augmentation_pipeline: Optional augmentation pipeline (only applied to training split)
+
     Returns:
         DataLoader instance
     """
-    ds = NPZDataset(npz_path, split=split, image_size=image_size, normalize=normalize)
+    ds = NPZDataset(
+        npz_path,
+        split=split,
+        image_size=image_size,
+        normalize=normalize,
+        augmentation_pipeline=augmentation_pipeline
+    )
     return DataLoader(
-        ds, 
-        batch_size=batch_size, 
-        shuffle=(split == "train"), 
-        num_workers=num_workers, 
-        pin_memory=True, 
+        ds,
+        batch_size=batch_size,
+        shuffle=(split == "train"),
+        num_workers=num_workers,
+        pin_memory=True,
         drop_last=(split == "train")
     )

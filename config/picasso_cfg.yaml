@@ -23,24 +23,125 @@ data:
 
 ccddpm:
   dataloader:
-    type: npz # Options are JSON, if we are using the index json file or NPZ. 
+    type: npz # Options are JSON, if we are using the index json file or NPZ.
+
+  # Data augmentation configuration (optional)
+  # Augmentation is applied only during training, not validation/testing
+  # Requires: pip install albumentations
+  augmentation:
+    enabled: true  # Set to true to enable augmentation
+    probability: 0.6  # Overall probability of applying augmentation to an image (0.0-1.0)
+    preserve_range: true  # Clamp outputs to [-1, 1] after augmentation
+    normalize_after_augment: true  # Re-normalize after augmentation
+
+    # List of transforms to apply (each with individual probability p)
+    # Available transforms: any albumentations transform (e.g., HorizontalFlip, Rotate, GaussNoise)
+    # See: https://albumentations.ai/docs/api_reference/augmentations/
+    transforms:
+      # Geometric transforms (conservative for medical images)
+      - name: HorizontalFlip
+        p: 0.5
+      - name: VerticalFlip
+        p: 0.5
+      - name: SafeRotate
+        p: 0.3
+        limit: 10  # Rotate by up to ±10 degrees
+
+      # Intensity transforms (careful with medical imaging)
+      - name: RandomBrightnessContrast
+        p: 0.1
+        brightness_limit: 0.2
+        contrast_limit: 0.2
+
+      # Noise augmentation
+      - name: GaussNoise
+        p: 0.1
+        var_limit: [10.0, 30.0]
+
+    # Statistics tracking (CSV output)
+    statistics:
+      enabled: true  # Track which augmentations were applied
+      output_path: augmentation_stats.csv  # Relative to output_dir or absolute path
+      save_every_n_epochs: 10  # 0 = save only at end, 1 = every epoch, etc.
+
+    # Preset configurations (uncomment to use):
+    # For light augmentation (safe for medical images):
+    # enabled: true
+    # probability: 0.5
+    # transforms:
+    #   - name: HorizontalFlip
+    #     p: 0.5
+    #   - name: VerticalFlip
+    #     p: 0.5
+    #   - name: Rotate
+    #     p: 0.3
+    #     limit: 10
+
+    # For moderate augmentation:
+    # enabled: true
+    # probability: 0.7
+    # transforms:
+    #   - name: HorizontalFlip
+    #     p: 0.5
+    #   - name: VerticalFlip
+    #     p: 0.5
+    #   - name: Rotate
+    #     p: 0.4
+    #     limit: 15
+    #   - name: RandomBrightnessContrast
+    #     p: 0.3
+    #     brightness_limit: 0.2
+    #     contrast_limit: 0.2
+    #   - name: GaussNoise
+    #     p: 0.2
+    #     var_limit: [10.0, 50.0]
+
+    # For aggressive augmentation (use with caution):
+    # enabled: true
+    # probability: 0.8
+    # transforms:
+    #   - name: HorizontalFlip
+    #     p: 0.5
+    #   - name: VerticalFlip
+    #     p: 0.5
+    #   - name: Rotate
+    #     p: 0.5
+    #     limit: 20
+    #   - name: ShiftScaleRotate
+    #     p: 0.3
+    #     shift_limit: 0.0625
+    #     scale_limit: 0.1
+    #     rotate_limit: 15
+    #   - name: RandomBrightnessContrast
+    #     p: 0.4
+    #     brightness_limit: 0.3
+    #     contrast_limit: 0.3
+    #   - name: GaussNoise
+    #     p: 0.3
+    #     var_limit: [10.0, 50.0]
+    #   - name: ElasticTransform
+    #     p: 0.2
+    #     alpha: 1
+    #     sigma: 50
+    #     alpha_affine: 50
+
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 32
+    class_embed_dim: 32  # MUST match checkpoint! Was trained with 32
     num_classes: 9
     batch_size: 4
-    epochs: 200
+    epochs: 1000
     mixed_precision: true
-    grad_clip_norm: 10.0       # Allows proper gradient flow (was too aggressive at 1.0)
-    guidance_p_uncond: 0.1
+    grad_clip_norm: 10.0       # FIXED: Was 1.0 (too aggressive), now 10.0 to allow learning
+    guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
     ema_use: true
     ema_decay: 0.999
-    use_min_snr: true          # Min-SNR loss weighting stabilizes training
-    min_snr_gamma: 5.0         # Standard value for Min-SNR (balances early/late timesteps)
+    use_min_snr: true          # ENABLED: Min-SNR loss weighting stabilizes training
+    min_snr_gamma: 5.0         # Standard value for Min-SNR
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
-    patience: 30               # Early stopping: stop if no improvement for 30 epochs
-    use_tqdm: false            # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
+    patience: 15               # Early stopping: stop if no improvement for 15 epochs
+    use_tqdm: true             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
     lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
@@ -50,25 +151,41 @@ ccddpm:
     beta_start: 1.0e-4
     beta_end: 2.0e-2
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
-    prediction_type: v_prediction     # Better conditioning and sample robustness (Karras et al. 2022)
+    prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
-    guidance_scale: 2.0  # Classifier-free guidance scale 1.5-3.0 recommended for class-conditional sampling
+    guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     num_inference_steps: 1000
     out_dir: ${OUTPUT_DIR}/samples
 
+
 # Generation configuration (outside bVAE section)
 generate:
-  checkpoint: "/home/mpascual/research/datasets/medsyn/bVAE/ckpts/best.pt"  # absolute path to checkpoint
+  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py
+  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM/ckpts/best.pt"  # absolute path to checkpoint
   classes:
-    0: 100
-    1: 100
-    2: 100
-    3: 100
-    4: 100
-    5: 100
-    6: 100
-    7: 100
-    8: 100
+    0: 1
+    1: 1
+    2: 1
+    3: 1
+    4: 1
+    5: 1
+    6: 1
+    7: 1
+    8: 1
+
+yolo:
+  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
+  # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
+  # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
+  # is preferred as the main source.
+  model: yolo11n-cls.pt        # any Ultralytics classify model
+  project: /path/to/runs
+  name: pathmnist_npz
+  imgsz: 64
+  epochs: 100
+  batch: 128
+  workers: 8
+  training_images: PathMNIST   # one of: PathMNIST | PathMNIST_and_synth | synth
 
 bVAE:
   model:
@@ -138,3 +255,4 @@ bVAE:
       kernel: "rbf"
     per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
     per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
+
