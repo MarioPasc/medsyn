@@ -71,6 +71,18 @@ class DataCfg:
     normalize: bool = True  # scale to [-1,1]
 
 @dataclass
+class DistCfg:
+    """Configuration for distributed training (DDP)."""
+    enabled: bool = False  # Enable DDP multi-GPU training
+    backend: str = "nccl"  # Backend for distributed training (nccl for GPU, gloo for CPU)
+    init_method: str = "env://"  # torchrun uses env://
+    num_gpus: int | str = "auto"  # "auto" uses WORLD_SIZE from torchrun
+    find_unused_parameters: bool = False  # DDP flag for dynamic graphs
+    broadcast_buffers: bool = True  # Sync buffers (e.g., BatchNorm stats)
+    grad_accum_steps: int = 1  # Gradient accumulation steps (optional)
+    seed_offset: int = 0  # Seed offset per rank for decorrelation
+
+@dataclass
 class CCDDPmCfg:
     train: TrainCfg = field(default_factory=TrainCfg)
     optim: OptimCfg = field(default_factory=OptimCfg)
@@ -79,6 +91,7 @@ class CCDDPmCfg:
     dataloader: DataloaderCfg = field(default_factory=DataloaderCfg)
     data: DataCfg | None = None  # set after reading YAML
     augmentation: Any = None  # AugmentationConfig, set after reading YAML
+    dist: DistCfg = field(default_factory=DistCfg)  # Distributed training config
 
 @dataclass
 class ProjectCfg:
@@ -146,6 +159,7 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     optim = OptimCfg(**{**OptimCfg().__dict__, **cc.get("optim", {})})
     sched = SchedCfg(**{**SchedCfg().__dict__, **cc.get("sched", {})})
     infer = InferenceCfg(**{**InferenceCfg().__dict__, **cc.get("infer", {})})
+    dist = DistCfg(**{**DistCfg().__dict__, **cc.get("dist", {})})
     
     # dataloader configuration - read NPZ path from data.postprocess_npz section
     dl_cfg_dict = cc.get("dataloader", {})
@@ -179,7 +193,7 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
             logger.warning("Augmentation config found but augmentation module not available. Skipping augmentation.")
             augmentation_cfg = None
 
-    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg, augmentation=augmentation_cfg)
+    cc_cfg = CCDDPmCfg(train=train, optim=optim, sched=sched, infer=infer, dataloader=dataloader_cfg, data=data_cfg, augmentation=augmentation_cfg, dist=dist)
 
     proj = ProjectCfg(
         data_index_json=index_json_path if index_json_path else Path("./dummy.json"),

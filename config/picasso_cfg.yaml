@@ -13,7 +13,7 @@ data:
     enabled: true
     npz_path: ${DATASET_PATH}
   seed: 23102003
-  num_workers: 8
+  num_workers: 2
   reduction:
     strategy: fraction
     train: 1.00
@@ -22,6 +22,18 @@ data:
     max_per_class: null
 
 ccddpm:
+  # Distributed training configuration (multi-GPU with DDP)
+  # To use multi-GPU training, launch with torchrun:
+  # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM picasso_cfg.yaml
+  dist:
+    enabled: false  # Set to true to enable multi-GPU distributed training
+    backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
+    num_gpus: auto  # 'auto' uses all available GPUs (set by torchrun)
+    find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
+    broadcast_buffers: true  # Sync batch norm stats across GPUs
+    grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
+    seed_offset: 0  # Offset for per-rank seed decorrelation
+
   dataloader:
     type: npz # Options are JSON, if we are using the index json file or NPZ.
 
@@ -43,9 +55,10 @@ ccddpm:
         p: 0.5
       - name: VerticalFlip
         p: 0.5
-      - name: SafeRotate
+      - name: Rotate
         p: 0.3
         limit: 10  # Rotate by up to ±10 degrees
+        # Note: Using Rotate instead of SafeRotate to preserve image dimensions for batching
 
       # Intensity transforms (careful with medical imaging)
       - name: RandomBrightnessContrast

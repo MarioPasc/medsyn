@@ -137,7 +137,8 @@ def build_npz_loader(
     batch_size: int,
     num_workers: int,
     normalize: bool = True,
-    augmentation_pipeline: Optional[Any] = None
+    augmentation_pipeline: Optional[Any] = None,
+    sampler: Optional[Any] = None
 ) -> DataLoader:
     """
     Build DataLoader from NPZ file.
@@ -150,6 +151,7 @@ def build_npz_loader(
         num_workers: Number of data loading workers
         normalize: Whether to normalize to [-1, 1]
         augmentation_pipeline: Optional augmentation pipeline (only applied to training split)
+        sampler: Optional sampler (e.g., DistributedSampler for DDP). If provided, shuffle is disabled.
 
     Returns:
         DataLoader instance
@@ -161,11 +163,17 @@ def build_npz_loader(
         normalize=normalize,
         augmentation_pipeline=augmentation_pipeline
     )
+
+    # If sampler is provided, disable shuffle (samplers handle shuffling)
+    shuffle = (split == "train") and (sampler is None)
+
     return DataLoader(
         ds,
         batch_size=batch_size,
-        shuffle=(split == "train"),
+        shuffle=shuffle,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=True,
-        drop_last=(split == "train")
+        drop_last=(split == "train"),
+        persistent_workers=(num_workers > 0)  # Improves performance when using workers
     )

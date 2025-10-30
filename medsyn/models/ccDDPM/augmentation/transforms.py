@@ -108,8 +108,26 @@ class AugmentationPipeline:
         if transform_class is None:
             raise ValueError(f"Unknown transform: {tf_config.name}")
 
-        # Create transform with probability and parameters
-        return transform_class(p=tf_config.p, **tf_config.params)
+        # Filter out invalid parameters for this transform
+        import inspect
+        valid_params = inspect.signature(transform_class.__init__).parameters
+        filtered_params = {}
+        invalid_params = []
+
+        for key, value in tf_config.params.items():
+            if key in valid_params:
+                filtered_params[key] = value
+            else:
+                invalid_params.append(key)
+
+        if invalid_params:
+            logger.warning(
+                f"Ignoring invalid parameter(s) {invalid_params} for transform {tf_config.name}. "
+                f"Valid parameters: {list(valid_params.keys())}"
+            )
+
+        # Create transform with probability and filtered parameters
+        return transform_class(p=tf_config.p, **filtered_params)
 
     def __call__(
         self,
@@ -137,11 +155,32 @@ class AugmentationPipeline:
         # Convert tensor to numpy for albumentations
         # Albumentations expects [H, W, C] in range [0, 255] for uint8 or [0, 1] for float32
         image_np = self._tensor_to_numpy(image)
+        original_shape = image_np.shape
 
         # Apply augmentation
         try:
             augmented = self.pipeline(image=image_np)
             augmented_image = augmented['image']
+
+            # CRITICAL: Validate that image dimensions haven't changed
+            # This prevents batch collation errors in DataLoader
+            if augmented_image.shape != original_shape:
+                logger.warning(
+                    f"Augmentation changed image dimensions from {original_shape} to {augmented_image.shape}! "
+                    f"Reshaping back to original dimensions using bicubic interpolation. "
+                    f"Check your augmentation config for transforms like SafeRotate that change dimensions."
+                )
+                # Reshape using bicubic interpolation
+                import cv2
+                # Resize to match original H, W (shape is [H, W, C])
+                augmented_image = cv2.resize(
+                    augmented_image, 
+                    (original_shape[1], original_shape[0]),  # (width, height)
+                    interpolation=cv2.INTER_CUBIC
+                )
+                # Ensure channel dimension is preserved
+                if len(original_shape) == 3 and len(augmented_image.shape) == 2:
+                    augmented_image = augmented_image[:, :, np.newaxis]
 
             # Track which transforms were actually applied
             # Note: Albumentations doesn't directly expose this, so we track via replay
@@ -288,10 +327,30 @@ class ReplayAugmentationPipeline(AugmentationPipeline):
             return image, []
 
         image_np = self._tensor_to_numpy(image)
+        original_shape = image_np.shape
 
         try:
             augmented = self.pipeline(image=image_np)
             augmented_image = augmented['image']
+
+            # CRITICAL: Validate that image dimensions haven't changed
+            if augmented_image.shape != original_shape:
+                logger.warning(
+                    f"Augmentation changed image dimensions from {original_shape} to {augmented_image.shape}! "
+                    f"Reshaping back to original dimensions using bicubic interpolation. "
+                    f"Check your augmentation config for transforms like SafeRotate that change dimensions."
+                )
+                # Reshape using bicubic interpolation
+                import cv2
+                # Resize to match original H, W (shape is [H, W, C])
+                augmented_image = cv2.resize(
+                    augmented_image, 
+                    (original_shape[1], original_shape[0]),  # (width, height)
+                    interpolation=cv2.INTER_CUBIC
+                )
+                # Ensure channel dimension is preserved
+                if len(original_shape) == 3 and len(augmented_image.shape) == 2:
+                    augmented_image = augmented_image[:, :, np.newaxis]
 
             # Extract applied transforms from replay data
             applied_transforms = []

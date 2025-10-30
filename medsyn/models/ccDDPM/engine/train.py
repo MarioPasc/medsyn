@@ -1,6 +1,6 @@
 # medsyn/models/ccDDPM/engine/train.py
 # Purpose: Training loop for class-conditioned DDPM with Diffusers' DDPMScheduler.
-# Features: mixed precision, EMA, classifier-free guidance (label drop), checkpointing, CSV logs.
+# Features: mixed precision, EMA, classifier-free guidance (label drop), checkpointing, CSV logs, DDP support.
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Dict
@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from torchvision.utils import save_image
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -23,7 +24,14 @@ from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
+from medsyn.models.ccDDPM.engine.ddp_utils import (
+    ddp_is_enabled, ddp_init, is_main_process, get_rank, get_world_size,
+    barrier, cleanup, all_reduce_mean, broadcast_bool, get_state_dict_for_save
+)
 import numpy as np
+
+logger = logging.getLogger("medsyn.ccddpm.train")
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 # Augmentation imports (optional, will only be used if augmentation is enabled in config)
 try:
@@ -36,8 +44,6 @@ except ImportError:
     AUGMENTATION_AVAILABLE = False
     logger.warning("Augmentation module not available. Install albumentations to enable augmentation.")
 
-logger = logging.getLogger("medsyn.ccddpm.train")
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 class EMA:
     """Exponential moving average of model parameters."""
@@ -56,6 +62,36 @@ class EMA:
     @torch.no_grad()
     def copy_to(self, model: nn.Module) -> None:
         model.load_state_dict({**model.state_dict(), **self.shadow}, strict=False)
+
+
+def sync_metrics_dict(metrics_dict: Dict[str, float], device: torch.device, use_ddp: bool) -> Dict[str, float]:
+    """
+    Synchronize a dictionary of metrics across all DDP processes by averaging.
+
+    Args:
+        metrics_dict: Dictionary of metric name -> value
+        device: Device tensors are on
+        use_ddp: Whether DDP is enabled
+
+    Returns:
+        Dictionary with globally averaged metrics
+    """
+    if not use_ddp:
+        return metrics_dict
+
+    synced_metrics = {}
+    for key, value in metrics_dict.items():
+        if isinstance(value, (int, float)):
+            # Convert to tensor and synchronize
+            tensor = torch.tensor([float(value)], device=device, dtype=torch.float32)
+            synced_tensor = all_reduce_mean(tensor)
+            synced_metrics[key] = synced_tensor.item()
+        else:
+            # Non-numeric values (shouldn't happen for metrics, but just in case)
+            synced_metrics[key] = value
+
+    return synced_metrics
+
 
 @torch.no_grad()
 def compute_training_diagnostics(
@@ -427,12 +463,31 @@ def compute_batch_metrics(
 def train(yaml_path: str, split: str = "train") -> None:
     """
     Train ccDDPM using config at yaml_path. Saves checkpoints and CSV log.
+    Supports both single-GPU and multi-GPU (DDP) training.
+
+    For multi-GPU training, launch with:
+        torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM config.yaml
     """
     cfg: ProjectCfg = load_cfg(yaml_path, split=split)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tcfg = cfg.ccddpm.train
     scfg = cfg.ccddpm.sched
     ocfg = cfg.ccddpm.optim
+
+    # Initialize distributed training if enabled
+    use_ddp = ddp_is_enabled(cfg)
+    if use_ddp:
+        ddp_info = ddp_init(cfg)
+        device = ddp_info["device"]
+        rank = ddp_info["rank"]
+        world_size = ddp_info["world_size"]
+        local_rank = ddp_info["local_rank"]
+        logger.info(f"[Rank {rank}/{world_size}] Training on device {device}")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        rank = 0
+        world_size = 1
+        local_rank = 0
+        logger.info(f"Training on single device: {device}")
 
     # Augmentation setup
     augmentation_pipeline = None
@@ -446,8 +501,9 @@ def train(yaml_path: str, split: str = "train") -> None:
             logger.info(f"  Probability: {aug_cfg.probability}")
             logger.info(f"  Transforms: {len(aug_cfg.transforms)}")
 
-            # Initialize statistics tracker if enabled
-            if aug_cfg.statistics.enabled:
+            # Initialize statistics tracker if enabled (only on rank-0 in DDP)
+            # Note: In DDP, each GPU sees different batches, so we only track on rank-0
+            if aug_cfg.statistics.enabled and is_main_process():
                 stats_output_path = Path(aug_cfg.statistics.output_path)
                 # If relative path, resolve relative to output_dir
                 if not stats_output_path.is_absolute():
@@ -455,38 +511,95 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                 transform_names = augmentation_pipeline.get_transform_names()
                 augmentation_stats = AugmentationStatistics(stats_output_path, transform_names)
-                logger.info(f"  Statistics tracking enabled: {stats_output_path}")
+                logger.info(f"  Statistics tracking enabled: {stats_output_path} (rank-0 only)")
         else:
             logger.info("Augmentation is disabled in config")
     elif cfg.ccddpm.augmentation and not AUGMENTATION_AVAILABLE:
         logger.warning("Augmentation requested in config but module not available. Proceeding without augmentation.")
 
     # Data - select dataloader based on config
+    # NOTE: batch_size is interpreted as per-GPU batch size
     dl_cfg = cfg.ccddpm.dataloader
+    train_sampler = None
+    val_sampler = None
+
     if dl_cfg.type.lower() == "npz":
-        logger.info("Using NPZ dataloader from: %s", dl_cfg.npz_path)
+        if is_main_process():
+            logger.info("Using NPZ dataloader from: %s", dl_cfg.npz_path)
         if dl_cfg.npz_path is None:
             raise ValueError("NPZ dataloader selected but npz_path is not specified in config")
+
+        # Build datasets first to create samplers
+        from medsyn.models.ccDDPM.dataloaders.npz import NPZDataset
+        train_dataset = NPZDataset(
+            dl_cfg.npz_path, "train", tcfg.image_size, normalize=True,
+            augmentation_pipeline=augmentation_pipeline
+        )
+        val_dataset = NPZDataset(
+            dl_cfg.npz_path, "val", tcfg.image_size, normalize=True,
+            augmentation_pipeline=None
+        )
+
+        # Create DistributedSamplers if DDP is enabled
+        if use_ddp:
+            train_sampler = DistributedSampler(
+                train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=tcfg.seed
+            )
+            val_sampler = DistributedSampler(
+                val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+            if is_main_process():
+                logger.info(f"Using DistributedSampler: {len(train_dataset)} train samples, "
+                           f"{len(val_dataset)} val samples across {world_size} GPUs")
+
+        # Build loaders with samplers
         train_loader = build_npz_loader(
             dl_cfg.npz_path, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
-            normalize=True, augmentation_pipeline=augmentation_pipeline
+            normalize=True, augmentation_pipeline=augmentation_pipeline, sampler=train_sampler
         )
         val_loader = build_npz_loader(
             dl_cfg.npz_path, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
-            normalize=True, augmentation_pipeline=None  # No augmentation for validation
+            normalize=True, augmentation_pipeline=None, sampler=val_sampler
         )
+
     else:  # default to JSON
-        logger.info("Using JSON dataloader from: %s", cfg.data_index_json)
+        if is_main_process():
+            logger.info("Using JSON dataloader from: %s", cfg.data_index_json)
+
+        # Build datasets first to create samplers
+        from medsyn.models.ccDDPM.dataloaders.json import PathMNISTIndexDataset
+        train_dataset = PathMNISTIndexDataset(
+            cfg.data_index_json, "train", tcfg.image_size, normalize=True,
+            augmentation_pipeline=augmentation_pipeline
+        )
+        val_dataset = PathMNISTIndexDataset(
+            cfg.data_index_json, "val", tcfg.image_size, normalize=True,
+            augmentation_pipeline=None
+        )
+
+        # Create DistributedSamplers if DDP is enabled
+        if use_ddp:
+            train_sampler = DistributedSampler(
+                train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=tcfg.seed
+            )
+            val_sampler = DistributedSampler(
+                val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+            if is_main_process():
+                logger.info(f"Using DistributedSampler: {len(train_dataset)} train samples, "
+                           f"{len(val_dataset)} val samples across {world_size} GPUs")
+
+        # Build loaders with samplers
         train_loader = build_json_loader(
             cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
-            normalize=True, augmentation_pipeline=augmentation_pipeline
+            normalize=True, augmentation_pipeline=augmentation_pipeline, sampler=train_sampler
         )
         val_loader = build_json_loader(
             cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
-            normalize=True, augmentation_pipeline=None  # No augmentation for validation
+            normalize=True, augmentation_pipeline=None, sampler=val_sampler
         )
 
-    # Model
+    # Model (DDP wrapping happens later, after scheduler but before optimizer/EMA)
     mcfg = CCDDPMInit(
         in_channels=tcfg.in_channels,
         class_embed_dim=tcfg.class_embed_dim,
@@ -507,10 +620,29 @@ def train(yaml_path: str, split: str = "train") -> None:
         thresholding=False,
     )
 
-    # Optim
+    # Wrap model in DDP if distributed training is enabled (BEFORE creating optimizer/EMA)
+    # This ensures EMA tracks the actual model, not the DDP wrapper
+    base_model = model  # Keep reference to unwrapped model for EMA
+    if use_ddp:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=cfg.ccddpm.dist.find_unused_parameters,
+            broadcast_buffers=cfg.ccddpm.dist.broadcast_buffers,
+            static_graph=True  # DDPM graph is static, enables optimizations
+        )
+        if is_main_process():
+            logger.info("Model wrapped in DistributedDataParallel")
+
+    # Optim - Note: optimizer works on DDP-wrapped model (if DDP enabled)
     opt = optim.AdamW(model.parameters(), lr=ocfg.lr, betas=ocfg.betas, eps=ocfg.eps, weight_decay=ocfg.wd)
     scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
-    ema = EMA(model, decay=tcfg.ema_decay) if tcfg.ema_use else None
+
+    # CRITICAL: EMA must track the base model, not DDP wrapper
+    # We'll pass base_model to EMA update/copy_to methods
+    ema = EMA(base_model, decay=tcfg.ema_decay) if tcfg.ema_use else None
+
     loss_fn = DDPMNoiseMSE(
         num_classes=tcfg.num_classes,
         use_min_snr=tcfg.use_min_snr,
@@ -518,21 +650,29 @@ def train(yaml_path: str, split: str = "train") -> None:
     )
 
     out_dir = Path(tcfg.output_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "samples").mkdir(parents=True, exist_ok=True)
-    (out_dir / "ckpts").mkdir(parents=True, exist_ok=True)
-    
-    # Initialize CSV logger with per-class metrics
-    extra_fields = []
-    for k in range(tcfg.num_classes):
-        extra_fields.append(f"loss_c{k}")
-    csv_logger = CSVTrainingLogger(str(out_dir / "training_metrics.csv"), extra_fields=extra_fields)
-    
-    # Keep old simple CSV for backward compatibility
-    csv_path = out_dir / "train_log.csv"
-    if not csv_path.exists():
-        with open(csv_path, "w", newline="") as fh:
-            csv.writer(fh).writerow(["epoch","step","loss","lr","time_s"])
+
+    # Only rank-0 creates directories and loggers
+    csv_logger = None
+    if is_main_process():
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "samples").mkdir(parents=True, exist_ok=True)
+        (out_dir / "ckpts").mkdir(parents=True, exist_ok=True)
+
+        # Initialize CSV logger with per-class metrics
+        extra_fields = []
+        for k in range(tcfg.num_classes):
+            extra_fields.append(f"loss_c{k}")
+        csv_logger = CSVTrainingLogger(str(out_dir / "training_metrics.csv"), extra_fields=extra_fields)
+
+        # Keep old simple CSV for backward compatibility
+        csv_path = out_dir / "train_log.csv"
+        if not csv_path.exists():
+            with open(csv_path, "w", newline="") as fh:
+                csv.writer(fh).writerow(["epoch","step","loss","lr","time_s"])
+
+    # Synchronize all processes after directory creation
+    if use_ddp:
+        barrier()
 
     # Track best validation loss for best.pt and early stopping
     best_val_loss = float("inf")
@@ -542,16 +682,20 @@ def train(yaml_path: str, split: str = "train") -> None:
     global_step = 0
     model.train()
     for epoch in range(1, tcfg.epochs + 1):
+        # Set epoch for DistributedSampler to ensure different shuffling per epoch
+        if use_ddp and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+
         t0 = time.time()
         running_loss = 0.0
         train_avg = EpochAverager()
 
         # Collect augmentation statistics for this epoch
         epoch_augmentation_transforms = []
-        
-        # Progress bar for the training epoch (conditional based on use_tqdm)
+
+        # Progress bar for the training epoch (only on rank-0 if using tqdm)
         train_iter = enumerate(train_loader, 1)
-        if tcfg.use_tqdm:
+        if tcfg.use_tqdm and is_main_process():
             pbar = tqdm(train_iter, total=len(train_loader),
                         desc=f"Epoch {epoch}/{tcfg.epochs}",
                         unit="batch", leave=True)
@@ -627,7 +771,8 @@ def train(yaml_path: str, split: str = "train") -> None:
                 scaler.step(opt)
                 scaler.update()
                 if ema:
-                    ema.update(model)
+                    # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
+                    ema.update(base_model)
             else:
                 # Still update scaler state even when skipping
                 scaler.update()
@@ -670,36 +815,42 @@ def train(yaml_path: str, split: str = "train") -> None:
                                 "avg_loss": f"{running_loss/step:.4f}",
                                 "psnr": f"{batch_metrics['psnr']:.2f}dB"})
             
-            if global_step % tcfg.log_every == 0:
+            if global_step % tcfg.log_every == 0 and is_main_process():
+                csv_path = out_dir / "train_log.csv"
                 with open(csv_path, "a", newline="") as fh:
                     csv.writer(fh).writerow([epoch, global_step, float(loss.item()), opt.param_groups[0]["lr"], round(time.time()-t0, 2)])
                 logger.info("ep=%d step=%d loss=%.4f", epoch, global_step, float(loss.item()))
-        
-        if tcfg.use_tqdm:
+
+        if tcfg.use_tqdm and is_main_process():
             pbar.close()
-        
-        # Get per-class losses from loss_fn
+
+        # Get per-class losses from loss_fn (local to this GPU)
         per_class_losses = loss_fn.per_class()
         train_metrics = train_avg.means()
         for c, loss_c in per_class_losses.items():
             train_metrics[f"loss_c{c}"] = loss_c
-        
-        # Log training metrics
+
+        # CRITICAL: Synchronize training metrics across all GPUs
+        train_metrics = sync_metrics_dict(train_metrics, device, use_ddp)
+
+        # Log training metrics (only rank-0, but now with globally averaged values)
         curr_lr = opt.param_groups[0]["lr"]
-        csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_metrics)
-        
-        # Print epoch summary
-        avg_loss = running_loss / len(train_loader)
-        print(f"\n{'='*80}")
-        print(f"Epoch {epoch}/{tcfg.epochs} Summary:")
-        print(f"{'='*80}")
-        print(f"Training:")
-        print(f"  Average Loss: {avg_loss:.4f}")
-        print(f"  PSNR: {train_metrics.get('psnr', 0.0):.2f} dB")
-        print(f"  SSIM: {train_metrics.get('ssim', 0.0):.4f}")
-        print(f"  Noise MSE: {train_metrics.get('noise_mse', 0.0):.4f}")
-        print(f"  Learning Rate: {curr_lr:.6f}")
-        print(f"  Time: {time.time()-t0:.2f}s")
+        if csv_logger is not None:
+            csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_metrics)
+
+        # Print epoch summary (only rank-0)
+        if is_main_process():
+            avg_loss = running_loss / len(train_loader)
+            print(f"\n{'='*80}")
+            print(f"Epoch {epoch}/{tcfg.epochs} Summary:")
+            print(f"{'='*80}")
+            print(f"Training:")
+            print(f"  Average Loss: {avg_loss:.4f}")
+            print(f"  PSNR: {train_metrics.get('psnr', 0.0):.2f} dB")
+            print(f"  SSIM: {train_metrics.get('ssim', 0.0):.4f}")
+            print(f"  Noise MSE: {train_metrics.get('noise_mse', 0.0):.4f}")
+            print(f"  Learning Rate: {curr_lr:.6f}")
+            print(f"  Time: {time.time()-t0:.2f}s")
         
         # ---- Validation ----
         model.eval()
@@ -710,8 +861,8 @@ def train(yaml_path: str, split: str = "train") -> None:
             min_snr_gamma=tcfg.min_snr_gamma
         )
         
-        # Validation progress bar (conditional based on use_tqdm)
-        if tcfg.use_tqdm:
+        # Validation progress bar (only on rank-0 if using tqdm)
+        if tcfg.use_tqdm and is_main_process():
             val_pbar = tqdm(val_loader, desc=f"Validation", unit="batch", leave=False)
         else:
             val_pbar = val_loader
@@ -752,22 +903,29 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
                 val_avg.update(val_batch_metrics, batch_size=bsz)
                 
-                # Update progress bar (only if tqdm enabled)
-                if tcfg.use_tqdm:
+                # Update progress bar (only if tqdm enabled on rank-0)
+                if tcfg.use_tqdm and is_main_process():
                     val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
-        
-        if tcfg.use_tqdm:
+
+        if tcfg.use_tqdm and is_main_process():
             val_pbar.close()
-        
-        # Get per-class validation losses
+
+        # Get per-class validation losses (local to this GPU)
         val_per_class_losses = val_loss_fn.per_class()
         val_metrics = val_avg.means()
         for c, loss_c in val_per_class_losses.items():
             val_metrics[f"loss_c{c}"] = loss_c
+
+        # CRITICAL: Synchronize ALL validation metrics across GPUs (not just overall loss)
+        val_metrics = sync_metrics_dict(val_metrics, device, use_ddp)
+
+        # Extract the globally synchronized validation loss for early stopping
+        val_loss = val_metrics.get("loss", float("inf"))
         
         # ---- CRITICAL: Compute Training Diagnostics ----
         # These metrics detect common training failures
-        # Get a batch for diagnostics
+        # NOTE: In DDP, each rank computes diagnostics on its local validation batch.
+        # This is acceptable since diagnostics are rough indicators. Only rank-0's diagnostics are logged.
         val_batch_for_diag = next(iter(val_loader))
         x0_diag = val_batch_for_diag["pixel_values"].to(device)
         labels_diag = val_batch_for_diag["labels"].to(device)
@@ -791,47 +949,51 @@ def train(yaml_path: str, split: str = "train") -> None:
         )
         diagnostics["full_chain_psnr"] = full_chain_psnr
 
-        # Log validation metrics
-        csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)
+        # Log validation metrics (only rank-0)
+        if csv_logger is not None:
+            csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)
 
-        # Log diagnostics separately
-        csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
+        # Log diagnostics separately (only rank-0)
+        if csv_logger is not None:
+            csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
 
-        print(f"\nValidation:")
-        print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f}")
-        print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
-        print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
-        print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
+        # Print validation summary (only rank-0)
+        if is_main_process():
+            print(f"\nValidation:")
+            print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f} (Global: {val_loss:.4f})")
+            print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
+            print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
+            print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
 
-        print(f"\n🔍 Training Diagnostics (detecting issues):")
-        corr = diagnostics['input_output_correlation']
-        pred_std = diagnostics['prediction_std']
-        recon_psnr = diagnostics['reconstruction_psnr_t500']
+            print(f"\n🔍 Training Diagnostics (detecting issues):")
+            corr = diagnostics['input_output_correlation']
+            pred_std = diagnostics['prediction_std']
+            recon_psnr = diagnostics['reconstruction_psnr_t500']
 
-        # Color-coded warnings
-        print(f"  Input-Output Correlation: {corr:.4f}", end="")
-        if corr > 0.7:
-            print(f" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
-        elif corr > 0.5:
-            print(f" ⚠️  High correlation, model may not be learning properly")
-        else:
-            print(f" ✓ (healthy)")
+            # Color-coded warnings
+            print(f"  Input-Output Correlation: {corr:.4f}", end="")
+            if corr > 0.7:
+                print(f" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
+            elif corr > 0.5:
+                print(f" ⚠️  High correlation, model may not be learning properly")
+            else:
+                print(f" ✓ (healthy)")
 
-        print(f"  Prediction Std: {pred_std:.4f}", end="")
-        if pred_std < 0.5 or pred_std > 1.5:
-            print(f" ⚠️  Unusual (should be ~0.8-1.2)")
-        else:
-            print(f" ✓")
+            print(f"  Prediction Std: {pred_std:.4f}", end="")
+            if pred_std < 0.5 or pred_std > 1.5:
+                print(f" ⚠️  Unusual (should be ~0.8-1.2)")
+            else:
+                print(f" ✓")
 
-        print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
-        if recon_psnr < 15.0:
-            print(f" ⚠️  Low quality (should improve over epochs)")
-        else:
-            print(f" ✓")
+            print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
+            if recon_psnr < 15.0:
+                print(f" ⚠️  Low quality (should improve over epochs)")
+            else:
+                print(f" ✓")
 
-        print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
-        print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
-        print(f"{'='*80}\n")
+            print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
+            print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
+            print(f"{'='*80}\n")
 
         model.train()
 
@@ -847,67 +1009,88 @@ def train(yaml_path: str, split: str = "train") -> None:
                     logger.info(f"Saved augmentation statistics (epoch {epoch})")
 
         # ---- Checkpointing & Early Stopping ----
-        val_loss = val_metrics.get('loss', float('inf'))
-        checkpoint_data = {
-            "model": model.state_dict(),
-            "opt": opt.state_dict(),
-            "epoch": epoch,
-            "val_loss": val_loss,
-            "ema": (ema.shadow if ema else None),
-            "cfg": tcfg.__dict__,
-            # Save diagnostics for post-training analysis
-            "diagnostics": diagnostics,
-            "train_metrics": train_metrics,
-            "val_metrics": val_metrics,
-            # EMA verification
-            "ema_enabled": ema is not None,
-            "ema_num_params": len(ema.shadow) if ema else 0,
-        }
-        
-        # Always save last.pt
-        torch.save(checkpoint_data, out_dir / "ckpts" / "last.pt")
-        
-        # Save best.pt if this is the best validation loss so far
-        is_best = val_loss < best_val_loss
-        if is_best:
-            best_val_loss = val_loss
-            best_epoch = epoch
-            epochs_without_improvement = 0
-            torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
-            logger.info(f"✓ New best model at epoch {epoch} with val_loss={val_loss:.4f}")
+        # Note: val_loss is already synchronized across GPUs above
+
+        # Determine if this is the best model (on rank-0, then broadcast)
+        if is_main_process():
+            is_best = val_loss < best_val_loss
+            if is_best:
+                best_val_loss = val_loss
+                best_epoch = epoch
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            should_stop = epochs_without_improvement >= tcfg.patience
         else:
-            epochs_without_improvement += 1
-            logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
-        
-        # Early stopping check
-        if epochs_without_improvement >= tcfg.patience:
-            logger.info(f"⚠ Early stopping triggered! No improvement for {tcfg.patience} epochs.")
-            logger.info(f"Best model was at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
-            print(f"\n{'='*80}")
-            print(f"⚠ Early Stopping at Epoch {epoch}")
-            print(f"{'='*80}")
-            print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
-            print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
-            print(f"{'='*80}\n")
+            is_best = False
+            should_stop = False
+
+        # Broadcast early stopping decision to all processes
+        if use_ddp:
+            should_stop = broadcast_bool(should_stop)
+
+        # Save checkpoints (only rank-0)
+        if is_main_process():
+            checkpoint_data = {
+                "model": get_state_dict_for_save(model),  # Handles DDP wrapper
+                "opt": opt.state_dict(),
+                "epoch": epoch,
+                "val_loss": val_loss,
+                "ema": (ema.shadow if ema else None),
+                "cfg": tcfg.__dict__,
+                # Save diagnostics for post-training analysis
+                "diagnostics": diagnostics,
+                "train_metrics": train_metrics,
+                "val_metrics": val_metrics,
+                # EMA verification
+                "ema_enabled": ema is not None,
+                "ema_num_params": len(ema.shadow) if ema else 0,
+            }
+
+            # Always save last.pt
+            torch.save(checkpoint_data, out_dir / "ckpts" / "last.pt")
+
+            # Save best.pt if this is the best validation loss so far
+            if is_best:
+                torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
+                logger.info(f"✓ New best model at epoch {epoch} with val_loss={val_loss:.4f}")
+            else:
+                logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
+
+            # Save periodic checkpoint every X epochs
+            if (epoch % tcfg.ckpt_every_epochs) == 0:
+                ck = out_dir / "ckpts" / f"epoch_{epoch:04d}.pt"
+                torch.save(checkpoint_data, ck)
+                logger.info(f"Saved periodic checkpoint: {ck.name}")
+
+        # Early stopping check (synchronized across all GPUs)
+        if should_stop:
+            if is_main_process():
+                logger.info(f"⚠ Early stopping triggered! No improvement for {tcfg.patience} epochs.")
+                logger.info(f"Best model was at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                print(f"\n{'='*80}")
+                print(f"⚠ Early Stopping at Epoch {epoch}")
+                print(f"{'='*80}")
+                print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
+                print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                print(f"{'='*80}\n")
             break
         
-        # Save periodic checkpoint every X epochs
-        if (epoch % tcfg.ckpt_every_epochs) == 0:
-            ck = out_dir / "ckpts" / f"epoch_{epoch:04d}.pt"
-            torch.save(checkpoint_data, ck)
-            logger.info(f"Saved periodic checkpoint: {ck.name}")
-        
-        # ---- Visualizations ----
-        # Use EMA weights for better quality if available
-        original_state = None
-        if ema:
-            original_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            ema.copy_to(model)
-        
-        model.eval()
-        
-        # Every epoch: Save reconstruction comparisons (x0 predictions vs ground truth)
-        with torch.no_grad():
+        # ---- Visualizations (only rank-0) ----
+        # Skip visualizations on non-main processes to save computation
+        if is_main_process():
+            # Use EMA weights for better quality if available
+            original_state = None
+            if ema:
+                # Save original state and copy EMA to base_model (unwrapped)
+                original_state = {k: v.cpu().clone() for k, v in base_model.state_dict().items()}
+                ema.copy_to(base_model)
+
+            model.eval()
+
+            # Every epoch: Save reconstruction comparisons (x0 predictions vs ground truth)
+            with torch.no_grad():
             # Get a batch from validation set
             val_iter = iter(val_loader)
             vis_batch = next(val_iter)
@@ -1017,11 +1200,12 @@ def train(yaml_path: str, split: str = "train") -> None:
                            f"(should be >0 and growing over epochs)")
 
                 logger.info(f"Saved detailed visualizations for epoch {epoch}")
-        
-        # Restore training weights if we used EMA for visualization
-        if ema and original_state is not None:
-            model.load_state_dict(original_state)
-        
+
+            # Restore training weights if we used EMA for visualization (still within rank-0 block)
+            if ema and original_state is not None:
+                base_model.load_state_dict(original_state)
+
+        # All processes set model back to training mode
         model.train()
 
     # Save final augmentation statistics
@@ -1030,19 +1214,24 @@ def train(yaml_path: str, split: str = "train") -> None:
         augmentation_stats.print_summary()
         logger.info("Final augmentation statistics saved")
 
-    # Training complete summary
-    print(f"\n{'='*80}")
-    print("🎉 Training Completed!")
-    print(f"{'='*80}")
-    print(f"Best Validation Loss: {best_val_loss:.4f} (Epoch {best_epoch})")
-    print(f"Completed Epochs: {epoch}/{tcfg.epochs}")
-    if epochs_without_improvement >= tcfg.patience:
-        print(f"Stopped early: No improvement for {tcfg.patience} epochs")
-    print(f"\nCheckpoints saved in: {out_dir / 'ckpts'}")
-    print(f"  - best.pt: Best model (epoch {best_epoch}, val_loss={best_val_loss:.4f})")
-    print(f"  - last.pt: Final epoch model (epoch {epoch})")
-    print(f"  - epoch_XXXX.pt: Periodic checkpoints every {tcfg.ckpt_every_epochs} epochs")
-    print(f"\nVisualizations saved in: {out_dir / 'samples'}")
-    print(f"Metrics logged in: {out_dir / 'training_metrics.csv'}")
-    print(f"{'='*80}\n")
-    logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+    # Training complete summary (only rank-0)
+    if is_main_process():
+        print(f"\n{'='*80}")
+        print("🎉 Training Completed!")
+        print(f"{'='*80}")
+        print(f"Best Validation Loss: {best_val_loss:.4f} (Epoch {best_epoch})")
+        print(f"Completed Epochs: {epoch}/{tcfg.epochs}")
+        if epochs_without_improvement >= tcfg.patience:
+            print(f"Stopped early: No improvement for {tcfg.patience} epochs")
+        print(f"\nCheckpoints saved in: {out_dir / 'ckpts'}")
+        print(f"  - best.pt: Best model (epoch {best_epoch}, val_loss={best_val_loss:.4f})")
+        print(f"  - last.pt: Final epoch model (epoch {epoch})")
+        print(f"  - epoch_XXXX.pt: Periodic checkpoints every {tcfg.ckpt_every_epochs} epochs")
+        print(f"\nVisualizations saved in: {out_dir / 'samples'}")
+        print(f"Metrics logged in: {out_dir / 'training_metrics.csv'}")
+        print(f"{'='*80}\n")
+        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+
+    # Clean up distributed training resources
+    if use_ddp:
+        cleanup()
