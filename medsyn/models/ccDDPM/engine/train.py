@@ -4,6 +4,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Dict
+import os
 import csv
 import time
 import math
@@ -473,21 +474,42 @@ def train(yaml_path: str, split: str = "train") -> None:
     scfg = cfg.ccddpm.sched
     ocfg = cfg.ccddpm.optim
 
-    # Initialize distributed training if enabled
+    # ========================================================================
+    # PROTECTION: Detect misconfiguration
+    # ========================================================================
+    world_size_env = int(os.getenv("WORLD_SIZE", "1"))
+    if world_size_env > 1 and not cfg.ccddpm.dist.enabled:
+        raise RuntimeError(
+            f"Misconfiguration detected: Script launched with torchrun (WORLD_SIZE={world_size_env}) "
+            f"but dist.enabled=false in config. Either:\n"
+            f"  1. Set 'ccddpm.dist.enabled: true' in your config, OR\n"
+            f"  2. Launch with single process (no torchrun)"
+        )
+
+    # ========================================================================
+    # BIFURCATION: Decide DDP vs Legacy path (once, early)
+    # ========================================================================
     use_ddp = ddp_is_enabled(cfg)
+
     if use_ddp:
+        # ====================================================================
+        # DDP PATH: Initialize distributed training
+        # ====================================================================
         ddp_info = ddp_init(cfg)
         device = ddp_info["device"]
         rank = ddp_info["rank"]
         world_size = ddp_info["world_size"]
         local_rank = ddp_info["local_rank"]
-        logger.info(f"[Rank {rank}/{world_size}] Training on device {device}")
+        logger.info(f"[Rank {rank}/{world_size}] DDP training on device {device}")
     else:
+        # ====================================================================
+        # LEGACY PATH: Single-GPU training
+        # ====================================================================
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         rank = 0
         world_size = 1
         local_rank = 0
-        logger.info(f"Training on single device: {device}")
+        logger.info(f"Single-GPU training on device: {device}")
 
     # Augmentation setup
     augmentation_pipeline = None
@@ -517,7 +539,9 @@ def train(yaml_path: str, split: str = "train") -> None:
     elif cfg.ccddpm.augmentation and not AUGMENTATION_AVAILABLE:
         logger.warning("Augmentation requested in config but module not available. Proceeding without augmentation.")
 
-    # Data - select dataloader based on config
+    # ========================================================================
+    # DATALOADERS: Create datasets and loaders (with DDP samplers if enabled)
+    # ========================================================================
     # NOTE: batch_size is interpreted as per-GPU batch size
     dl_cfg = cfg.ccddpm.dataloader
     train_sampler = None
@@ -540,8 +564,8 @@ def train(yaml_path: str, split: str = "train") -> None:
             augmentation_pipeline=None
         )
 
-        # Create DistributedSamplers if DDP is enabled
         if use_ddp:
+            # DDP: Create DistributedSamplers (shuffle via sampler, not DataLoader)
             train_sampler = DistributedSampler(
                 train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=tcfg.seed
             )
@@ -549,10 +573,11 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_dataset, num_replicas=world_size, rank=rank, shuffle=False
             )
             if is_main_process():
-                logger.info(f"Using DistributedSampler: {len(train_dataset)} train samples, "
+                logger.info(f"DDP: DistributedSampler created for {len(train_dataset)} train, "
                            f"{len(val_dataset)} val samples across {world_size} GPUs")
+        # else: Legacy path uses shuffle=True in DataLoader, no sampler
 
-        # Build loaders with samplers
+        # Build loaders (DDP uses sampler with shuffle=False, Legacy uses shuffle=True)
         train_loader = build_npz_loader(
             dl_cfg.npz_path, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
             normalize=True, augmentation_pipeline=augmentation_pipeline, sampler=train_sampler
@@ -577,8 +602,8 @@ def train(yaml_path: str, split: str = "train") -> None:
             augmentation_pipeline=None
         )
 
-        # Create DistributedSamplers if DDP is enabled
         if use_ddp:
+            # DDP: Create DistributedSamplers (shuffle via sampler, not DataLoader)
             train_sampler = DistributedSampler(
                 train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=tcfg.seed
             )
@@ -586,10 +611,11 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_dataset, num_replicas=world_size, rank=rank, shuffle=False
             )
             if is_main_process():
-                logger.info(f"Using DistributedSampler: {len(train_dataset)} train samples, "
+                logger.info(f"DDP: DistributedSampler created for {len(train_dataset)} train, "
                            f"{len(val_dataset)} val samples across {world_size} GPUs")
+        # else: Legacy path uses shuffle=True in DataLoader, no sampler
 
-        # Build loaders with samplers
+        # Build loaders (DDP uses sampler with shuffle=False, Legacy uses shuffle=True)
         train_loader = build_json_loader(
             cfg.data_index_json, "train", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
             normalize=True, augmentation_pipeline=augmentation_pipeline, sampler=train_sampler
@@ -599,7 +625,10 @@ def train(yaml_path: str, split: str = "train") -> None:
             normalize=True, augmentation_pipeline=None, sampler=val_sampler
         )
 
-    # Model (DDP wrapping happens later, after scheduler but before optimizer/EMA)
+    # ========================================================================
+    # MODEL, SCHEDULER, OPTIMIZER, EMA
+    # ========================================================================
+    # Build model
     mcfg = CCDDPMInit(
         in_channels=tcfg.in_channels,
         class_embed_dim=tcfg.class_embed_dim,
@@ -607,23 +636,23 @@ def train(yaml_path: str, split: str = "train") -> None:
     )
     model = CCDDPM(mcfg).to(device)
 
-    # Scheduler
+    # Build scheduler
     noise_scheduler = DDPMScheduler(
         num_train_timesteps=scfg.num_train_timesteps,
         beta_start=scfg.beta_start,
         beta_end=scfg.beta_end,
         beta_schedule=scfg.beta_schedule,
         prediction_type=scfg.prediction_type,
-        # keep samples bounded to [-1,1] to avoid value explosion in sampling
         clip_sample=True,
         clip_sample_range=1.0,
         thresholding=False,
     )
 
-    # Wrap model in DDP if distributed training is enabled (BEFORE creating optimizer/EMA)
-    # This ensures EMA tracks the actual model, not the DDP wrapper
-    base_model = model  # Keep reference to unwrapped model for EMA
+    # CRITICAL: Keep reference to base_model for EMA
+    base_model = model
+
     if use_ddp:
+        # DDP: Wrap model in DistributedDataParallel
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[local_rank],
@@ -633,14 +662,14 @@ def train(yaml_path: str, split: str = "train") -> None:
             static_graph=True  # DDPM graph is static, enables optimizations
         )
         if is_main_process():
-            logger.info("Model wrapped in DistributedDataParallel")
+            logger.info("DDP: Model wrapped in DistributedDataParallel")
+    # else: Legacy path uses model directly, no wrapper
 
-    # Optim - Note: optimizer works on DDP-wrapped model (if DDP enabled)
+    # Build optimizer (works on DDP-wrapped model if use_ddp=True, unwrapped otherwise)
     opt = optim.AdamW(model.parameters(), lr=ocfg.lr, betas=ocfg.betas, eps=ocfg.eps, weight_decay=ocfg.wd)
     scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
 
-    # CRITICAL: EMA must track the base model, not DDP wrapper
-    # We'll pass base_model to EMA update/copy_to methods
+    # Build EMA (CRITICAL: always tracks base_model, not DDP wrapper)
     ema = EMA(base_model, decay=tcfg.ema_decay) if tcfg.ema_use else None
 
     loss_fn = DDPMNoiseMSE(
@@ -681,8 +710,13 @@ def train(yaml_path: str, split: str = "train") -> None:
     
     global_step = 0
     model.train()
+
+    # ========================================================================
+    # TRAINING LOOP
+    # ========================================================================
     for epoch in range(1, tcfg.epochs + 1):
-        # Set epoch for DistributedSampler to ensure different shuffling per epoch
+        # DDP: Set epoch for DistributedSampler to ensure different shuffling per epoch
+        # Legacy: No sampler, shuffling handled by DataLoader
         if use_ddp and train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
@@ -1091,115 +1125,115 @@ def train(yaml_path: str, split: str = "train") -> None:
 
             # Every epoch: Save reconstruction comparisons (x0 predictions vs ground truth)
             with torch.no_grad():
-            # Get a batch from validation set
-            val_iter = iter(val_loader)
-            vis_batch = next(val_iter)
-            # Take up to 5 images, but handle smaller batches
-            num_vis = min(5, vis_batch["pixel_values"].size(0))
-            x0_vis = vis_batch["pixel_values"][:num_vis].to(device)
-            y_vis = vis_batch["labels"][:num_vis].to(device)
-            
-            # Sample random timesteps for reconstruction visualization
-            torch.manual_seed(epoch)  # Reproducible per epoch
-            t_vis = torch.randint(100, scfg.num_train_timesteps // 2, (num_vis,), device=device, dtype=torch.long)
-            noise_vis = torch.randn_like(x0_vis)
-            x_t_vis = noise_scheduler.add_noise(x0_vis, noise_vis, t_vis)
-            
-            # Predict noise and reconstruct x0
-            noise_pred_vis = model(x_t_vis, t_vis, y_vis)
-            sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t_vis].sqrt().view(-1, 1, 1, 1)
-            sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t_vis]).sqrt().view(-1, 1, 1, 1)
-            x0_pred_vis = (x_t_vis - sqrt_one_minus_alpha_prod * noise_pred_vis) / sqrt_alpha_prod
-            x0_pred_vis = torch.clamp(x0_pred_vis, -1.0, 1.0)
-            
-            # Convert to [0, 1] for saving
-            x0_vis_01 = (x0_vis + 1.0) / 2.0
-            x0_pred_vis_01 = (x0_pred_vis + 1.0) / 2.0
-            
-            # Interleave: original, noisy, reconstruction
-            comparison = torch.stack([x0_vis_01, (x_t_vis + 1.0) / 2.0, x0_pred_vis_01], dim=1).flatten(0, 1)
-            save_image(comparison, out_dir / "samples" / f"epoch_{epoch:04d}_recon.png",
-                      nrow=3, normalize=False, value_range=(0, 1))
-        
-        # Every 10 epochs: Save DDPM-specific visualizations
-        if epoch % 10 == 0 or epoch == 1:
-            with torch.no_grad():
-                # Get a single image for detailed visualization
-                single_img = x0_vis[0:1]
-                single_label = y_vis[0:1]
-                
-                # 1. Noising process visualization
-                noising_steps = visualize_noising_process(
-                    single_img, noise_scheduler, num_steps=10, device=device
-                )
-                noising_steps_01 = (noising_steps + 1.0) / 2.0
-                save_image(noising_steps_01, out_dir / "samples" / f"epoch_{epoch:04d}_noising.png",
-                          nrow=11, normalize=False, value_range=(0, 1))
-                
-                # 2. Denoising process visualization (full sampling)
-                denoising_steps = visualize_denoising_process(
-                    model, noise_scheduler,
-                    shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
-                    class_label=single_label,
-                    num_steps=10,
-                    device=device,
-                    guidance_scale=1.0
-                )
-                # Now returns initial + 10 intermediate + final = 12 images
-                denoising_steps_01 = (denoising_steps + 1.0) / 2.0
-                save_image(denoising_steps_01, out_dir / "samples" / f"epoch_{epoch:04d}_denoising.png",
-                          nrow=12, normalize=False, value_range=(0, 1))
-                logger.info(f"Denoising visualization: generated {denoising_steps.shape[0]} steps")
-                
-                # 3. Multi-timestep reconstruction visualization
-                timesteps_to_vis = [50, 150, 300, 500, 700, 900]
-                multistep_recons = visualize_multistep_reconstruction(
-                    model, single_img, noise_scheduler, single_label,
-                    timesteps=timesteps_to_vis, device=device
-                )
-                multistep_recons_01 = (multistep_recons + 1.0) / 2.0
-                save_image(multistep_recons_01, out_dir / "samples" / f"epoch_{epoch:04d}_multistep.png",
-                          nrow=len(timesteps_to_vis) + 1, normalize=False, value_range=(0, 1))
-                
-                # 4. Class-conditional samples (one per class)
-                class_samples = []
-                logger.info(f"Generating class-conditional samples for {tcfg.num_classes} classes...")
-                for c in range(tcfg.num_classes):
-                    class_label_sample = torch.tensor([c], device=device)
-                    sample = visualize_denoising_process(
+                # Get a batch from validation set
+                val_iter = iter(val_loader)
+                vis_batch = next(val_iter)
+                # Take up to 5 images, but handle smaller batches
+                num_vis = min(5, vis_batch["pixel_values"].size(0))
+                x0_vis = vis_batch["pixel_values"][:num_vis].to(device)
+                y_vis = vis_batch["labels"][:num_vis].to(device)
+
+                # Sample random timesteps for reconstruction visualization
+                torch.manual_seed(epoch)  # Reproducible per epoch
+                t_vis = torch.randint(100, scfg.num_train_timesteps // 2, (num_vis,), device=device, dtype=torch.long)
+                noise_vis = torch.randn_like(x0_vis)
+                x_t_vis = noise_scheduler.add_noise(x0_vis, noise_vis, t_vis)
+
+                # Predict noise and reconstruct x0
+                noise_pred_vis = model(x_t_vis, t_vis, y_vis)
+                sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t_vis].sqrt().view(-1, 1, 1, 1)
+                sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t_vis]).sqrt().view(-1, 1, 1, 1)
+                x0_pred_vis = (x_t_vis - sqrt_one_minus_alpha_prod * noise_pred_vis) / sqrt_alpha_prod
+                x0_pred_vis = torch.clamp(x0_pred_vis, -1.0, 1.0)
+
+                # Convert to [0, 1] for saving
+                x0_vis_01 = (x0_vis + 1.0) / 2.0
+                x0_pred_vis_01 = (x0_pred_vis + 1.0) / 2.0
+
+                # Interleave: original, noisy, reconstruction
+                comparison = torch.stack([x0_vis_01, (x_t_vis + 1.0) / 2.0, x0_pred_vis_01], dim=1).flatten(0, 1)
+                save_image(comparison, out_dir / "samples" / f"epoch_{epoch:04d}_recon.png",
+                          nrow=3, normalize=False, value_range=(0, 1))
+
+            # Every 10 epochs: Save DDPM-specific visualizations
+            if epoch % 10 == 0 or epoch == 1:
+                with torch.no_grad():
+                    # Get a single image for detailed visualization
+                    single_img = x0_vis[0:1]
+                    single_label = y_vis[0:1]
+
+                    # 1. Noising process visualization
+                    noising_steps = visualize_noising_process(
+                        single_img, noise_scheduler, num_steps=10, device=device
+                    )
+                    noising_steps_01 = (noising_steps + 1.0) / 2.0
+                    save_image(noising_steps_01, out_dir / "samples" / f"epoch_{epoch:04d}_noising.png",
+                              nrow=11, normalize=False, value_range=(0, 1))
+
+                    # 2. Denoising process visualization (full sampling)
+                    denoising_steps = visualize_denoising_process(
                         model, noise_scheduler,
                         shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
-                        class_label=class_label_sample,
-                        num_steps=1,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
+                        class_label=single_label,
+                        num_steps=10,
                         device=device,
                         guidance_scale=1.0
                     )
-                    # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
-                    # Take only the final denoised image
-                    final_image = sample[-1:]
-                    class_samples.append(final_image)
-                    logger.info(f"  Class {c}: sample shape={sample.shape}, final shape={final_image.shape}, " +
-                               f"value range=[{final_image.min():.3f}, {final_image.max():.3f}]")
+                    # Now returns initial + 10 intermediate + final = 12 images
+                    denoising_steps_01 = (denoising_steps + 1.0) / 2.0
+                    save_image(denoising_steps_01, out_dir / "samples" / f"epoch_{epoch:04d}_denoising.png",
+                              nrow=12, normalize=False, value_range=(0, 1))
+                    logger.info(f"Denoising visualization: generated {denoising_steps.shape[0]} steps")
 
-                class_samples_tensor = torch.cat(class_samples, dim=0)
-                class_samples_01 = (class_samples_tensor + 1.0) / 2.0
-                save_image(class_samples_01, out_dir / "samples" / f"epoch_{epoch:04d}_classes.png",
-                          nrow=tcfg.num_classes, normalize=False, value_range=(0, 1))
-                logger.info(f"Saved class-conditional samples: {class_samples_tensor.shape}")
+                    # 3. Multi-timestep reconstruction visualization
+                    timesteps_to_vis = [50, 150, 300, 500, 700, 900]
+                    multistep_recons = visualize_multistep_reconstruction(
+                        model, single_img, noise_scheduler, single_label,
+                        timesteps=timesteps_to_vis, device=device
+                    )
+                    multistep_recons_01 = (multistep_recons + 1.0) / 2.0
+                    save_image(multistep_recons_01, out_dir / "samples" / f"epoch_{epoch:04d}_multistep.png",
+                              nrow=len(timesteps_to_vis) + 1, normalize=False, value_range=(0, 1))
 
-                # 5. Conditioning sanity check - verify class labels affect predictions
-                cond_stats = conditioning_sanity_check(
-                    model, noise_scheduler,
-                    num_classes=tcfg.num_classes,
-                    image_shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
-                    device=device,
-                    num_samples=5
-                )
-                logger.info(f"Conditioning check: gap_mean={cond_stats['conditioning_gap_mean']:.4f}, " +
-                           f"gap_std={cond_stats['conditioning_gap_std']:.4f} " +
-                           f"(should be >0 and growing over epochs)")
+                    # 4. Class-conditional samples (one per class)
+                    class_samples = []
+                    logger.info(f"Generating class-conditional samples for {tcfg.num_classes} classes...")
+                    for c in range(tcfg.num_classes):
+                        class_label_sample = torch.tensor([c], device=device)
+                        sample = visualize_denoising_process(
+                            model, noise_scheduler,
+                            shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
+                            class_label=class_label_sample,
+                            num_steps=1,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
+                            device=device,
+                            guidance_scale=1.0
+                        )
+                        # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
+                        # Take only the final denoised image
+                        final_image = sample[-1:]
+                        class_samples.append(final_image)
+                        logger.info(f"  Class {c}: sample shape={sample.shape}, final shape={final_image.shape}, " +
+                                   f"value range=[{final_image.min():.3f}, {final_image.max():.3f}]")
 
-                logger.info(f"Saved detailed visualizations for epoch {epoch}")
+                    class_samples_tensor = torch.cat(class_samples, dim=0)
+                    class_samples_01 = (class_samples_tensor + 1.0) / 2.0
+                    save_image(class_samples_01, out_dir / "samples" / f"epoch_{epoch:04d}_classes.png",
+                              nrow=tcfg.num_classes, normalize=False, value_range=(0, 1))
+                    logger.info(f"Saved class-conditional samples: {class_samples_tensor.shape}")
+
+                    # 5. Conditioning sanity check - verify class labels affect predictions
+                    cond_stats = conditioning_sanity_check(
+                        model, noise_scheduler,
+                        num_classes=tcfg.num_classes,
+                        image_shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
+                        device=device,
+                        num_samples=5
+                    )
+                    logger.info(f"Conditioning check: gap_mean={cond_stats['conditioning_gap_mean']:.4f}, " +
+                               f"gap_std={cond_stats['conditioning_gap_std']:.4f} " +
+                               f"(should be >0 and growing over epochs)")
+
+                    logger.info(f"Saved detailed visualizations for epoch {epoch}")
 
             # Restore training weights if we used EMA for visualization (still within rank-0 block)
             if ema and original_state is not None:
@@ -1208,13 +1242,16 @@ def train(yaml_path: str, split: str = "train") -> None:
         # All processes set model back to training mode
         model.train()
 
-    # Save final augmentation statistics
+    # ========================================================================
+    # TRAINING COMPLETE
+    # ========================================================================
+    # Save final augmentation statistics (rank-0 only)
     if augmentation_stats is not None:
         augmentation_stats.save_csv(final=True)
         augmentation_stats.print_summary()
         logger.info("Final augmentation statistics saved")
 
-    # Training complete summary (only rank-0)
+    # Print summary (rank-0 only)
     if is_main_process():
         print(f"\n{'='*80}")
         print("🎉 Training Completed!")
@@ -1232,6 +1269,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         print(f"{'='*80}\n")
         logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
 
-    # Clean up distributed training resources
+    # ========================================================================
+    # CLEANUP
+    # ========================================================================
     if use_ddp:
+        # DDP: Clean up process group
         cleanup()
+        logger.info("DDP cleanup completed")
+    # Legacy: No cleanup needed

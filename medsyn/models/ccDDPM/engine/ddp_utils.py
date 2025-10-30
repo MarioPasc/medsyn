@@ -158,18 +158,22 @@ def broadcast_bool(flag: bool) -> bool:
     This is useful for synchronizing early stopping decisions or other
     control flow that should be consistent across all processes.
 
+    In legacy (non-DDP) mode, simply returns the input flag unchanged.
+
     Args:
         flag: Boolean value on rank 0 (ignored on other ranks)
 
     Returns:
         The broadcasted boolean value
     """
+    if not (dist.is_available() and dist.is_initialized()):
+        # Legacy: No DDP, just return the flag
+        return flag
+
+    # DDP: Broadcast from rank 0 to all processes
     device = torch.device("cuda", torch.cuda.current_device())
     t = torch.tensor([1 if flag else 0], device=device, dtype=torch.int)
-
-    if dist.is_available() and dist.is_initialized():
-        dist.broadcast(t, src=0)
-
+    dist.broadcast(t, src=0)
     return bool(t.item())
 
 
