@@ -26,7 +26,7 @@ from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
 from medsyn.models.ccDDPM.engine.ddp_utils import (
-    ddp_is_enabled, ddp_init, is_main_process, get_rank, get_world_size,
+    ddp_is_enabled, ddp_init, is_main_process,
     barrier, cleanup, all_reduce_mean, broadcast_bool, get_state_dict_for_save
 )
 import numpy as np
@@ -757,7 +757,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 class_labels[drop] = -1  # sentinel for uncond
             # forward
             # prefer bf16 on Ampere+ (more stable than fp16); falls back if unavailable
-            autocast_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else None
+            autocast_dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
             with autocast(device_type='cuda', enabled=tcfg.mixed_precision, dtype=autocast_dtype):
                 pred = model(x_t, t, class_labels)
                 loss = loss_fn(
@@ -875,10 +875,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         # Print epoch summary (only rank-0)
         if is_main_process():
             avg_loss = running_loss / len(train_loader)
-            print(f"\n{'='*80}")
+            print("\n" + "="*80)
             print(f"Epoch {epoch}/{tcfg.epochs} Summary:")
-            print(f"{'='*80}")
-            print(f"Training:")
+            print("="*80)
+            print("Training:")
             print(f"  Average Loss: {avg_loss:.4f}")
             print(f"  PSNR: {train_metrics.get('psnr', 0.0):.2f} dB")
             print(f"  SSIM: {train_metrics.get('ssim', 0.0):.4f}")
@@ -897,7 +897,7 @@ def train(yaml_path: str, split: str = "train") -> None:
         
         # Validation progress bar (only on rank-0 if using tqdm)
         if tcfg.use_tqdm and is_main_process():
-            val_pbar = tqdm(val_loader, desc=f"Validation", unit="batch", leave=False)
+            val_pbar = tqdm(val_loader, desc="Validation", unit="batch", leave=False)
         else:
             val_pbar = val_loader
         
@@ -993,13 +993,13 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         # Print validation summary (only rank-0)
         if is_main_process():
-            print(f"\nValidation:")
+            print("\nValidation:")
             print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f} (Global: {val_loss:.4f})")
             print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
             print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
             print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
 
-            print(f"\n🔍 Training Diagnostics (detecting issues):")
+            print("\n🔍 Training Diagnostics (detecting issues):")
             corr = diagnostics['input_output_correlation']
             pred_std = diagnostics['prediction_std']
             recon_psnr = diagnostics['reconstruction_psnr_t500']
@@ -1007,27 +1007,27 @@ def train(yaml_path: str, split: str = "train") -> None:
             # Color-coded warnings
             print(f"  Input-Output Correlation: {corr:.4f}", end="")
             if corr > 0.7:
-                print(f" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
+                print(" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
             elif corr > 0.5:
-                print(f" ⚠️  High correlation, model may not be learning properly")
+                print(" ⚠️  High correlation, model may not be learning properly")
             else:
-                print(f" ✓ (healthy)")
+                print(" ✓ (healthy)")
 
             print(f"  Prediction Std: {pred_std:.4f}", end="")
             if pred_std < 0.5 or pred_std > 1.5:
-                print(f" ⚠️  Unusual (should be ~0.8-1.2)")
+                print(" ⚠️  Unusual (should be ~0.8-1.2)")
             else:
-                print(f" ✓")
+                print(" ✓")
 
             print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
             if recon_psnr < 15.0:
-                print(f" ⚠️  Low quality (should improve over epochs)")
+                print(" ⚠️  Low quality (should improve over epochs)")
             else:
-                print(f" ✓")
+                print(" ✓")
 
             print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
             print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
-            print(f"{'='*80}\n")
+            print("="*80 + "\n")
 
         model.train()
 
@@ -1212,14 +1212,14 @@ def train(yaml_path: str, split: str = "train") -> None:
                         # Take only the final denoised image
                         final_image = sample[-1:]
                         class_samples.append(final_image)
-                        logger.info(f"  Class {c}: sample shape={sample.shape}, final shape={final_image.shape}, " +
-                                   f"value range=[{final_image.min():.3f}, {final_image.max():.3f}]")
+                        logger.info("  Class {}: sample shape={}, final shape={}, value range=[{:.3f}, {:.3f}]".format(
+                            c, sample.shape, final_image.shape, final_image.min(), final_image.max()))
 
                     class_samples_tensor = torch.cat(class_samples, dim=0)
                     class_samples_01 = (class_samples_tensor + 1.0) / 2.0
                     save_image(class_samples_01, out_dir / "samples" / f"epoch_{epoch:04d}_classes.png",
                               nrow=tcfg.num_classes, normalize=False, value_range=(0, 1))
-                    logger.info(f"Saved class-conditional samples: {class_samples_tensor.shape}")
+                    logger.info("Saved class-conditional samples: {}".format(class_samples_tensor.shape))
 
                     # 5. Conditioning sanity check - verify class labels affect predictions
                     cond_stats = conditioning_sanity_check(
@@ -1229,11 +1229,10 @@ def train(yaml_path: str, split: str = "train") -> None:
                         device=device,
                         num_samples=5
                     )
-                    logger.info(f"Conditioning check: gap_mean={cond_stats['conditioning_gap_mean']:.4f}, " +
-                               f"gap_std={cond_stats['conditioning_gap_std']:.4f} " +
-                               f"(should be >0 and growing over epochs)")
+                    logger.info("Conditioning check: gap_mean={:.4f}, gap_std={:.4f} (should be >0 and growing over epochs)".format(
+                        cond_stats['conditioning_gap_mean'], cond_stats['conditioning_gap_std']))
 
-                    logger.info(f"Saved detailed visualizations for epoch {epoch}")
+                    logger.info("Saved detailed visualizations for epoch {}".format(epoch))
 
             # Restore training weights if we used EMA for visualization (still within rank-0 block)
             if ema and original_state is not None:
@@ -1255,18 +1254,18 @@ def train(yaml_path: str, split: str = "train") -> None:
     if is_main_process():
         print(f"\n{'='*80}")
         print("🎉 Training Completed!")
-        print(f"{'='*80}")
-        print(f"Best Validation Loss: {best_val_loss:.4f} (Epoch {best_epoch})")
-        print(f"Completed Epochs: {epoch}/{tcfg.epochs}")
+        print("="*80)
+        print("Best Validation Loss: {:.4f} (Epoch {})".format(best_val_loss, best_epoch))
+        print("Completed Epochs: {}/{}".format(epoch, tcfg.epochs))
         if epochs_without_improvement >= tcfg.patience:
-            print(f"Stopped early: No improvement for {tcfg.patience} epochs")
-        print(f"\nCheckpoints saved in: {out_dir / 'ckpts'}")
-        print(f"  - best.pt: Best model (epoch {best_epoch}, val_loss={best_val_loss:.4f})")
-        print(f"  - last.pt: Final epoch model (epoch {epoch})")
-        print(f"  - epoch_XXXX.pt: Periodic checkpoints every {tcfg.ckpt_every_epochs} epochs")
-        print(f"\nVisualizations saved in: {out_dir / 'samples'}")
-        print(f"Metrics logged in: {out_dir / 'training_metrics.csv'}")
-        print(f"{'='*80}\n")
+            print("Stopped early: No improvement for {} epochs".format(tcfg.patience))
+        print("\nCheckpoints saved in: {}".format(out_dir / 'ckpts'))
+        print("  - best.pt: Best model (epoch {}, val_loss={:.4f})".format(best_epoch, best_val_loss))
+        print("  - last.pt: Final epoch model (epoch {})".format(epoch))
+        print("  - epoch_XXXX.pt: Periodic checkpoints every {} epochs".format(tcfg.ckpt_every_epochs))
+        print("\nVisualizations saved in: {}".format(out_dir / 'samples'))
+        print("Metrics logged in: {}".format(out_dir / 'training_metrics.csv'))
+        print("="*80 + "\n")
         logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
 
     # ========================================================================
