@@ -64,7 +64,7 @@ ccddpm:
       # Noise augmentation
       - name: GaussNoise
         p: 0.1
-        std_range: [10.0, 30.0]
+        std_range: [0.1, 0.3]
 
     # Statistics tracking (CSV output)
     statistics:

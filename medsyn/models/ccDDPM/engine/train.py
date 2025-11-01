@@ -842,9 +842,9 @@ def train(yaml_path: str, split: str = "train") -> None:
             li = float(loss.detach().cpu())
             if math.isfinite(li):
                 running_loss += li
-            
-            # Update progress bar with current loss (only if tqdm enabled)
-            if tcfg.use_tqdm:
+
+            # Update progress bar with current loss (only if tqdm enabled AND on main process)
+            if tcfg.use_tqdm and is_main_process():
                 pbar.set_postfix({"loss": f"{loss.item():.4f}",
                                 "avg_loss": f"{running_loss/step:.4f}",
                                 "psnr": f"{batch_metrics['psnr']:.2f}dB"})
