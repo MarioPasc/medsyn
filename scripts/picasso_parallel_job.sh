@@ -16,6 +16,7 @@ set -euo pipefail
 # ========================================================================
 # Hardcoded number of GPUs for this job (must match --gres=gpu:N above)
 NUM_GPUS=2
+MEDSYN_DEBUG_DATALOADER=1
 
 echo "================================================================================"
 echo "🚀 Multi-GPU Distributed Training with $NUM_GPUS GPUs"

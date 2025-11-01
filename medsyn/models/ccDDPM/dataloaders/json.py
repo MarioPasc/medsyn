@@ -11,8 +11,13 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
+import os
 
 logger = logging.getLogger(__name__)
+
+# Debug logging control - set via environment variable
+# Usage: export MEDSYN_DEBUG_DATALOADER=1
+DEBUG_DATALOADER = os.getenv("MEDSYN_DEBUG_DATALOADER", "0") == "1"
 
 @dataclass
 class Sample:
@@ -68,6 +73,54 @@ class PathMNISTIndexDataset(Dataset):
             "applied_transforms": applied_transforms
         }
 
+def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Custom collate function that handles variable-length lists in batch.
+
+    CRITICAL FIX: PyTorch's default collate_fn cannot handle dictionaries containing
+    variable-length lists (like "applied_transforms"). This custom collate function:
+    1. Stacks tensors normally (pixel_values, labels)
+    2. Keeps variable-length lists as list-of-lists (applied_transforms)
+    3. Collects scalar/string values (is_synth, path)
+
+    This is essential for multi-worker DataLoader with augmentation enabled.
+
+    Args:
+        batch: List of dictionaries from dataset __getitem__
+
+    Returns:
+        Collated batch dictionary
+    """
+    if DEBUG_DATALOADER:
+        logger.debug(f"[COLLATE] Collating batch of size {len(batch)}")
+        for i, sample in enumerate(batch):
+            logger.debug(f"  Sample {i}: pixel_values.shape={sample['pixel_values'].shape}, "
+                        f"labels={sample['labels'].item()}, "
+                        f"applied_transforms={sample.get('applied_transforms', [])}")
+
+    # Separate handling for different field types
+    collated = {}
+
+    # Stack tensors: pixel_values, labels
+    collated["pixel_values"] = torch.stack([item["pixel_values"] for item in batch])
+    collated["labels"] = torch.stack([item["labels"] for item in batch])
+
+    # Keep lists as list-of-lists: applied_transforms
+    # This cannot be stacked because each sample may have different number of transforms
+    collated["applied_transforms"] = [item.get("applied_transforms", []) for item in batch]
+
+    # Collect scalar/string values
+    collated["is_synth"] = [item["is_synth"] for item in batch]
+    collated["path"] = [item["path"] for item in batch]
+
+    if DEBUG_DATALOADER:
+        logger.debug(f"[COLLATE] Result: pixel_values.shape={collated['pixel_values'].shape}, "
+                    f"labels.shape={collated['labels'].shape}, "
+                    f"num_samples={len(collated['applied_transforms'])}")
+
+    return collated
+
+
 def build_json_loader(
     index_json: Path,
     split: str,
@@ -105,6 +158,10 @@ def build_json_loader(
     # If sampler is provided, disable shuffle (samplers handle shuffling)
     shuffle = (split == "train") and (sampler is None)
 
+    if DEBUG_DATALOADER:
+        logger.debug(f"[BUILD_LOADER] Creating DataLoader: split={split}, batch_size={batch_size}, "
+                    f"num_workers={num_workers}, shuffle={shuffle}, sampler={sampler is not None}")
+
     return DataLoader(
         ds,
         batch_size=batch_size,
@@ -113,5 +170,6 @@ def build_json_loader(
         num_workers=num_workers,
         pin_memory=True,
         drop_last=(split == "train"),
-        persistent_workers=(num_workers > 0)  # Improves performance when using workers
+        persistent_workers=(num_workers > 0),  # Improves performance when using workers
+        collate_fn=custom_collate_fn  # CRITICAL FIX: Use custom collate for variable-length lists
     )
