@@ -1,0 +1,224 @@
+W1030 12:58:46.688525 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py:774] 
+W1030 12:58:46.688525 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py:774] *****************************************
+W1030 12:58:46.688525 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py:774] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W1030 12:58:46.688525 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py:774] *****************************************
+[2025-10-30 12:58:47] INFO - __main__ - 📄 Configuration file: /localscratch/users/mpascual/14040605/work/medsyn/config/picasso_cfg.yaml
+[2025-10-30 12:58:47] INFO - __main__ - 📄 Configuration file: /localscratch/users/mpascual/14040605/work/medsyn/config/picasso_cfg.yaml
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Augmentation enabled: True, probability: 0.60, transforms: 5
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Loaded ccDDPM config. image_size=64, classes=9, timesteps=1000, dataloader=npz
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - NPZ dataloader path: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:02] INFO - __main__ - 🔧 Overriding dataset path from CLI: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:02] INFO - __main__ - 🔧 Overriding output directory from CLI: /localscratch/users/mpascual/14040605/work/results
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Augmentation enabled: True, probability: 0.60, transforms: 5
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Loaded ccDDPM config. image_size=64, classes=9, timesteps=1000, dataloader=npz
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - NPZ dataloader path: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:02] INFO - __main__ - 🔧 Overriding dataset path from CLI: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:02] INFO - __main__ - 🔧 Overriding output directory from CLI: /localscratch/users/mpascual/14040605/work/results
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Augmentation enabled: True, probability: 0.60, transforms: 5
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Loaded ccDDPM config. image_size=64, classes=9, timesteps=1000, dataloader=npz
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - NPZ dataloader path: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Augmentation enabled: True, probability: 0.60, transforms: 5
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - Loaded ccDDPM config. image_size=64, classes=9, timesteps=1000, dataloader=npz
+[2025-10-30 12:59:02] INFO - medsyn.models.ccDDPM.config - NPZ dataloader path: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:04] INFO - medsyn.models.ccDDPM.engine.ddp_utils - Initialized DDP process group with backend=nccl
+[2025-10-30 12:59:05] INFO - medsyn.models.ccDDPM.engine.ddp_utils - Initialized DDP process group with backend=nccl
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.engine.ddp_utils - DDP initialized: rank=1/2, local_rank=1, device=cuda:1
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train - [Rank 1/2] DDP training on device cuda:1
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train - Creating augmentation pipeline...
+[2025-10-30 12:59:06] WARNING - medsyn.models.ccDDPM.augmentation.transforms - Ignoring invalid parameter(s) ['var_limit'] for transform GaussNoise. Valid parameters: ['self', 'std_range', 'mean_range', 'per_channel', 'noise_scale_factor', 'p']
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms - Augmentation pipeline initialized with 5 transforms
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms -   Transforms: HorizontalFlip, VerticalFlip, Rotate, RandomBrightnessContrast, GaussNoise
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms -   Overall probability: 0.6
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Enabled: True
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Probability: 0.6
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Transforms: 5
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=train)...
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.engine.ddp_utils - DDP initialized: rank=0/2, local_rank=0, device=cuda:0
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train - [Rank 0/2] DDP training on device cuda:0
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train - Creating augmentation pipeline...
+[2025-10-30 12:59:06] WARNING - medsyn.models.ccDDPM.augmentation.transforms - Ignoring invalid parameter(s) ['var_limit'] for transform GaussNoise. Valid parameters: ['self', 'std_range', 'mean_range', 'per_channel', 'noise_scale_factor', 'p']
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms - Augmentation pipeline initialized with 5 transforms
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms -   Transforms: HorizontalFlip, VerticalFlip, Rotate, RandomBrightnessContrast, GaussNoise
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.transforms -   Overall probability: 0.6
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Enabled: True
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Probability: 0.6
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Transforms: 5
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.augmentation.statistics - Augmentation statistics will be saved to: /localscratch/users/mpascual/14040605/work/results/augmentation_stats.csv
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train -   Statistics tracking enabled: /localscratch/users/mpascual/14040605/work/results/augmentation_stats.csv (rank-0 only)
+[2025-10-30 12:59:06] INFO - medsyn.ccddpm.train - Using NPZ dataloader from: /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz
+[2025-10-30 12:59:06] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=train)...
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 89996 images for split 'train'
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (89996, 64, 64, 3)
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (89996,)
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=val)...
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 89996 images for split 'train'
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (89996, 64, 64, 3)
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (89996,)
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:12] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=val)...
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 10004 images for split 'val'
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (10004, 64, 64, 3)
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (10004,)
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=train)...
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 10004 images for split 'val'
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (10004, 64, 64, 3)
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (10004,)
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:13] INFO - medsyn.ccddpm.train - DDP: DistributedSampler created for 89996 train, 10004 val samples across 2 GPUs
+[2025-10-30 12:59:13] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=train)...
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 89996 images for split 'train'
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (89996, 64, 64, 3)
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (89996,)
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:18] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=val)...
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 89996 images for split 'train'
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (89996, 64, 64, 3)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (89996,)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loading NPZ dataset from /localscratch/users/mpascual/14040605/work/datasets/PathMNIST.npz (split=val)...
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 10004 images for split 'val'
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (10004, 64, 64, 3)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (10004,)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz - Loaded 10004 images for split 'val'
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Image shape: (10004, 64, 64, 3)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Labels shape: (10004,)
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Unique labels: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+[2025-10-30 12:59:19] INFO - medsyn.models.ccDDPM.dataloaders.npz -   Will normalize to [-1, 1]
+[2025-10-30 12:59:24] INFO - medsyn.ccddpm.train - DDP: Model wrapped in DistributedDataParallel
+/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/distributed_c10d.py:4807: UserWarning: No device id is provided via `init_process_group` or `barrier `. Using the current device set by the user. 
+  warnings.warn(  # warn only once
+/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/distributed_c10d.py:4807: UserWarning: No device id is provided via `init_process_group` or `barrier `. Using the current device set by the user. 
+  warnings.warn(  # warn only once
+Epoch 1/1000:   0%|          | 0/11249 [00:00<?, ?batch/s]Epoch 1/1000:   0%|          | 0/11249 [00:00<?, ?batch/s]
+[2025-10-30 12:59:24] ERROR - __main__ - Error: Caught RuntimeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 55, in fetch
+    return self.collate_fn(data)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 398, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 171, in collate
+    {
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 172, in <dictcomp>
+    key: collate(
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 207, in collate
+    raise RuntimeError("each element in list of batch should be of equal size")
+RuntimeError: each element in list of batch should be of equal size
+Traceback (most recent call last):
+  File "/localscratch/users/mpascual/14040605/work/medsyn/medsyn/cli/train_ccDDPM.py", line 137, in main
+    train(str(config_path))
+  File "/localscratch/users/mpascual/14040605/work/medsyn/medsyn/models/ccDDPM/engine/train.py", line 739, in train
+    for step, batch in pbar:
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/tqdm/std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 734, in __next__
+    data = self._next_data()
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 1516, in _next_data
+    return self._process_data(data, worker_id)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 1551, in _process_data
+    data.reraise()
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/_utils.py", line 769, in reraise
+    raise exception
+RuntimeError: Caught RuntimeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 55, in fetch
+    return self.collate_fn(data)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 398, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 171, in collate
+    {
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 172, in <dictcomp>
+    key: collate(
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 207, in collate
+    raise RuntimeError("each element in list of batch should be of equal size")
+RuntimeError: each element in list of batch should be of equal size
+
+[2025-10-30 12:59:24] ERROR - __main__ - Error: Caught RuntimeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 55, in fetch
+    return self.collate_fn(data)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 398, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 171, in collate
+    {
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 172, in <dictcomp>
+    key: collate(
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 207, in collate
+    raise RuntimeError("each element in list of batch should be of equal size")
+RuntimeError: each element in list of batch should be of equal size
+Traceback (most recent call last):
+  File "/localscratch/users/mpascual/14040605/work/medsyn/medsyn/cli/train_ccDDPM.py", line 137, in main
+    train(str(config_path))
+  File "/localscratch/users/mpascual/14040605/work/medsyn/medsyn/models/ccDDPM/engine/train.py", line 739, in train
+    for step, batch in pbar:
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 734, in __next__
+    data = self._next_data()
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 1516, in _next_data
+    return self._process_data(data, worker_id)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/dataloader.py", line 1551, in _process_data
+    data.reraise()
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/_utils.py", line 769, in reraise
+    raise exception
+RuntimeError: Caught RuntimeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/fetch.py", line 55, in fetch
+    return self.collate_fn(data)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 398, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 171, in collate
+    {
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 172, in <dictcomp>
+    key: collate(
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/utils/data/_utils/collate.py", line 207, in collate
+    raise RuntimeError("each element in list of batch should be of equal size")
+RuntimeError: each element in list of batch should be of equal size
+
+[rank0]:[W1030 13:00:04.053463075 ProcessGroupNCCL.cpp:1538] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+W1030 13:00:06.095832 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 3215771 closing signal SIGTERM
+E1030 13:00:06.315229 3215622 /mnt2/fscratch/users/tic_163_uma/mpascual/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: 1) local_rank: 1 (pid: 3215772) of binary: /mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/bin/python3.9
+Traceback (most recent call last):
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py", line 901, in main
+    run(args)
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/run.py", line 892, in run
+    elastic_launch(
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 143, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/lib/python3.9/site-packages/torch/distributed/launcher/api.py", line 277, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+medsyn.cli.train_ccDDPM FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-10-30_13:00:06
+  host      : exa04.scbi.uma.es
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 3215772)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================

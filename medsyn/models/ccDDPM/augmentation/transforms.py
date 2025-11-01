@@ -8,10 +8,12 @@ import torch
 
 try:
     import albumentations as A
+    import cv2  # Import cv2 at module level for worker process compatibility
     ALBUMENTATIONS_AVAILABLE = True
 except ImportError:
     ALBUMENTATIONS_AVAILABLE = False
     A = None
+    cv2 = None
 
 from .config import AugmentationConfig, TransformConfig
 
@@ -126,6 +128,15 @@ class AugmentationPipeline:
                 f"Valid parameters: {list(valid_params.keys())}"
             )
 
+        # CRITICAL FIX: For Rotate transform, ensure it never changes dimensions
+        # This prevents batch collation errors in multi-worker DataLoader
+        if tf_config.name == 'Rotate':
+            # Set border_mode to ensure no dimension changes
+            # cv2.BORDER_REFLECT_101 is the default and should preserve dimensions
+            if 'border_mode' not in filtered_params and cv2 is not None:
+                filtered_params['border_mode'] = cv2.BORDER_CONSTANT
+                logger.debug(f"Added border_mode=BORDER_CONSTANT to Rotate transform for dimension stability")
+
         # Create transform with probability and filtered parameters
         return transform_class(p=tf_config.p, **filtered_params)
 
@@ -162,25 +173,40 @@ class AugmentationPipeline:
             augmented = self.pipeline(image=image_np)
             augmented_image = augmented['image']
 
-            # CRITICAL: Validate that image dimensions haven't changed
-            # This prevents batch collation errors in DataLoader
+            # CRITICAL: ALWAYS validate and enforce dimension preservation
+            # This prevents batch collation errors in DataLoader (especially with multi-GPU + multi-worker)
+            # Note: We check EVERY time, not just when dimensions change, as a safety measure
             if augmented_image.shape != original_shape:
                 logger.warning(
                     f"Augmentation changed image dimensions from {original_shape} to {augmented_image.shape}! "
                     f"Reshaping back to original dimensions using bicubic interpolation. "
-                    f"Check your augmentation config for transforms like SafeRotate that change dimensions."
+                    f"This can happen with transforms like Rotate. Consider using fixed-size transforms."
                 )
-                # Reshape using bicubic interpolation
-                import cv2
+                if cv2 is None:
+                    raise RuntimeError(
+                        "cv2 (opencv-python) is required for dimension correction but not available. "
+                        "Install it with: pip install opencv-python"
+                    )
+
                 # Resize to match original H, W (shape is [H, W, C])
                 augmented_image = cv2.resize(
-                    augmented_image, 
+                    augmented_image,
                     (original_shape[1], original_shape[0]),  # (width, height)
                     interpolation=cv2.INTER_CUBIC
                 )
-                # Ensure channel dimension is preserved
+
+                # Ensure channel dimension is preserved (cv2.resize can drop channel dim for grayscale)
                 if len(original_shape) == 3 and len(augmented_image.shape) == 2:
                     augmented_image = augmented_image[:, :, np.newaxis]
+
+            # CRITICAL: Final safety check - ensure shape matches EXACTLY
+            # This is essential for multi-worker DataLoader to avoid collation errors
+            if augmented_image.shape != original_shape:
+                raise RuntimeError(
+                    f"Failed to restore original image dimensions! "
+                    f"Expected {original_shape}, got {augmented_image.shape} after resize. "
+                    f"This indicates a critical bug in dimension handling."
+                )
 
             # Track which transforms were actually applied
             # Note: Albumentations doesn't directly expose this, so we track via replay
@@ -333,24 +359,39 @@ class ReplayAugmentationPipeline(AugmentationPipeline):
             augmented = self.pipeline(image=image_np)
             augmented_image = augmented['image']
 
-            # CRITICAL: Validate that image dimensions haven't changed
+            # CRITICAL: ALWAYS validate and enforce dimension preservation
+            # This prevents batch collation errors in DataLoader (especially with multi-GPU + multi-worker)
             if augmented_image.shape != original_shape:
                 logger.warning(
                     f"Augmentation changed image dimensions from {original_shape} to {augmented_image.shape}! "
                     f"Reshaping back to original dimensions using bicubic interpolation. "
-                    f"Check your augmentation config for transforms like SafeRotate that change dimensions."
+                    f"This can happen with transforms like Rotate. Consider using fixed-size transforms."
                 )
-                # Reshape using bicubic interpolation
-                import cv2
+                if cv2 is None:
+                    raise RuntimeError(
+                        "cv2 (opencv-python) is required for dimension correction but not available. "
+                        "Install it with: pip install opencv-python"
+                    )
+
                 # Resize to match original H, W (shape is [H, W, C])
                 augmented_image = cv2.resize(
-                    augmented_image, 
+                    augmented_image,
                     (original_shape[1], original_shape[0]),  # (width, height)
                     interpolation=cv2.INTER_CUBIC
                 )
-                # Ensure channel dimension is preserved
+
+                # Ensure channel dimension is preserved (cv2.resize can drop channel dim for grayscale)
                 if len(original_shape) == 3 and len(augmented_image.shape) == 2:
                     augmented_image = augmented_image[:, :, np.newaxis]
+
+            # CRITICAL: Final safety check - ensure shape matches EXACTLY
+            # This is essential for multi-worker DataLoader to avoid collation errors
+            if augmented_image.shape != original_shape:
+                raise RuntimeError(
+                    f"Failed to restore original image dimensions! "
+                    f"Expected {original_shape}, got {augmented_image.shape} after resize. "
+                    f"This indicates a critical bug in dimension handling."
+                )
 
             # Extract applied transforms from replay data
             applied_transforms = []

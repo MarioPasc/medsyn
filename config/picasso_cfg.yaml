@@ -13,7 +13,7 @@ data:
     enabled: true
     npz_path: ${DATASET_PATH}
   seed: 23102003
-  num_workers: 2
+  num_workers: 1
   reduction:
     strategy: fraction
     train: 1.00
@@ -55,11 +55,6 @@ ccddpm:
         p: 0.5
       - name: VerticalFlip
         p: 0.5
-      - name: Rotate
-        p: 0.3
-        limit: 10  # Rotate by up to ±10 degrees
-        # Note: Using Rotate instead of SafeRotate to preserve image dimensions for batching
-
       # Intensity transforms (careful with medical imaging)
       - name: RandomBrightnessContrast
         p: 0.1
@@ -69,7 +64,7 @@ ccddpm:
       # Noise augmentation
       - name: GaussNoise
         p: 0.1
-        var_limit: [10.0, 30.0]
+        std_range: [10.0, 30.0]
 
     # Statistics tracking (CSV output)
     statistics:
@@ -141,7 +136,7 @@ ccddpm:
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 32  # MUST match checkpoint! Was trained with 32
+    class_embed_dim: 32  
     num_classes: 9
     batch_size: 4
     epochs: 1000
