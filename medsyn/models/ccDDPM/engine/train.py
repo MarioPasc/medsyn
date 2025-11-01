@@ -32,7 +32,11 @@ from medsyn.models.ccDDPM.engine.ddp_utils import (
 import numpy as np
 
 logger = logging.getLogger("medsyn.ccddpm.train")
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S")
+
+# Supercomputer mode detection - disable tqdm, enable structured logging
+IS_SUPERCOMPUTER = os.getenv("IS_SUPERCOMPUTER", "0") == "1"
 
 # Augmentation imports (optional, will only be used if augmentation is enabled in config)
 try:
@@ -44,6 +48,147 @@ try:
 except ImportError:
     AUGMENTATION_AVAILABLE = False
     logger.warning("Augmentation module not available. Install albumentations to enable augmentation.")
+
+
+def format_time(seconds: float) -> str:
+    """
+    Format seconds into human-readable time string.
+
+    Args:
+        seconds: Time in seconds
+
+    Returns:
+        Formatted string like "2h 34m 12s" or "45m 23s" or "12s"
+    """
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours}h {mins}m {secs}s"
+
+
+def log_training_progress(rank: int, epoch: int, step: int, total_steps: int,
+                          metrics: Dict[str, float], elapsed: float,
+                          eta: float, lr: float) -> None:
+    """
+    Log training progress with metrics and time estimates.
+
+    Args:
+        rank: Process rank
+        epoch: Current epoch
+        step: Current step within epoch
+        total_steps: Total steps in epoch
+        metrics: Dictionary of metrics (loss, psnr, etc.)
+        elapsed: Time elapsed since epoch start (seconds)
+        eta: Estimated time remaining for epoch (seconds)
+        lr: Current learning rate
+    """
+    progress_pct = (step / total_steps) * 100
+
+    # Format metrics string
+    metrics_str = " | ".join([f"{k}={v:.4f}" for k, v in metrics.items()])
+
+    # Main process gets detailed logs
+    if rank == 0:
+        logger.info(
+            f"Epoch {epoch} | Step {step}/{total_steps} ({progress_pct:.1f}%) | "
+            f"{metrics_str} | lr={lr:.2e} | "
+            f"Elapsed: {format_time(elapsed)} | ETA: {format_time(eta)}"
+        )
+    else:
+        # Non-main processes log less frequently and with rank prefix
+        logger.debug(
+            f"[Rank {rank}] Epoch {epoch} | Step {step}/{total_steps} ({progress_pct:.1f}%) | "
+            f"{metrics_str}"
+        )
+
+
+def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
+                     val_metrics: Dict[str, float], epoch_time: float,
+                     best_val_loss: float, is_best: bool) -> None:
+    """
+    Log end-of-epoch summary with training and validation metrics.
+
+    Args:
+        rank: Process rank
+        epoch: Current epoch
+        train_metrics: Training metrics dictionary
+        val_metrics: Validation metrics dictionary
+        epoch_time: Total time for epoch (seconds)
+        best_val_loss: Best validation loss so far
+        is_best: Whether this epoch achieved best validation loss
+    """
+    if rank == 0:
+        logger.info("=" * 80)
+        logger.info(f"EPOCH {epoch} SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"Training   | loss={train_metrics.get('loss', 0):.4f} | "
+                   f"psnr={train_metrics.get('psnr', 0):.2f}dB | "
+                   f"ssim={train_metrics.get('ssim', 0):.4f}")
+        logger.info(f"Validation | loss={val_metrics.get('loss', 0):.4f} | "
+                   f"psnr={val_metrics.get('psnr', 0):.2f}dB | "
+                   f"ssim={val_metrics.get('ssim', 0):.4f}")
+
+        if is_best:
+            logger.info(f"🌟 NEW BEST MODEL! Val loss: {val_metrics.get('loss', 0):.4f} "
+                       f"(previous: {best_val_loss:.4f})")
+        else:
+            logger.info(f"Best val loss: {best_val_loss:.4f}")
+
+        logger.info(f"Epoch time: {format_time(epoch_time)}")
+        logger.info("=" * 80)
+
+
+def log_validation_progress(rank: int, step: int, total_steps: int,
+                            loss: float, main_process_only: bool = True) -> None:
+    """
+    Log validation progress.
+
+    Args:
+        rank: Process rank
+        step: Current validation step
+        total_steps: Total validation steps
+        loss: Current validation loss
+        main_process_only: If True, only log on rank 0
+    """
+    if main_process_only and rank != 0:
+        return
+
+    progress_pct = (step / total_steps) * 100
+
+    if rank == 0:
+        logger.info(f"Validation | Step {step}/{total_steps} ({progress_pct:.1f}%) | "
+                   f"loss={loss:.4f}")
+
+
+def should_log_step(step: int, total_steps: int, log_frequency: int = 10) -> bool:
+    """
+    Determine if we should log at this step based on epoch progress.
+
+    Logs at regular intervals throughout the epoch (default: 10 times per epoch).
+    Always logs first and last step.
+
+    Args:
+        step: Current step (1-indexed)
+        total_steps: Total steps in epoch
+        log_frequency: Number of times to log per epoch
+
+    Returns:
+        True if should log at this step
+    """
+    # Always log first and last step
+    if step == 1 or step == total_steps:
+        return True
+
+    # Log at regular intervals
+    log_interval = max(1, total_steps // log_frequency)
+    return step % log_interval == 0
 
 
 class EMA:
@@ -720,22 +865,34 @@ def train(yaml_path: str, split: str = "train") -> None:
         if use_ddp and train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
-        t0 = time.time()
+        epoch_start_time = time.time()
         running_loss = 0.0
         train_avg = EpochAverager()
 
         # Collect augmentation statistics for this epoch
         epoch_augmentation_transforms = []
 
-        # Progress bar for the training epoch (only on rank-0 if using tqdm)
+        # Progress tracking
+        total_train_steps = len(train_loader)
+        use_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
+
+        # Supercomputer mode: log epoch start
+        if IS_SUPERCOMPUTER and is_main_process():
+            logger.info("=" * 80)
+            logger.info(f"STARTING EPOCH {epoch}/{tcfg.epochs}")
+            logger.info(f"Total batches: {total_train_steps} | Batch size: {tcfg.batch_size} | "
+                       f"LR: {opt.param_groups[0]['lr']:.2e}")
+            logger.info("=" * 80)
+
+        # Progress bar for the training epoch (only on rank-0 if using tqdm AND not supercomputer)
         train_iter = enumerate(train_loader, 1)
-        if tcfg.use_tqdm and is_main_process():
-            pbar = tqdm(train_iter, total=len(train_loader),
+        if use_progress_bar:
+            pbar = tqdm(train_iter, total=total_train_steps,
                         desc=f"Epoch {epoch}/{tcfg.epochs}",
                         unit="batch", leave=True)
         else:
             pbar = train_iter
-        
+
         for step, batch in pbar:
             x0 = batch["pixel_values"].to(device)  # [-1,1]
             labels = batch["labels"].to(device)
@@ -844,18 +1001,46 @@ def train(yaml_path: str, split: str = "train") -> None:
                 running_loss += li
 
             # Update progress bar with current loss (only if tqdm enabled AND on main process)
-            if tcfg.use_tqdm and is_main_process():
+            if use_progress_bar:
                 pbar.set_postfix({"loss": f"{loss.item():.4f}",
                                 "avg_loss": f"{running_loss/step:.4f}",
                                 "psnr": f"{batch_metrics['psnr']:.2f}dB"})
+
+            # Supercomputer mode: periodic logging (10 times per epoch)
+            if IS_SUPERCOMPUTER and should_log_step(step, total_train_steps, log_frequency=10):
+                # Calculate time metrics
+                elapsed = time.time() - epoch_start_time
+                time_per_step = elapsed / step
+                eta = time_per_step * (total_train_steps - step)
+
+                # Prepare metrics for logging
+                log_metrics = {
+                    "loss": loss.item(),
+                    "avg_loss": running_loss / step,
+                    "psnr": batch_metrics['psnr'],
+                    "ssim": batch_metrics['ssim'],
+                    "grad_norm": grad_norm_val
+                }
+
+                # Log progress
+                log_training_progress(
+                    rank=rank,
+                    epoch=epoch,
+                    step=step,
+                    total_steps=total_train_steps,
+                    metrics=log_metrics,
+                    elapsed=elapsed,
+                    eta=eta,
+                    lr=opt.param_groups[0]['lr']
+                )
             
             if global_step % tcfg.log_every == 0 and is_main_process():
                 csv_path = out_dir / "train_log.csv"
                 with open(csv_path, "a", newline="") as fh:
-                    csv.writer(fh).writerow([epoch, global_step, float(loss.item()), opt.param_groups[0]["lr"], round(time.time()-t0, 2)])
-                logger.info("ep=%d step=%d loss=%.4f", epoch, global_step, float(loss.item()))
+                    csv.writer(fh).writerow([epoch, global_step, float(loss.item()), opt.param_groups[0]["lr"], round(time.time()-epoch_start_time, 2)])
 
-        if tcfg.use_tqdm and is_main_process():
+        # Close progress bar if used
+        if use_progress_bar:
             pbar.close()
 
         # Get per-class losses from loss_fn (local to this GPU)
@@ -867,26 +1052,40 @@ def train(yaml_path: str, split: str = "train") -> None:
         # CRITICAL: Synchronize training metrics across all GPUs
         train_metrics = sync_metrics_dict(train_metrics, device, use_ddp)
 
+        # Calculate training time
+        train_time = time.time() - epoch_start_time
+
         # Log training metrics (only rank-0, but now with globally averaged values)
         curr_lr = opt.param_groups[0]["lr"]
         if csv_logger is not None:
             csv_logger.log_epoch(epoch=epoch, split="train", lr=curr_lr, metrics=train_metrics)
 
-        # Print epoch summary (only rank-0)
+        # Log training summary (only rank-0)
         if is_main_process():
             avg_loss = running_loss / len(train_loader)
-            print("\n" + "="*80)
-            print(f"Epoch {epoch}/{tcfg.epochs} Summary:")
-            print("="*80)
-            print("Training:")
-            print(f"  Average Loss: {avg_loss:.4f}")
-            print(f"  PSNR: {train_metrics.get('psnr', 0.0):.2f} dB")
-            print(f"  SSIM: {train_metrics.get('ssim', 0.0):.4f}")
-            print(f"  Noise MSE: {train_metrics.get('noise_mse', 0.0):.4f}")
-            print(f"  Learning Rate: {curr_lr:.6f}")
-            print(f"  Time: {time.time()-t0:.2f}s")
-        
+            if not IS_SUPERCOMPUTER:
+                # Interactive mode: use print for cleaner output
+                print("\n" + "="*80)
+                print(f"Epoch {epoch}/{tcfg.epochs} Training Summary:")
+                print("="*80)
+                print(f"  Average Loss: {avg_loss:.4f}")
+                print(f"  PSNR: {train_metrics.get('psnr', 0.0):.2f} dB")
+                print(f"  SSIM: {train_metrics.get('ssim', 0.0):.4f}")
+                print(f"  Noise MSE: {train_metrics.get('noise_mse', 0.0):.4f}")
+                print(f"  Learning Rate: {curr_lr:.6f}")
+                print(f"  Time: {format_time(train_time)}")
+            else:
+                # Supercomputer mode: use logger
+                logger.info(f"Training complete | loss={avg_loss:.4f} | "
+                           f"psnr={train_metrics.get('psnr', 0.0):.2f}dB | "
+                           f"ssim={train_metrics.get('ssim', 0.0):.4f} | "
+                           f"time={format_time(train_time)}")
+
         # ---- Validation ----
+        if IS_SUPERCOMPUTER and is_main_process():
+            logger.info(f"Starting validation on {len(val_loader)} batches...")
+
+        val_start_time = time.time()
         model.eval()
         val_avg = EpochAverager()
         val_loss_fn = DDPMNoiseMSE(
@@ -894,15 +1093,18 @@ def train(yaml_path: str, split: str = "train") -> None:
             use_min_snr=tcfg.use_min_snr,
             min_snr_gamma=tcfg.min_snr_gamma
         )
-        
-        # Validation progress bar (only on rank-0 if using tqdm)
-        if tcfg.use_tqdm and is_main_process():
+
+        total_val_steps = len(val_loader)
+        use_val_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
+
+        # Validation progress bar (only on rank-0 if using tqdm AND not supercomputer)
+        if use_val_progress_bar:
             val_pbar = tqdm(val_loader, desc="Validation", unit="batch", leave=False)
         else:
             val_pbar = val_loader
-        
+
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
-            for batch in val_pbar:
+            for val_step, batch in enumerate(val_pbar, 1):
                 x0 = batch["pixel_values"].to(device)
                 labels = batch["labels"].to(device)
                 bsz = x0.size(0)
@@ -936,13 +1138,26 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_batch_metrics["grad_norm"] = 0.0  # No gradients in validation
                 val_batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
                 val_avg.update(val_batch_metrics, batch_size=bsz)
-                
+
                 # Update progress bar (only if tqdm enabled on rank-0)
-                if tcfg.use_tqdm and is_main_process():
+                if use_val_progress_bar:
                     val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
 
-        if tcfg.use_tqdm and is_main_process():
+                # Supercomputer mode: periodic validation logging (3 times per validation)
+                if IS_SUPERCOMPUTER and should_log_step(val_step, total_val_steps, log_frequency=3):
+                    log_validation_progress(
+                        rank=rank,
+                        step=val_step,
+                        total_steps=total_val_steps,
+                        loss=loss.item(),
+                        main_process_only=True
+                    )
+
+        # Close validation progress bar if used
+        if use_val_progress_bar:
             val_pbar.close()
+
+        val_time = time.time() - val_start_time
 
         # Get per-class validation losses (local to this GPU)
         val_per_class_losses = val_loss_fn.per_class()
@@ -991,43 +1206,74 @@ def train(yaml_path: str, split: str = "train") -> None:
         if csv_logger is not None:
             csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
 
-        # Print validation summary (only rank-0)
+        # Validation summary logging (only rank-0)
         if is_main_process():
-            print("\nValidation:")
-            print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f} (Global: {val_loss:.4f})")
-            print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
-            print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
-            print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
+            if not IS_SUPERCOMPUTER:
+                # Interactive mode: detailed print output
+                print("\nValidation:")
+                print(f"  Average Loss: {val_metrics.get('loss', 0.0):.4f} (Global: {val_loss:.4f})")
+                print(f"  PSNR: {val_metrics.get('psnr', 0.0):.2f} dB")
+                print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
+                print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
+                print(f"  Time: {format_time(val_time)}")
 
-            print("\n🔍 Training Diagnostics (detecting issues):")
-            corr = diagnostics['input_output_correlation']
-            pred_std = diagnostics['prediction_std']
-            recon_psnr = diagnostics['reconstruction_psnr_t500']
+                print("\n🔍 Training Diagnostics (detecting issues):")
+                corr = diagnostics['input_output_correlation']
+                pred_std = diagnostics['prediction_std']
+                recon_psnr = diagnostics['reconstruction_psnr_t500']
 
-            # Color-coded warnings
-            print(f"  Input-Output Correlation: {corr:.4f}", end="")
-            if corr > 0.7:
-                print(" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
-            elif corr > 0.5:
-                print(" ⚠️  High correlation, model may not be learning properly")
+                # Color-coded warnings
+                print(f"  Input-Output Correlation: {corr:.4f}", end="")
+                if corr > 0.7:
+                    print(" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
+                elif corr > 0.5:
+                    print(" ⚠️  High correlation, model may not be learning properly")
+                else:
+                    print(" ✓ (healthy)")
+
+                print(f"  Prediction Std: {pred_std:.4f}", end="")
+                if pred_std < 0.5 or pred_std > 1.5:
+                    print(" ⚠️  Unusual (should be ~0.8-1.2)")
+                else:
+                    print(" ✓")
+
+                print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
+                if recon_psnr < 15.0:
+                    print(" ⚠️  Low quality (should improve over epochs)")
+                else:
+                    print(" ✓")
+
+                print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
+                print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
+                print("="*80 + "\n")
             else:
-                print(" ✓ (healthy)")
+                # Supercomputer mode: structured logger output
+                logger.info(f"Validation complete | loss={val_loss:.4f} | "
+                           f"psnr={val_metrics.get('psnr', 0.0):.2f}dB | "
+                           f"ssim={val_metrics.get('ssim', 0.0):.4f} | "
+                           f"time={format_time(val_time)}")
 
-            print(f"  Prediction Std: {pred_std:.4f}", end="")
-            if pred_std < 0.5 or pred_std > 1.5:
-                print(" ⚠️  Unusual (should be ~0.8-1.2)")
-            else:
-                print(" ✓")
+                # Log diagnostics with warnings
+                corr = diagnostics['input_output_correlation']
+                pred_std = diagnostics['prediction_std']
+                recon_psnr = diagnostics['reconstruction_psnr_t500']
 
-            print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
-            if recon_psnr < 15.0:
-                print(" ⚠️  Low quality (should improve over epochs)")
-            else:
-                print(" ✓")
+                diag_msg = (f"Diagnostics | corr={corr:.4f} | pred_std={pred_std:.4f} | "
+                           f"recon_psnr@t500={recon_psnr:.2f}dB")
 
-            print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
-            print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
-            print("="*80 + "\n")
+                # Add warnings if needed
+                warnings = []
+                if corr > 0.7:
+                    warnings.append("HIGH_CORRELATION")
+                if pred_std < 0.5 or pred_std > 1.5:
+                    warnings.append("UNUSUAL_STD")
+                if recon_psnr < 15.0:
+                    warnings.append("LOW_RECON_PSNR")
+
+                if warnings:
+                    logger.warning(f"{diag_msg} | WARNINGS: {', '.join(warnings)}")
+                else:
+                    logger.info(diag_msg)
 
         model.train()
 
@@ -1098,17 +1344,38 @@ def train(yaml_path: str, split: str = "train") -> None:
                 torch.save(checkpoint_data, ck)
                 logger.info(f"Saved periodic checkpoint: {ck.name}")
 
+        # Calculate total epoch time
+        total_epoch_time = train_time + val_time
+
+        # Epoch summary logging (supercomputer mode)
+        if IS_SUPERCOMPUTER and is_main_process():
+            log_epoch_summary(
+                rank=rank,
+                epoch=epoch,
+                train_metrics=train_metrics,
+                val_metrics=val_metrics,
+                epoch_time=total_epoch_time,
+                best_val_loss=best_val_loss,
+                is_best=is_best
+            )
+
         # Early stopping check (synchronized across all GPUs)
         if should_stop:
             if is_main_process():
-                logger.info(f"⚠ Early stopping triggered! No improvement for {tcfg.patience} epochs.")
-                logger.info(f"Best model was at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
-                print(f"\n{'='*80}")
-                print(f"⚠ Early Stopping at Epoch {epoch}")
-                print(f"{'='*80}")
-                print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
-                print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
-                print(f"{'='*80}\n")
+                if IS_SUPERCOMPUTER:
+                    logger.info("=" * 80)
+                    logger.warning(f"EARLY STOPPING at Epoch {epoch}")
+                    logger.info("=" * 80)
+                    logger.warning(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
+                    logger.info(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                    logger.info("=" * 80)
+                else:
+                    print(f"\n{'='*80}")
+                    print(f"⚠ Early Stopping at Epoch {epoch}")
+                    print(f"{'='*80}")
+                    print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
+                    print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                    print(f"{'='*80}\n")
             break
         
         # ---- Visualizations (only rank-0) ----

@@ -127,6 +127,9 @@ echo ""
 export DATASET_PATH="${DATA_DST}"
 export OUTPUT_DIR="${OUT_DIR}"
 
+# Supercomputer mode: Disable tqdm, use structured logging for .out/.err files
+export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs
+
 # Important: Set CUDA environment variables for multi-GPU
 export CUDA_VISIBLE_DEVICES=0,1  # Assuming 2 GPUs allocated by SLURM
 export NCCL_DEBUG=INFO  # For debugging distributed training (optional)

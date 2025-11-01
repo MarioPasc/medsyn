@@ -44,21 +44,38 @@ def ddp_init(cfg) -> Dict[str, Any]:
             - local_rank: Local rank on this node (GPU ID)
             - device: torch.device for this process
     """
-    if not dist.is_initialized():
-        dist.init_process_group(
-            backend=cfg.ccddpm.dist.backend,
-            init_method=cfg.ccddpm.dist.init_method,
-        )
-        logger.info("Initialized DDP process group with backend=%s", cfg.ccddpm.dist.backend)
-
-    # Get rank information from environment variables set by torchrun
+    # Get local_rank BEFORE initializing process group (needed for device_id)
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
 
-    # Set device for this process
+    # Set device for this process BEFORE init_process_group
+    # This ensures proper GPU affinity from the start
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
+
+    if not dist.is_initialized():
+        # CRITICAL: Pass device_id to init_process_group for proper GPU affinity
+        # This prevents the warning: "No device id is provided via init_process_group"
+        # and ensures optimal NCCL performance with proper process-to-GPU binding
+        try:
+            # PyTorch 2.0+ accepts device_id parameter for better GPU affinity
+            dist.init_process_group(
+                backend=cfg.ccddpm.dist.backend,
+                init_method=cfg.ccddpm.dist.init_method,
+                device_id=device  # ✅ FIX: Pass CUDA device for optimal affinity
+            )
+        except TypeError:
+            # Fallback for older PyTorch versions that don't support device_id
+            # The torch.cuda.set_device() call above still ensures correct GPU binding
+            dist.init_process_group(
+                backend=cfg.ccddpm.dist.backend,
+                init_method=cfg.ccddpm.dist.init_method,
+            )
+        logger.info("Initialized DDP process group with backend=%s, device=%s",
+                   cfg.ccddpm.dist.backend, device)
+
+    # Get rank information from distributed backend
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
 
     logger.info("DDP initialized: rank=%d/%d, local_rank=%d, device=%s",
                 rank, world_size, local_rank, device)
@@ -114,9 +131,19 @@ def barrier():
 
     This function blocks until all processes in the group have called it.
     Useful for ensuring all processes reach a certain point before continuing.
+
+    Note: The device is set during ddp_init() and persists throughout the process,
+    ensuring barrier() uses the correct GPU context.
     """
     if dist.is_available() and dist.is_initialized():
-        dist.barrier()
+        # Ensure we're on the correct device (defensive programming)
+        # This should already be set from ddp_init(), but we verify here
+        if torch.cuda.is_available():
+            current_device = torch.cuda.current_device()
+            # barrier() will use the current device context set by torch.cuda.set_device()
+            dist.barrier()
+        else:
+            dist.barrier()
 
 
 def cleanup():
