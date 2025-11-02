@@ -149,7 +149,7 @@ ccddpm:
     min_snr_gamma: 5.0         # Standard value for Min-SNR
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     patience: 15               # Early stopping: stop if no improvement for 15 epochs
-    use_tqdm: true             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
+    use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
     lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
