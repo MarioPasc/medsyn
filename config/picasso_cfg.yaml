@@ -169,17 +169,17 @@ ccddpm:
 # Generation configuration (outside bVAE section)
 generate:
   model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py
-  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM/ckpts/best.pt"  # absolute path to checkpoint
+  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel/ckpts/best.pt"  # absolute path to checkpoint
   classes:
-    0: 1
-    1: 1
-    2: 1
-    3: 1
-    4: 1
-    5: 1
-    6: 1
-    7: 1
-    8: 1
+    0: 3
+    1: 3
+    2: 3
+    3: 3
+    4: 3
+    5: 3
+    6: 3
+    7: 3
+    8: 3
 
 yolo:
   # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
