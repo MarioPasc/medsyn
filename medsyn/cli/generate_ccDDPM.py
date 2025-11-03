@@ -342,7 +342,10 @@ def generate_with_cfg(
         # Classifier-free guidance
         if guidance_scale != 1.0:
             eps_cond = model(x_t, t_batch, labels)
-            eps_uncond = model(x_t, t_batch, None)
+            # For unconditional, use -1 labels (model handles this specially)
+            # Cannot use None with batching as it creates batch size 1
+            uncond_labels = torch.full((batch_size,), -1, device=device, dtype=torch.long)
+            eps_uncond = model(x_t, t_batch, uncond_labels)
             eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
 
             if debug and step_idx % 200 == 0:
@@ -417,7 +420,9 @@ def generate_with_denoising_steps(
         # Consistent with main generation function: skip second pass when scale=1.0
         if guidance_scale != 1.0:
             eps_cond = model(x_t, t_batch, labels)
-            eps_uncond = model(x_t, t_batch, None)
+            # Use -1 for unconditional (consistent with batched generation)
+            uncond_labels = torch.full((1,), -1, device=device, dtype=torch.long)
+            eps_uncond = model(x_t, t_batch, uncond_labels)
             eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
         else:
             eps = model(x_t, t_batch, labels)
