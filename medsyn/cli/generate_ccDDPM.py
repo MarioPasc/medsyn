@@ -11,7 +11,7 @@ Features:
 - JSON index generation (compatible with _build_index_structure format)
 - Denoising process visualization for random samples per class
 - EMA weights support for higher quality
-- Batch processing with progress tracking
+- Clean logging with ETA estimates and GPU usage tracking (multi-GPU friendly)
 
 Author: M.Pascual-González
 Date: 2024
@@ -22,6 +22,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -33,7 +34,6 @@ import torch
 import yaml
 from matplotlib.figure import Figure
 from torchvision.utils import save_image
-from tqdm import tqdm
 
 from medsyn.models.ccDDPM.config import load_cfg, ProjectCfg
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
@@ -476,7 +476,7 @@ def generate_images_for_class(
     # Create class-specific output directory
     class_dir = output_dir / f"class_{class_id}"
     class_dir.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info("Starting generation for class %d: %d samples to %s", class_id, num_samples, class_dir)
 
     # Dictionary to store metadata for JSON index
@@ -493,7 +493,11 @@ def generate_images_for_class(
     if create_visualization:
         logger.debug("Will create denoising visualization for sample index %d", vis_sample_idx)
 
-    for idx in tqdm(range(num_samples), desc=f"Class {class_id}", unit="img"):
+    # Time tracking for ETA calculation
+    start_time = time.time()
+    last_log_time = start_time
+
+    for idx in range(num_samples):
         # Generate unique ID
         sample_uuid = uuid.uuid4().hex[:12]
         filename = f"synth_{sample_uuid}_class{class_id}.png"
@@ -539,11 +543,54 @@ def generate_images_for_class(
         if idx == 0:
             logger.info(f"  First sample for class {class_id}: range=[{img.min():.3f}, {img.max():.3f}], " +
                        f"normalized range=[{img_normalized.min():.3f}, {img_normalized.max():.3f}]")
-        
-        # Log progress every 10% of samples
-        if (idx + 1) % max(1, num_samples // 10) == 0:
+
+        # Calculate and log progress with ETA and GPU usage
+        current_time = time.time()
+        elapsed_time = current_time - start_time
+
+        # Log progress every 10% of samples or every 30 seconds, whichever comes first
+        log_interval = max(1, num_samples // 10)
+        time_since_last_log = current_time - last_log_time
+
+        if (idx + 1) % log_interval == 0 or time_since_last_log >= 30 or idx == 0:
             progress_pct = ((idx + 1) / num_samples) * 100
-            logger.debug(f"  Class {class_id} progress: {idx + 1}/{num_samples} ({progress_pct:.0f}%)")
+
+            # Calculate ETA after at least 1 image is generated
+            if idx > 0:
+                avg_time_per_image = elapsed_time / (idx + 1)
+                remaining_images = num_samples - (idx + 1)
+                eta_seconds = avg_time_per_image * remaining_images
+                eta_minutes = eta_seconds / 60
+                eta_hours = eta_minutes / 60
+
+                if eta_hours >= 1:
+                    eta_str = f"{eta_hours:.1f}h"
+                elif eta_minutes >= 1:
+                    eta_str = f"{eta_minutes:.1f}m"
+                else:
+                    eta_str = f"{eta_seconds:.0f}s"
+
+                # Get GPU memory usage if available
+                gpu_info = ""
+                if device.type == "cuda":
+                    gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
+                    gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
+                    gpu_info = f" | GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
+
+                logger.info(f"  Class {class_id}: {idx + 1}/{num_samples} ({progress_pct:.1f}%) | "
+                           f"Elapsed: {elapsed_time/60:.1f}m | ETA: {eta_str} | "
+                           f"Speed: {avg_time_per_image:.2f}s/img{gpu_info}")
+            else:
+                # First image - just log progress without ETA
+                gpu_info = ""
+                if device.type == "cuda":
+                    gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
+                    gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
+                    gpu_info = f" | GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
+
+                logger.info(f"  Class {class_id}: {idx + 1}/{num_samples} ({progress_pct:.1f}%){gpu_info}")
+
+            last_log_time = current_time
 
         # Store metadata for JSON index
         # Use relative path from output_dir
@@ -565,10 +612,22 @@ def generate_images_for_class(
     images_array = np.stack(images_list, axis=0)  # [N, H, W, C]
     labels_array = np.array(labels_list, dtype=np.int64)  # [N]
 
-    logger.info("Completed generation for class %d: %d images generated", class_id, len(images_array))
+    # Log completion summary with total time and final GPU usage
+    total_time = time.time() - start_time
+    total_minutes = total_time / 60
+    avg_time_per_image = total_time / num_samples
+
+    gpu_info = ""
+    if device.type == "cuda":
+        gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
+        gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
+        gpu_info = f" | Final GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
+
+    logger.info(f"Completed generation for class {class_id}: {len(images_array)} images generated in "
+               f"{total_minutes:.1f}m ({avg_time_per_image:.2f}s/img){gpu_info}")
     logger.debug("  Images array shape: %s, dtype: %s", images_array.shape, images_array.dtype)
     logger.debug("  Labels array shape: %s, dtype: %s", labels_array.shape, labels_array.dtype)
-    
+
     return samples_metadata, images_array, labels_array
 
 
