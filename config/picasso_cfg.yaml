@@ -166,20 +166,34 @@ ccddpm:
     out_dir: ${OUTPUT_DIR}/samples
 
 
-# Generation configuration (outside bVAE section)
+# Generation configuration 
 generate:
-  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py
-  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel/ckpts/best.pt"  # absolute path to checkpoint
-  classes:
-    0: 3
-    1: 3
-    2: 3
-    3: 3
-    4: 3
-    5: 3
-    6: 3
-    7: 3
-    8: 3
+  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py bVAE is DEPRECATED at this moment
+  checkpoint: ${OUTPUT_DIR}/ckpts/best.pt  # absolute path to checkpoint
+  npz_with_synth_images:
+    save_to: ${OUTPUT_DIR}/synth
+    train:
+      classes:
+        0: 3
+        1: 3
+        2: 3
+        3: 3
+        4: 3
+        5: 3
+        6: 3
+        7: 3
+        8: 3
+    val:
+      classes:
+        0: 3
+        1: 3
+        2: 3
+        3: 3
+        4: 3
+        5: 3
+        6: 3
+        7: 3
+        8: 3
 
 yolo:
   # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
