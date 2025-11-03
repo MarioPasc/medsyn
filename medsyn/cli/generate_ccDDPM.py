@@ -494,6 +494,8 @@ def generate_images_for_class(
     total_classes: int | None = None,
     current_class_idx: int | None = None,
     batch_size: int = 4,
+    total_images_in_job: int | None = None,
+    images_completed_before_this_class: int = 0,
 ) -> tuple[dict[str, dict[str, Any]], np.ndarray, np.ndarray]:
     """
     Generate synthetic images for a specific class with batch generation support.
@@ -502,7 +504,7 @@ def generate_images_for_class(
         model: The ccDDPM model
         scheduler: DDPM scheduler
         class_id: Class ID to generate
-        num_samples: Number of samples to generate
+        num_samples: Number of samples to generate for this class
         output_dir: Base output directory
         config: Project configuration
         device: Device
@@ -510,6 +512,8 @@ def generate_images_for_class(
         total_classes: Total number of classes being generated (for progress tracking)
         current_class_idx: Current class index (0-based, for progress tracking)
         batch_size: Number of images to generate in parallel per batch (default: 4)
+        total_images_in_job: Total images across all classes/splits in the entire job (for global ETA)
+        images_completed_before_this_class: Number of images completed before starting this class (for global ETA)
 
     Returns:
         Tuple of:
@@ -690,8 +694,19 @@ def generate_images_for_class(
             # Calculate ETA after at least one batch
             if batch_idx > 0:
                 avg_time_per_image = elapsed_time / images_generated
-                remaining_images = num_samples - images_generated
-                eta_seconds = avg_time_per_image * remaining_images
+
+                # Calculate global ETA (for entire job) if tracking info is available
+                if total_images_in_job is not None:
+                    images_done_globally = images_completed_before_this_class + images_generated
+                    remaining_images_globally = total_images_in_job - images_done_globally
+                    eta_seconds = avg_time_per_image * remaining_images_globally
+                    eta_label = "Job ETA"
+                else:
+                    # Fallback to class-only ETA if global tracking not available
+                    remaining_images = num_samples - images_generated
+                    eta_seconds = avg_time_per_image * remaining_images
+                    eta_label = "Class ETA"
+
                 eta_str = format_time_eta(eta_seconds)
                 elapsed_str = format_time_eta(elapsed_time)
 
@@ -699,7 +714,7 @@ def generate_images_for_class(
                 class_label = f"Class {class_id}{class_progress}"
 
                 logger.info(f"  [{gpu_id}] {class_label}: {images_generated}/{num_samples} ({progress_pct:.1f}%) | "
-                           f"Elapsed: {elapsed_str} | ETA: {eta_str} | "
+                           f"Elapsed: {elapsed_str} | {eta_label}: {eta_str} | "
                            f"Speed: {avg_time_per_image:.2f}s/img | Batch: {batch_size}{gpu_mem}")
             else:
                 # First batch - just log progress without ETA
@@ -983,8 +998,11 @@ The YAML config should contain a 'generate' section:
         print("\n" + "=" * 80)
         print("Starting generation...")
         print("=" * 80 + "\n")
-        
+
         logger.info("Step 3: Beginning image generation for %d splits", len(split_to_class_to_samples))
+
+        # Track global progress for job-wide ETA
+        images_completed_so_far = 0
 
         # Generate images for each split
         for split_name in sorted(split_to_class_to_samples.keys()):
@@ -993,13 +1011,13 @@ The YAML config should contain a 'generate' section:
             print(f"\n{'=' * 80}")
             print(f"Processing {split_name.upper()} split")
             print(f"{'=' * 80}\n")
-            
+
             logger.info("Processing split '%s' with %d classes", split_name, len(class_to_samples))
 
             # Create split-specific output directory
             split_output_dir = output_base_path / split_name
             split_output_dir.mkdir(parents=True, exist_ok=True)
-            
+
             logger.info("Split output directory: %s", split_output_dir)
 
             # Generate images for each class in this split
@@ -1028,7 +1046,12 @@ The YAML config should contain a 'generate' section:
                     total_classes=total_classes,
                     current_class_idx=class_idx,
                     batch_size=args.batch_size,
+                    total_images_in_job=total_samples,
+                    images_completed_before_this_class=images_completed_so_far,
                 )
+
+                # Update global progress counter
+                images_completed_so_far += len(images_array)
 
                 all_samples[class_id] = samples_metadata
                 all_images[class_id] = images_array

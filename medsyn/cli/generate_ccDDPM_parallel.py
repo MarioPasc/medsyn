@@ -78,6 +78,8 @@ def worker_process(
     checkpoint_path: Path,
     output_base_path: Path,
     create_visualization: bool,
+    total_images_in_job: int,
+    batch_size: int = 4,
 ) -> None:
     """
     Worker process that generates images on a specific GPU.
@@ -97,6 +99,8 @@ def worker_process(
         checkpoint_path: Path to model checkpoint
         output_base_path: Base output directory
         create_visualization: Whether to create denoising visualizations
+        total_images_in_job: Total images across all tasks (for global ETA calculation)
+        batch_size: Batch size for generation (default: 4)
     """
     # Set up logging for this worker
     worker_logger = logging.getLogger(f"Worker-GPU{gpu_id}")
@@ -158,6 +162,9 @@ def worker_process(
                         config=cfg,
                         device=device,
                         create_visualization=create_visualization,
+                        batch_size=batch_size,
+                        total_images_in_job=total_images_in_job,
+                        images_completed_before_this_class=0,  # Conservative estimate for parallel execution
                     )
 
                     task_duration = time.time() - task_start_time
@@ -436,6 +443,12 @@ Examples:
         default="PathMNIST",
         help="Dataset name for JSON index (default: PathMNIST)",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Number of images to generate in parallel per batch (default: 4, recommended: 2-8)",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -519,6 +532,9 @@ Examples:
 
         logger.info("Task queue created with %d tasks", len(tasks))
 
+        # Calculate total images in job for global ETA tracking
+        total_images_in_job = sum(task.num_samples for task in tasks)
+
         # Start worker processes
         logger.info("Starting %d worker processes...", num_gpus)
         workers = []
@@ -536,6 +552,8 @@ Examples:
                     checkpoint_path,
                     output_base_path,
                     not args.no_visualizations,
+                    total_images_in_job,
+                    args.batch_size,
                 ),
                 name=f"Worker-GPU{gpu_id}",
             )
