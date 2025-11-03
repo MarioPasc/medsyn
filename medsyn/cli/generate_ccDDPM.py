@@ -47,6 +47,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def format_time_eta(seconds: float) -> str:
+    """
+    Format time in a human-readable way.
+
+    Args:
+        seconds: Time in seconds
+
+    Returns:
+        Formatted string like "2d 3h 15m", "5h 23m", "45m", or "30s"
+    """
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{minutes:.0f}m"
+
+    hours = minutes / 60
+    if hours < 24:
+        h = int(hours)
+        m = int((hours - h) * 60)
+        if m > 0:
+            return f"{h}h {m}m"
+        return f"{h}h"
+
+    days = hours / 24
+    d = int(days)
+    h = int((days - d) * 24)
+    if h > 0:
+        return f"{d}d {h}h"
+    return f"{d}d"
+
+
 def parse_generation_config(config_path: Path) -> tuple[dict[str, dict[int, int]], Path, Path]:
     """
     Parse the generation configuration from YAML.
@@ -272,9 +305,10 @@ def generate_with_cfg(
     guidance_scale: float,
     device: torch.device,
     debug: bool = False,
+    batch_size: int = 1,
 ) -> torch.Tensor:
     """
-    Generate a single image using classifier-free guidance.
+    Generate images using classifier-free guidance with optional batching.
 
     Args:
         model: The ccDDPM model
@@ -285,23 +319,25 @@ def generate_with_cfg(
         guidance_scale: CFG scale (1.0 = pure conditional, >1.0 = enhanced conditional)
         device: Device
         debug: Enable debug logging
+        batch_size: Number of images to generate in parallel (default: 1)
 
     Returns:
-        Generated image tensor [1, C, H, W] in range [-1, 1]
+        Generated image tensor [batch_size, C, H, W] in range [-1, 1]
     """
     # Start from pure noise
-    x_t = torch.randn((1, in_channels, image_size, image_size), device=device)
-    labels = torch.tensor([class_label], device=device, dtype=torch.long)
+    x_t = torch.randn((batch_size, in_channels, image_size, image_size), device=device)
+    labels = torch.tensor([class_label] * batch_size, device=device, dtype=torch.long)
 
     if debug:
-        logger.debug(f"Starting generation for class {class_label}")
+        logger.debug(f"Starting batch generation for class {class_label} (batch_size={batch_size})")
         logger.debug(f"  Initial noise: shape={x_t.shape}, range=[{x_t.min():.3f}, {x_t.max():.3f}]")
         logger.debug(f"  Scheduler timesteps: {len(scheduler.timesteps)} steps")
         logger.debug(f"  Guidance scale: {guidance_scale}")
 
     # Denoising loop
     for step_idx, t in enumerate(scheduler.timesteps):
-        t_batch = t.unsqueeze(0) if t.dim() == 0 else t
+        # Expand timestep to match batch size
+        t_batch = t.unsqueeze(0).expand(batch_size) if t.dim() == 0 else t.expand(batch_size)
 
         # Classifier-free guidance
         if guidance_scale != 1.0:
@@ -329,7 +365,7 @@ def generate_with_cfg(
             logger.debug(f"    After step: x_t_range=[{x_t.min():.3f}, {x_t.max():.3f}]")
 
     if debug:
-        logger.debug(f"  Final image: range=[{x_t.min():.3f}, {x_t.max():.3f}]")
+        logger.debug(f"  Final batch: range=[{x_t.min():.3f}, {x_t.max():.3f}]")
 
     return x_t
 
@@ -450,9 +486,12 @@ def generate_images_for_class(
     config: ProjectCfg,
     device: torch.device,
     create_visualization: bool = False,
+    total_classes: int | None = None,
+    current_class_idx: int | None = None,
+    batch_size: int = 4,
 ) -> tuple[dict[str, dict[str, Any]], np.ndarray, np.ndarray]:
     """
-    Generate synthetic images for a specific class.
+    Generate synthetic images for a specific class with batch generation support.
 
     Args:
         model: The ccDDPM model
@@ -463,6 +502,9 @@ def generate_images_for_class(
         config: Project configuration
         device: Device
         create_visualization: Whether to create a denoising visualization
+        total_classes: Total number of classes being generated (for progress tracking)
+        current_class_idx: Current class index (0-based, for progress tracking)
+        batch_size: Number of images to generate in parallel per batch (default: 4)
 
     Returns:
         Tuple of:
@@ -477,7 +519,13 @@ def generate_images_for_class(
     class_dir = output_dir / f"class_{class_id}"
     class_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Starting generation for class %d: %d samples to %s", class_id, num_samples, class_dir)
+    # Build class progress string
+    class_progress = ""
+    if total_classes is not None and current_class_idx is not None:
+        class_progress = f" [{current_class_idx + 1}/{total_classes}]"
+
+    logger.info("Starting generation for class %d%s: %d samples to %s",
+               class_id, class_progress, num_samples, class_dir)
 
     # Dictionary to store metadata for JSON index
     samples_metadata: dict[str, dict[str, Any]] = {}
@@ -486,7 +534,8 @@ def generate_images_for_class(
     images_list: list[np.ndarray] = []
     labels_list: list[int] = []
 
-    logger.debug("Generating %d images for class %d...", num_samples, class_id)
+    logger.debug("Generating %d images for class %d using batch_size=%d...",
+                num_samples, class_id, batch_size)
 
     # Randomly select one sample for visualization
     vis_sample_idx = np.random.randint(0, num_samples) if create_visualization else -1
@@ -497,18 +546,28 @@ def generate_images_for_class(
     start_time = time.time()
     last_log_time = start_time
 
-    for idx in range(num_samples):
-        # Generate unique ID
-        sample_uuid = uuid.uuid4().hex[:12]
-        filename = f"synth_{sample_uuid}_class{class_id}.png"
-        file_path = class_dir / filename
+    # Generate images in batches
+    images_generated = 0
+    batch_idx = 0
 
-        # Enable debug logging for first sample of first class
-        enable_debug = (class_id == 0 and idx == 0)
+    while images_generated < num_samples:
+        # Calculate current batch size (handle remaining samples smaller than batch_size)
+        current_batch_size = min(batch_size, num_samples - images_generated)
 
-        # Generate image (with or without visualization)
-        if idx == vis_sample_idx:
-            img, intermediate_steps = generate_with_denoising_steps(
+        # Check if we need to generate visualization for this batch
+        vis_in_batch = (vis_sample_idx >= images_generated and
+                       vis_sample_idx < images_generated + current_batch_size)
+
+        # Enable debug logging for first batch
+        enable_debug = (class_id == 0 and batch_idx == 0)
+
+        # Generate batch of images
+        if vis_in_batch:
+            # Generate visualization separately (single image)
+            local_vis_idx = vis_sample_idx - images_generated
+            sample_uuid = uuid.uuid4().hex[:12]
+
+            img_vis, intermediate_steps = generate_with_denoising_steps(
                 model=model,
                 scheduler=scheduler,
                 class_label=class_id,
@@ -522,9 +581,39 @@ def generate_images_for_class(
             # Create visualization
             vis_path = class_dir / f"denoising_process_class{class_id}_{sample_uuid}.png"
             create_denoising_visualization(intermediate_steps, class_id, vis_path)
-            logger.info("Created denoising visualization for class %d sample %d: %s", class_id, idx, vis_path)
+            logger.info("Created denoising visualization for class %d sample %d: %s",
+                       class_id, vis_sample_idx, vis_path)
+
+            # Generate rest of batch (excluding visualization sample)
+            if current_batch_size > 1:
+                batch_without_vis = current_batch_size - 1
+                imgs_batch = generate_with_cfg(
+                    model=model,
+                    scheduler=scheduler,
+                    class_label=class_id,
+                    image_size=tcfg.image_size,
+                    in_channels=tcfg.in_channels,
+                    guidance_scale=icfg.guidance_scale,
+                    device=device,
+                    debug=enable_debug,
+                    batch_size=batch_without_vis,
+                )
+                # Combine visualization and batch images
+                # Insert vis image at correct position
+                imgs_list = []
+                for i in range(current_batch_size):
+                    if i == local_vis_idx:
+                        imgs_list.append(img_vis)
+                    elif i < local_vis_idx:
+                        imgs_list.append(imgs_batch[i:i+1])
+                    else:
+                        imgs_list.append(imgs_batch[i-1:i])
+                imgs = torch.cat(imgs_list, dim=0)
+            else:
+                imgs = img_vis
         else:
-            img = generate_with_cfg(
+            # Generate full batch without visualization
+            imgs = generate_with_cfg(
                 model=model,
                 scheduler=scheduler,
                 class_label=class_id,
@@ -533,80 +622,88 @@ def generate_images_for_class(
                 guidance_scale=icfg.guidance_scale,
                 device=device,
                 debug=enable_debug,
+                batch_size=current_batch_size,
             )
 
-        # Convert from [-1, 1] to [0, 1] and save PNG
-        img_normalized = (img.clamp(-1, 1) + 1.0) / 2.0
-        save_image(img_normalized, file_path)
+        # Process and save each image in the batch
+        for batch_pos in range(current_batch_size):
+            idx = images_generated + batch_pos
+            img = imgs[batch_pos:batch_pos+1]  # Keep dims: [1, C, H, W]
 
-        # Log first sample of each class
-        if idx == 0:
-            logger.info(f"  First sample for class {class_id}: range=[{img.min():.3f}, {img.max():.3f}], " +
-                       f"normalized range=[{img_normalized.min():.3f}, {img_normalized.max():.3f}]")
+            # Generate unique ID and filename
+            sample_uuid = uuid.uuid4().hex[:12]
+            filename = f"synth_{sample_uuid}_class{class_id}.png"
+            file_path = class_dir / filename
+
+            # Convert from [-1, 1] to [0, 1] and save PNG
+            img_normalized = (img.clamp(-1, 1) + 1.0) / 2.0
+            save_image(img_normalized, file_path)
+
+            # Log first sample of each class
+            if idx == 0:
+                logger.info(f"  First sample for class {class_id}: range=[{img.min():.3f}, {img.max():.3f}], " +
+                           f"normalized range=[{img_normalized.min():.3f}, {img_normalized.max():.3f}]")
+
+            # Store metadata for JSON index
+            relative_path = file_path.relative_to(output_dir)
+            samples_metadata[str(idx)] = {
+                "image": str(relative_path),
+                "label": class_id,
+                "is_synth": True,
+                "uuid": sample_uuid,
+            }
+
+            # Convert to uint8 format [H, W, C] for NPZ storage
+            img_np = (img_normalized[0].permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+            images_list.append(img_np)
+            labels_list.append(class_id)
+
+        images_generated += current_batch_size
 
         # Calculate and log progress with ETA and GPU usage
         current_time = time.time()
         elapsed_time = current_time - start_time
 
-        # Log progress every 10% of samples or every 30 seconds, whichever comes first
-        log_interval = max(1, num_samples // 10)
+        # Log progress every 5% of samples or every 2 minutes (for multi-GPU execution)
+        log_interval = max(1, num_samples // 20)
         time_since_last_log = current_time - last_log_time
 
-        if (idx + 1) % log_interval == 0 or time_since_last_log >= 30 or idx == 0:
-            progress_pct = ((idx + 1) / num_samples) * 100
+        if images_generated % log_interval < current_batch_size or \
+           time_since_last_log >= 120 or batch_idx == 0:
+            progress_pct = (images_generated / num_samples) * 100
 
-            # Calculate ETA after at least 1 image is generated
-            if idx > 0:
-                avg_time_per_image = elapsed_time / (idx + 1)
-                remaining_images = num_samples - (idx + 1)
+            # Get GPU ID and memory usage if available
+            gpu_id = ""
+            gpu_mem = ""
+            if device.type == "cuda":
+                gpu_id = f"GPU{torch.cuda.current_device()}"
+                gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
+                gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
+                gpu_memory_peak = torch.cuda.max_memory_allocated(device) / 1e9
+                gpu_mem = f" | {gpu_id}: {gpu_memory_allocated:.2f}GB alloc, {gpu_memory_reserved:.2f}GB res, {gpu_memory_peak:.2f}GB peak"
+
+            # Calculate ETA after at least one batch
+            if batch_idx > 0:
+                avg_time_per_image = elapsed_time / images_generated
+                remaining_images = num_samples - images_generated
                 eta_seconds = avg_time_per_image * remaining_images
-                eta_minutes = eta_seconds / 60
-                eta_hours = eta_minutes / 60
+                eta_str = format_time_eta(eta_seconds)
+                elapsed_str = format_time_eta(elapsed_time)
 
-                if eta_hours >= 1:
-                    eta_str = f"{eta_hours:.1f}h"
-                elif eta_minutes >= 1:
-                    eta_str = f"{eta_minutes:.1f}m"
-                else:
-                    eta_str = f"{eta_seconds:.0f}s"
+                # Build class progress indicator
+                class_label = f"Class {class_id}{class_progress}"
 
-                # Get GPU memory usage if available
-                gpu_info = ""
-                if device.type == "cuda":
-                    gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
-                    gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
-                    gpu_info = f" | GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
-
-                logger.info(f"  Class {class_id}: {idx + 1}/{num_samples} ({progress_pct:.1f}%) | "
-                           f"Elapsed: {elapsed_time/60:.1f}m | ETA: {eta_str} | "
-                           f"Speed: {avg_time_per_image:.2f}s/img{gpu_info}")
+                logger.info(f"  [{gpu_id}] {class_label}: {images_generated}/{num_samples} ({progress_pct:.1f}%) | "
+                           f"Elapsed: {elapsed_str} | ETA: {eta_str} | "
+                           f"Speed: {avg_time_per_image:.2f}s/img | Batch: {batch_size}{gpu_mem}")
             else:
-                # First image - just log progress without ETA
-                gpu_info = ""
-                if device.type == "cuda":
-                    gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
-                    gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
-                    gpu_info = f" | GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
-
-                logger.info(f"  Class {class_id}: {idx + 1}/{num_samples} ({progress_pct:.1f}%){gpu_info}")
+                # First batch - just log progress without ETA
+                class_label = f"Class {class_id}{class_progress}"
+                logger.info(f"  [{gpu_id}] {class_label}: {images_generated}/{num_samples} ({progress_pct:.1f}%) | Batch: {batch_size}{gpu_mem}")
 
             last_log_time = current_time
 
-        # Store metadata for JSON index
-        # Use relative path from output_dir
-        relative_path = file_path.relative_to(output_dir)
-        samples_metadata[str(idx)] = {
-            "image": str(relative_path),
-            "label": class_id,
-            "is_synth": True,
-            "uuid": sample_uuid,
-        }
-
-        # Convert to uint8 format [H, W, C] for NPZ storage
-        # img_normalized is [1, C, H, W] in [0, 1]
-        img_np = (img_normalized[0].permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
-        images_list.append(img_np)
-        labels_list.append(class_id)
+        batch_idx += 1
 
     # Convert lists to arrays
     images_array = np.stack(images_list, axis=0)  # [N, H, W, C]
@@ -614,17 +711,20 @@ def generate_images_for_class(
 
     # Log completion summary with total time and final GPU usage
     total_time = time.time() - start_time
-    total_minutes = total_time / 60
     avg_time_per_image = total_time / num_samples
+    total_time_str = format_time_eta(total_time)
 
     gpu_info = ""
     if device.type == "cuda":
+        gpu_id = f"GPU{torch.cuda.current_device()}"
         gpu_memory_allocated = torch.cuda.memory_allocated(device) / 1e9
         gpu_memory_reserved = torch.cuda.memory_reserved(device) / 1e9
-        gpu_info = f" | Final GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
+        gpu_memory_peak = torch.cuda.max_memory_allocated(device) / 1e9
+        gpu_info = f" | {gpu_id}: {gpu_memory_allocated:.2f}GB alloc, {gpu_memory_peak:.2f}GB peak"
 
-    logger.info(f"Completed generation for class {class_id}: {len(images_array)} images generated in "
-               f"{total_minutes:.1f}m ({avg_time_per_image:.2f}s/img){gpu_info}")
+    class_label = f"class {class_id}{class_progress}"
+    logger.info(f"[{gpu_id if device.type == 'cuda' else 'CPU'}] Completed {class_label}: "
+               f"{len(images_array)} images in {total_time_str} ({avg_time_per_image:.2f}s/img){gpu_info}")
     logger.debug("  Images array shape: %s, dtype: %s", images_array.shape, images_array.dtype)
     logger.debug("  Labels array shape: %s, dtype: %s", labels_array.shape, labels_array.dtype)
 
@@ -804,6 +904,12 @@ The YAML config should contain a 'generate' section:
         default="synth",
         help="Split name for JSON index (default: synth)",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Number of images to generate in parallel per batch (default: 4, recommended: 2-8)",
+    )
     args = parser.parse_args()
 
     # Determine config path
@@ -854,6 +960,7 @@ The YAML config should contain a 'generate' section:
         print(f"  Device: {device}")
         print(f"  Guidance scale: {cfg.ccddpm.infer.guidance_scale}")
         print(f"  Inference steps: {cfg.ccddpm.infer.num_inference_steps}")
+        print(f"  Batch size: {args.batch_size} images per batch (GPU utilization optimization)")
         print(f"  Visualizations: {'Disabled' if args.no_visualizations else 'Enabled'}")
 
         print("\nSamples per split and class:")
@@ -895,10 +1002,14 @@ The YAML config should contain a 'generate' section:
             all_images: dict[int, np.ndarray] = {}
             all_labels: dict[int, np.ndarray] = {}
 
-            for class_id in sorted(class_to_samples.keys()):
+            sorted_class_ids = sorted(class_to_samples.keys())
+            total_classes = len(sorted_class_ids)
+
+            for class_idx, class_id in enumerate(sorted_class_ids):
                 num_samples = class_to_samples[class_id]
-                
-                logger.info("Generating class %d: %d samples", class_id, num_samples)
+
+                logger.info("Generating class %d [%d/%d]: %d samples",
+                           class_id, class_idx + 1, total_classes, num_samples)
 
                 samples_metadata, images_array, labels_array = generate_images_for_class(
                     model=model,
@@ -909,6 +1020,9 @@ The YAML config should contain a 'generate' section:
                     config=cfg,
                     device=device,
                     create_visualization=not args.no_visualizations,
+                    total_classes=total_classes,
+                    current_class_idx=class_idx,
+                    batch_size=args.batch_size,
                 )
 
                 all_samples[class_id] = samples_metadata
