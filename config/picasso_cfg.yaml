@@ -182,7 +182,7 @@ generate:
         5: 703
         6: 4999
         7: 3484
-        8: 0
+        8: 1
     val:
       classes:
         0: 391
@@ -193,7 +193,7 @@ generate:
         5: 78
         6: 555
         7: 387
-        8: 0
+        8: 1
 
 yolo:
   # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
