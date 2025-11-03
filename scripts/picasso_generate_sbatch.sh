@@ -16,10 +16,10 @@ set -euo pipefail
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 
 # Path to trained checkpoint (modify to point to your best.pt)
-CHECKPOINT_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM/ckpts/best.pt"
+CHECKPOINT_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel/ckpts/best.pt"
 
 # Where to store generated images
-RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_generated"
+RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel_generated"
 
 # ---------- LocalScratch layout ----------
 MYLOCALSCRATCH="${LOCALSCRATCH%/}/${USER}/${SLURM_JOB_ID}"

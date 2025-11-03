@@ -187,12 +187,12 @@ generate:
     8: 3
 
 yolo:
-  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
+  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist,
   # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
   # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
   # is preferred as the main source.
   model: yolo11n-cls.pt        # any Ultralytics classify model
-  project: /path/to/runs
+  project: /home/mpascual/research/medsyn/yolo_classifier/runs
   name: pathmnist_npz
   imgsz: 64
   epochs: 100

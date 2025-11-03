@@ -1,6 +1,5 @@
 from __future__ import annotations
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
-from ultralytics.utils.torch_utils import de_parallel
 from ultralytics.utils import RANK
 from medsyn.models.classifier.dataloaders import build_npz_loader
 
@@ -28,5 +27,6 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         super().set_model_attributes()
         # Attach transforms to model for export/val
         if RANK in (-1, 0):
-            m = de_parallel(self.model)
+            # Get the underlying model (unwrap DDP/DP if needed)
+            m = self.model.module if hasattr(self.model, 'module') else self.model
             m.args = self.args
