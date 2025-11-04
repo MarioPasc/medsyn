@@ -55,21 +55,17 @@ ccddpm:
         p: 0.5
       - name: VerticalFlip
         p: 0.5
-      - name: Rotate
-        p: 0.1
-        limit: 10  # Rotate by up to ±10 degrees
-        # Note: Using Rotate instead of SafeRotate to preserve image dimensions for batching
-
       # Intensity transforms (careful with medical imaging)
       - name: RandomBrightnessContrast
-        p: 0.3
+        p: 0.1
         brightness_limit: 0.2
         contrast_limit: 0.2
 
       # Noise augmentation
       - name: GaussNoise
-        p: 0.2
-        var_limit: [10.0, 50.0]
+        p: 0.1
+        std_range: [0.01, 0.05]
+
 
     # Statistics tracking (CSV output)
     statistics:
