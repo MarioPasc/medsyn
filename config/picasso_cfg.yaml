@@ -28,7 +28,7 @@ ccddpm:
   dist:
     enabled: true  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
-    num_gpus: auto  # 'auto' uses all available GPUs (set by torchrun)
+    num_gpus: 4  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
     grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
@@ -42,7 +42,7 @@ ccddpm:
   # Requires: pip install albumentations
   augmentation:
     enabled: true  # Set to true to enable augmentation
-    probability: 0.6  # Overall probability of applying augmentation to an image (0.0-1.0)
+    probability: 0.5  # Overall probability of applying augmentation to an image (0.0-1.0)
     preserve_range: true  # Clamp outputs to [-1, 1] after augmentation
     normalize_after_augment: true  # Re-normalize after augmentation
 
@@ -64,7 +64,7 @@ ccddpm:
       # Noise augmentation
       - name: GaussNoise
         p: 0.1
-        std_range: [0.1, 0.3]
+        std_range: [0.001, 0.007]
 
     # Statistics tracking (CSV output)
     statistics:
@@ -72,79 +72,18 @@ ccddpm:
       output_path: augmentation_stats.csv  # Relative to output_dir or absolute path
       save_every_n_epochs: 10  # 0 = save only at end, 1 = every epoch, etc.
 
-    # Preset configurations (uncomment to use):
-    # For light augmentation (safe for medical images):
-    # enabled: true
-    # probability: 0.5
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.3
-    #     limit: 10
-
-    # For moderate augmentation:
-    # enabled: true
-    # probability: 0.7
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.4
-    #     limit: 15
-    #   - name: RandomBrightnessContrast
-    #     p: 0.3
-    #     brightness_limit: 0.2
-    #     contrast_limit: 0.2
-    #   - name: GaussNoise
-    #     p: 0.2
-    #     var_limit: [10.0, 50.0]
-
-    # For aggressive augmentation (use with caution):
-    # enabled: true
-    # probability: 0.8
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.5
-    #     limit: 20
-    #   - name: ShiftScaleRotate
-    #     p: 0.3
-    #     shift_limit: 0.0625
-    #     scale_limit: 0.1
-    #     rotate_limit: 15
-    #   - name: RandomBrightnessContrast
-    #     p: 0.4
-    #     brightness_limit: 0.3
-    #     contrast_limit: 0.3
-    #   - name: GaussNoise
-    #     p: 0.3
-    #     var_limit: [10.0, 50.0]
-    #   - name: ElasticTransform
-    #     p: 0.2
-    #     alpha: 1
-    #     sigma: 50
-    #     alpha_affine: 50
-
   train:
     image_size: 64
     in_channels: 3
     class_embed_dim: 32  
     num_classes: 9
-    batch_size: 4
+    batch_size: 16
     epochs: 1000
     mixed_precision: true
     grad_clip_norm: 10.0       # FIXED: Was 1.0 (too aggressive), now 10.0 to allow learning
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
     ema_use: true
-    ema_decay: 0.999
+    ema_decay: 0.9995
     use_min_snr: true          # ENABLED: Min-SNR loss weighting stabilizes training
     min_snr_gamma: 5.0         # Standard value for Min-SNR
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
@@ -152,7 +91,7 @@ ccddpm:
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
-    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
+    lr: 8.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
     wd: 0.0
   sched:
     num_train_timesteps: 1000
@@ -200,7 +139,7 @@ yolo:
   # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
   # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
   # is preferred as the main source.
-  model: yolo11n-cls.pt        # any Ultralytics classify model
+  model: yolo8n-cls.pt        # any Ultralytics classify model
   project: /path/to/runs
   name: pathmnist_npz
   imgsz: 64
