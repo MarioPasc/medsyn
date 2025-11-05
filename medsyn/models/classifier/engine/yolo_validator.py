@@ -91,14 +91,32 @@ class MedsynClassificationValidator(ClassificationValidator):
                 with open(metrics_file, 'w') as f:
                     json.dump(per_class_auc, f, indent=2)
 
-                logger.info(f"Per-class AUC metrics saved to {metrics_file}")
-                logger.info(f"Macro-average AUC: {per_class_auc.get('macro_avg_auc', 'N/A')}")
+                # Check if we should print detailed per-class metrics (every 10 epochs)
+                current_epoch = getattr(self.trainer, 'epoch', -1) if hasattr(self, 'trainer') else -1
+                print_detailed = (current_epoch + 1) % 10 == 0 or current_epoch == -1
 
-                # Log individual class AUCs
-                for class_idx in range(num_classes):
-                    auc_val = per_class_auc.get(f"class_{class_idx}")
-                    if auc_val is not None:
-                        logger.info(f"  Class {class_idx} AUC: {auc_val:.4f}")
+                if print_detailed:
+                    logger.info("="*80)
+                    logger.info(f"Per-class ROC-AUC (Epoch {current_epoch + 1})")
+                    logger.info("="*80)
+                    logger.info(f"Macro-average AUC: {per_class_auc.get('macro_avg_auc', 'N/A'):.4f}"
+                               if per_class_auc.get('macro_avg_auc') is not None
+                               else f"Macro-average AUC: N/A")
+                    logger.info("-"*80)
+
+                    # Print individual class AUCs in a formatted table
+                    for class_idx in range(num_classes):
+                        auc_val = per_class_auc.get(f"class_{class_idx}")
+                        if auc_val is not None:
+                            logger.info(f"  Class {class_idx:2d} AUC: {auc_val:.4f}")
+                        else:
+                            logger.info(f"  Class {class_idx:2d} AUC: N/A")
+                    logger.info("="*80)
+                else:
+                    # For non-milestone epochs, just log macro-average
+                    logger.info(f"Macro-average AUC: {per_class_auc.get('macro_avg_auc', 'N/A'):.4f}"
+                               if per_class_auc.get('macro_avg_auc') is not None
+                               else f"Macro-average AUC: N/A")
 
             except Exception as e:
                 logger.error(f"Failed to compute per-class AUC: {e}")

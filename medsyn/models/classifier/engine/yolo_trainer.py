@@ -1,10 +1,39 @@
 from __future__ import annotations
+import numpy as np
+from pathlib import Path
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
 from ultralytics.utils import RANK
 from medsyn.models.classifier.dataloaders import build_npz_loader
 
+
+class DummyDataset:
+    """Dummy dataset to satisfy YOLO's initialization requirements."""
+    def __init__(self, nc: int = 9):
+        self.nc = nc  # number of classes
+        self.names = {i: f"class_{i}" for i in range(nc)}  # class names
+
+
 class MedsynClassificationTrainer(ClassificationTrainer):
     """Ultralytics trainer that feeds from NPZ instead of folders."""
+
+    def get_dataset(self):
+        """Override to provide a dummy dataset since we use NPZ dataloaders."""
+        # Extract number of classes from NPZ file if available
+        nc = 9  # Default to 9 classes (PathMNIST)
+
+        # Check if medsyn_npz_path is available (it might not be set yet during init)
+        if hasattr(self.args, 'medsyn_npz_path'):
+            npz_path = Path(self.args.medsyn_npz_path)
+            if npz_path.exists():
+                try:
+                    z = np.load(npz_path)
+                    # Get number of unique classes from training labels
+                    train_labels = z["train_labels"].reshape(-1)
+                    nc = int(np.max(train_labels)) + 1
+                except Exception as e:
+                    print(f"Warning: Could not load NPZ file for class count: {e}")
+
+        return DummyDataset(nc=nc)
 
     def build_dataset(self, img_path: str, mode: str = "train", batch=None):
         # Not used; training/validation will call our get_dataloader

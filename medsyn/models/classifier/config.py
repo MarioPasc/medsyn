@@ -50,6 +50,7 @@ def load_cfg(medsyn_cfg: str | Path, hparams_yaml: str | Path) -> MedsynYOLOCfg:
     o.update({
         "task": "classify",
         "model": cfg.model,
+        "data": "dummy",  # Dummy value to satisfy YOLO's argument parser
         "imgsz": cfg.imgsz,
         "epochs": cfg.epochs,
         "batch": cfg.batch,
