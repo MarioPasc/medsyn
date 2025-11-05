@@ -51,8 +51,9 @@ def load_cfg(medsyn_cfg: str | Path, hparams_yaml: str | Path) -> MedsynYOLOCfg:
     o: Dict[str, Any] = dict(hp or {})
     o.update({
         "task": "classify",
+        "mode": "train",
         "model": cfg.model,
-        # Note: We do NOT set "data" here - our custom get_dataset() handles this
+        "data": "__npz__",  # Sentinel so args.data is never None; custom get_dataset() handles actual data
         "imgsz": cfg.imgsz,
         "epochs": cfg.epochs,
         "batch": cfg.batch,

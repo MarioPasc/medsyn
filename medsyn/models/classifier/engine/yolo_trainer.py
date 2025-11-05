@@ -1,26 +1,25 @@
 from __future__ import annotations
 from pathlib import Path
+from typing import Dict, Tuple
 import logging
 import numpy as np
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
-from medsyn.models.classifier.dataloaders import build_npz_loader
 
 LOG = logging.getLogger(__name__)
 
 
-def _infer_npz_meta(npz_path: str | Path) -> tuple[int, int, dict[int, str]]:
+def _infer_npz_meta(npz_path: str | Path | None) -> Tuple[int, int, Dict[int, str]]:
     """
-    Infer dataset meta from an NPZ.
-    Returns (nc, channels, names).
-    - nc: max(label)+1 if labels present, else 1
-    - channels: last-dim of images if 4D, else 1 for (N,H,W)
-    - names: {i: f"class_{i}"} if not found elsewhere
+    Infer (nc, channels, names) from an NPZ file.
+    nc: max(label)+1 if labels present, else 1
+    channels: last dim of images if 4D, else 1 for (N,H,W)
+    names: {i: f"class_{i}"} by default
     """
     nc, channels = 1, 3
-    names: dict[int, str] = {}
+    names: Dict[int, str] = {}
     try:
-        z = np.load(npz_path) if npz_path else None
-        if z is not None:
+        if npz_path:
+            z = np.load(npz_path)
             # infer classes
             for k in ("train_labels", "labels", "y_train"):
                 if k in z:
@@ -31,10 +30,7 @@ def _infer_npz_meta(npz_path: str | Path) -> tuple[int, int, dict[int, str]]:
             for k in ("train_images", "images", "x_train"):
                 if k in z:
                     x = z[k]
-                    if x.ndim == 4:
-                        channels = int(x.shape[-1])
-                    elif x.ndim == 3:
-                        channels = 1
+                    channels = int(x.shape[-1]) if x.ndim == 4 else 1
                     break
     except Exception as e:
         LOG.warning("NPZ meta inference failed: %s", e)
@@ -44,36 +40,35 @@ def _infer_npz_meta(npz_path: str | Path) -> tuple[int, int, dict[int, str]]:
 
 
 class MedsynClassificationTrainer(ClassificationTrainer):
-    """Ultralytics trainer that consumes an NPZ via a custom DataLoader."""
+    """
+    Ultralytics trainer that consumes NPZ via a custom DataLoader.
+    It bypasses the default path-based dataset checks.
+    """
 
-    def setup_model(self):
+    def get_dataset(self) -> dict:
         """
-        Ensure self.data is a dict with required keys BEFORE parent setup.
-        Parent will call get_model() which uses self.data['nc'] and ['channels'],
-        then reshape outputs and set model.names from self.data['names'].
+        Return the minimal dataset dict Ultralytics requires for classification.
+        This overrides BaseTrainer.get_dataset(), which otherwise calls
+        check_cls_dataset(self.args.data) and expects a filesystem path.
         """
         npz_path = getattr(self, "medsyn_npz_path", None)
-        training_images = getattr(self, "medsyn_training_images", "PathMNIST")
         nc, channels, names = _infer_npz_meta(npz_path)
 
-        # Optional: override names if you pass them in overrides as a list
+        # If user provided names in YAML and length matches, honor them
         try:
             if isinstance(self.args.names, (list, tuple)) and len(self.args.names) == nc:
                 names = {i: str(self.args.names[i]) for i in range(nc)}
         except AttributeError:
             pass
 
-        # Critical: self.data MUST be a dict with these keys
-        self.data = {"nc": nc, "channels": channels, "names": names, "training_images": training_images}
-
-        # Proceed with normal model setup (will read self.data)
-        return super().setup_model()
+        return {"nc": nc, "channels": channels, "names": names}
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
         """
-        Return your NPZ-backed DataLoader. Unchanged from your previous version,
-        but now it can also read self.data['channels'] if you need augment rules.
+        Build the NPZ-backed DataLoader. Ultralytics still calls this with a dataset_path,
+        which we ignore because our data comes from NPZ.
         """
+        from medsyn.models.classifier.dataloaders import build_npz_loader
         return build_npz_loader(
             npz_path=getattr(self, "medsyn_npz_path", None),
             split={"train": "train", "val": "val", "test": "test"}[mode],
@@ -84,6 +79,8 @@ class MedsynClassificationTrainer(ClassificationTrainer):
             augment=(mode == "train"),
         )
 
-    def set_model_attributes(self):
-        """Keep parent behavior: will use self.data['names']."""
+    def set_model_attributes(self) -> None:
+        """
+        Keep parent behavior; it sets model.names from self.data['names'].
+        """
         super().set_model_attributes()
