@@ -17,22 +17,17 @@ class MedsynClassificationTrainer(ClassificationTrainer):
     """Ultralytics trainer that feeds from NPZ instead of folders."""
 
     def get_dataset(self):
-        """Override to provide a dummy dataset since we use NPZ dataloaders."""
-        # Extract number of classes from NPZ file if available
-        nc = 9  # Default to 9 classes (PathMNIST)
-
-        # Check if medsyn_npz_path is available (it might not be set yet during init)
-        if hasattr(self.args, 'medsyn_npz_path'):
-            npz_path = Path(self.args.medsyn_npz_path)
-            if npz_path.exists():
-                try:
-                    z = np.load(npz_path)
-                    # Get number of unique classes from training labels
-                    train_labels = z["train_labels"].reshape(-1)
-                    nc = int(np.max(train_labels)) + 1
-                except Exception as e:
-                    print(f"Warning: Could not load NPZ file for class count: {e}")
-
+        """Provide a minimal dataset object; infer nc from NPZ if present."""
+        nc = 9
+        npz_str = getattr(self, "medsyn_npz_path", "")
+        npz_path = Path(npz_str) if npz_str else None
+        if npz_path and npz_path.exists():
+            try:
+                z = np.load(npz_path)
+                train_labels = z["train_labels"].reshape(-1)
+                nc = int(np.max(train_labels)) + 1
+            except Exception as e:
+                print(f"Warning: Could not load NPZ for class count: {e}")
         return DummyDataset(nc=nc)
 
     def build_dataset(self, img_path: str, mode: str = "train", batch=None):
@@ -40,15 +35,18 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         return super().build_dataset(img_path, mode, batch)
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
-        args = self.args
+        imgsz = self.args.imgsz
+        workers = self.args.workers
+        npz_path = getattr(self, "medsyn_npz_path", None)
+        training_images = getattr(self, "medsyn_training_images", "PathMNIST")
         return build_npz_loader(
-            npz_path=args.medsyn_npz_path,
-            split={"train":"train","val":"val","test":"test"}[mode],
-            imgsz=args.imgsz,
+            npz_path=npz_path,
+            split={"train": "train", "val": "val", "test": "test"}[mode],
+            imgsz=imgsz,
             batch=batch_size,
-            workers=args.workers,
-            training_images=args.medsyn_training_images,
-            augment=(mode=="train"),
+            workers=workers,
+            training_images=training_images,
+            augment=(mode == "train"),
         )
 
     def set_model_attributes(self):

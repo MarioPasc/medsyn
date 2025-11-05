@@ -15,16 +15,21 @@ class MedsynClassificationValidator(ClassificationValidator):
         super().__init__(*args, **kwargs)
         self.all_targets = []
         self.all_probs = []
+        # These will be set by classify.py after initialization
+        self.medsyn_npz_path = None
+        self.medsyn_training_images = "PathMNIST"
 
     def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="val"):
-        args = self.args or self.trainer.args
+        args = self.args if self.args else self.trainer.args
+        imgsz = args.imgsz
+        workers = args.workers
         return build_npz_loader(
-            npz_path=args.medsyn_npz_path,
-            split={"train":"train","val":"val","test":"test"}[mode],
-            imgsz=args.imgsz,
+            npz_path=self.medsyn_npz_path,
+            split={"train": "train", "val": "val", "test": "test"}[mode],
+            imgsz=imgsz,
             batch=batch_size,
-            workers=args.workers,
-            training_images=args.medsyn_training_images,
+            workers=workers,
+            training_images=self.medsyn_training_images,
             augment=False,
         )
 

@@ -115,11 +115,15 @@ def main():
         # Initialize trainer with only valid YOLO parameters
         trainer: ClassificationTrainer = MedsynClassificationTrainer(overrides=cfg.overrides)
 
-        # Add custom medsyn parameters to trainer args after initialization
-        for key, value in cfg.medsyn_params.items():
-            setattr(trainer.args, key, value)
+        # Attach custom MedSyn runtime parameters OUTSIDE of YOLO args
+        # (YOLO revalidates args and rejects unknown keys)
+        trainer.medsyn_npz_path = str(cfg.npz_path)
+        trainer.medsyn_training_images = cfg.training_images
 
+        # Validator
         trainer.validator = MedsynClassificationValidator(args=trainer.args)
+        trainer.validator.medsyn_npz_path = str(cfg.npz_path)
+        trainer.validator.medsyn_training_images = cfg.training_images
 
         if args.val_only:
             logger.info("Starting validation...")
