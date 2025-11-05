@@ -41,6 +41,11 @@ class MedsynClassificationTrainer(ClassificationTrainer):
                  npz_path: str | Path | None = None, training_images: str = "PathMNIST"):
         self.medsyn_npz_path = str(npz_path) if npz_path is not None else None
         self.medsyn_training_images = training_images
+
+        # Ensure cfg is a dict (Ultralytics' get_cfg expects dict, not None)
+        if cfg is None:
+            cfg = {}
+
         # Make sure 'data' arg is a harmless sentinel to avoid None pretty-printing
         if overrides is None:
             overrides = {}
