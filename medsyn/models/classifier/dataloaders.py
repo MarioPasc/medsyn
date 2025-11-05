@@ -43,7 +43,7 @@ class NpzClassificationDataset(Dataset):
         self.X = X[keep]
         self.y = y[keep]
         # Ultralytics transforms for classify
-        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD, hflip=0.5 if self.augment else 0.0)
+        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD)
 
     def __len__(self) -> int:
         return int(self.y.shape[0])
