@@ -82,7 +82,7 @@ multi_scale: False # (bool) Whether to use multiscale during training
 overlap_mask: True # (bool) merge object masks into a single image mask during training (segment train only)
 mask_ratio: 4 # (int) mask downsample ratio (segment train only)
 # Classification
-dropout: 0.0 # (float) use dropout regularization (classify train only)
+dropout: 0.05 # (float) use dropout regularization (classify train only)
 
 # Val/Test settings ----------------------------------------------------------------------------------------------------
 val: True # (bool) validate/test during training
@@ -104,7 +104,7 @@ stream_buffer: False # (bool) buffer all streaming frames (True) or return the m
 visualize: False # (bool) visualize model features (predict) or visualize TP, FP, FN (val)
 augment: False # (bool) apply image augmentation to prediction sources
 agnostic_nms: False # (bool) class-agnostic NMS
-classes: # (int | list[int], optional) filter results by class, i.e. classes=0, or classes=[0,2,3]
+classes: [0,1,2,3,4,5,6,7,8] # (int | list[int], optional) filter results by class, i.e. classes=0, or classes=[0,2,3]
 retina_masks: False # (bool) use high-resolution segmentation masks
 embed: # (list[int], optional) return feature vectors/embeddings from given layers
 

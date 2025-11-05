@@ -14,17 +14,19 @@ from .utils import select_indices_by_training_images
 
 Split = Literal["train","val","test"]
 
-def _to_pil_rgb(img: np.ndarray) -> Image.Image:
-    # Accept HWC or CHW, 1 or 3 channels; output RGB PIL
-    if img.ndim != 3:
-        raise ValueError(f"Expected 3D image, got {img.shape}")
-    if img.shape[0] in (1, 3) and img.shape[0] <= img.shape[-1]:
-        img = np.transpose(img, (1, 2, 0))  # CHW->HWC
-    if img.shape[-1] == 1:
-        img = np.repeat(img, 3, axis=-1)
-    if img.dtype != np.uint8:
-        img = img.astype(np.uint8)
-    return Image.fromarray(img, mode="RGB")
+def _to_pil_rgb(x: np.ndarray) -> Image.Image:
+    """
+    Convert HxW or HxWxC numpy array in [0,255] or [0,1] to PIL RGB.
+    Grayscale will be stacked to 3 channels for compatibility with YOLO backbones.
+    """
+    if x.dtype != np.uint8:
+        x = np.clip(x, 0, 1) if x.max() <= 1.0 else np.clip(x, 0, 255)
+        x = (x * 255).astype(np.uint8) if x.max() <= 1 else x.astype(np.uint8)
+    if x.ndim == 2:
+        x = np.stack([x, x, x], axis=-1)
+    if x.shape[-1] == 1:
+        x = np.repeat(x, 3, axis=-1)
+    return Image.fromarray(x[:, :, :3], mode="RGB")
 
 @dataclass
 class NpzClassificationDataset(Dataset):
@@ -39,11 +41,27 @@ class NpzClassificationDataset(Dataset):
         X = z[f"{self.split}_images"]
         y = z[f"{self.split}_labels"].reshape(-1).astype(np.int64)
         syn = z.get(f"{self.split}_is_synth", np.zeros_like(y, dtype=np.uint8))
+
+        # Apply your selection mask first
         keep = select_indices_by_training_images(syn, self.training_images)
-        self.X = X[keep]
-        self.y = y[keep]
-        # Ultralytics transforms for classify
-        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD)
+        X = X[keep]
+        y = y[keep]
+
+        # Reindex to contiguous 0..K-1 to satisfy CrossEntropyLoss
+        unique_ids = np.unique(y)
+        id2new = {oid: i for i, oid in enumerate(unique_ids.tolist())}
+        y = np.vectorize(id2new.__getitem__)(y).astype(np.int64)
+        self.num_classes = len(unique_ids)   # for optional checks
+
+        # Basic sanity checks
+        if y.min() < 0:
+            raise ValueError(f"Negative labels found after mapping: min={y.min()}")
+        if y.max() >= self.num_classes:
+            raise ValueError(f"Label out of range after mapping: max={y.max()} >= {self.num_classes}")
+
+        self.X, self.y = X, y
+        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD,
+                                      hflip=0.5 if self.augment else 0.0)
 
     def __len__(self) -> int:
         return int(self.y.shape[0])

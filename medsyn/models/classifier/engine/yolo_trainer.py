@@ -3,40 +3,31 @@ from pathlib import Path
 from typing import Dict, Tuple
 import logging
 import numpy as np
+import torch
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
+from medsyn.models.classifier.utils import select_indices_by_training_images
 
 LOG = logging.getLogger(__name__)
 
 
-def _infer_npz_meta(npz_path: str | Path | None) -> Tuple[int, int, Dict[int, str]]:
+def _infer_meta_from_train(npz_path: str | Path, training_images: str) -> Tuple[int, int]:
     """
-    Infer (nc, channels, names) from an NPZ file.
-    nc: max(label)+1 if labels present, else 1
-    channels: last dim of images if 4D, else 1 for (N,H,W)
-    names: {i: f"class_{i}"} by default
+    Compute (nc, channels) from the TRAIN split using the same filtering.
     """
-    nc, channels = 1, 3
-    names: Dict[int, str] = {}
-    try:
-        if npz_path:
-            z = np.load(npz_path)
-            # infer classes
-            for k in ("train_labels", "labels", "y_train"):
-                if k in z:
-                    y = z[k].reshape(-1)
-                    nc = int(y.max()) + 1
-                    break
-            # infer channels
-            for k in ("train_images", "images", "x_train"):
-                if k in z:
-                    x = z[k]
-                    channels = int(x.shape[-1]) if x.ndim == 4 else 1
-                    break
-    except Exception as e:
-        LOG.warning("NPZ meta inference failed: %s", e)
-    if not names:
-        names = {i: f"class_{i}" for i in range(nc)}
-    return nc, channels, names
+    z = np.load(npz_path)
+    y = z["train_labels"].reshape(-1).astype(np.int64)
+    syn = z.get("train_is_synth", np.zeros_like(y, dtype=np.uint8))
+    keep = select_indices_by_training_images(syn, training_images)
+    y = y[keep]
+    # Reindex like the dataset would do
+    unique_ids = np.unique(y)
+    nc = int(unique_ids.size)
+
+    X = z["train_images"][keep]
+    channels = X.shape[-1] if X.ndim == 4 else 1
+    if channels == 1:
+        channels = 3  # we stack to RGB in the dataset
+    return nc, channels
 
 
 class MedsynClassificationTrainer(ClassificationTrainer):
@@ -47,32 +38,22 @@ class MedsynClassificationTrainer(ClassificationTrainer):
 
     def get_dataset(self) -> dict:
         """
-        Return the minimal dataset dict Ultralytics expects for classification, plus
-        split keys so BaseTrainer._setup_train can index ['train'/'val'/'test'].
-
-        We pass a sentinel string for each split because our custom dataloader
-        reads from NPZ and ignores the path argument.
+        Return dict with required keys plus split placeholders so Ultralytics' base loop works.
         """
         npz_path = getattr(self, "medsyn_npz_path", None)
-        nc, channels, names = _infer_npz_meta(npz_path)
+        training_images = getattr(self, "medsyn_training_images", "PathMNIST")
+        nc, channels = _infer_meta_from_train(npz_path, training_images)
 
-        # Optional override from YAML if provided and length matches
+        names = {i: f"class_{i}" for i in range(nc)}  # can be overridden by args.names if provided and length==nc
         try:
             if isinstance(self.args.names, (list, tuple)) and len(self.args.names) == nc:
                 names = {i: str(self.args.names[i]) for i in range(nc)}
         except AttributeError:
             pass
 
-        sentinel = "__npz__"  # harmless placeholder for logs and validators
-        return {
-            "nc": nc,
-            "channels": channels,
-            "names": names,
-            "train": sentinel,
-            "val": sentinel,
-            "test": sentinel,
-            "path": sentinel,  # some tools log/pretty-print this
-        }
+        sentinel = "__npz__"
+        return {"nc": nc, "channels": channels, "names": names,
+                "train": sentinel, "val": sentinel, "test": sentinel, "path": sentinel}
 
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
@@ -96,3 +77,17 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         Keep parent behavior; it sets model.names from self.data['names'].
         """
         super().set_model_attributes()
+
+    def train_step(self, batch):
+        """
+        Runtime guard to check batch labels before training step.
+        """
+        # batch["cls"] must be Long in [0, nc-1]
+        y = batch["cls"]
+        if y.dtype != torch.long:
+            raise TypeError(f"Targets dtype must be torch.long, got {y.dtype}")
+        nc = self.data["nc"]
+        if (y < 0).any() or (y >= nc).any():
+            bad = y[(y < 0) | (y >= nc)]
+            raise ValueError(f"Found out-of-range labels in batch: min={int(y.min())}, max={int(y.max())}, nc={nc}; bad={bad[:8].tolist()}")
+        return super().train_step(batch)
