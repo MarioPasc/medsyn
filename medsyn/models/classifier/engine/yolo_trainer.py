@@ -5,9 +5,36 @@ import logging
 import numpy as np
 import torch
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
+from ultralytics.cfg import get_cfg  # used only to discover valid keys
 from medsyn.models.classifier.utils import select_indices_by_training_images
 
 LOG = logging.getLogger(__name__)
+
+
+def _split_overrides_for_yolo(overrides_in: Dict) -> tuple[Dict, Dict]:
+    """
+    Return (yolo_overrides, custom_overrides).
+    YOLO set = keys present in Ultralytics default cfg for task=classify.
+    """
+    # Discover allowed keys from Ultralytics defaults
+    default_ns = get_cfg(None, {"task": "classify"})  # merged defaults
+    allowed = set(vars(default_ns).keys())
+
+    # Some keys look CLI-like and can cause rejections; drop them proactively
+    forbidden = {"mode"}  # 'mode' is positional in CLI, not a runtime arg
+
+    yolo, custom = {}, {}
+    for k, v in (overrides_in or {}).items():
+        if k in forbidden:
+            custom[k] = v
+        elif k in allowed:
+            yolo[k] = v
+        else:
+            custom[k] = v
+    # Ensure required sentinel keys exist
+    yolo.setdefault("task", "classify")
+    yolo.setdefault("data", "__npz__")
+    return yolo, custom
 
 
 def _infer_meta_from_train(npz_path: str | Path, training_images: str) -> Tuple[int, int]:
@@ -42,17 +69,10 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         self.medsyn_npz_path = str(npz_path) if npz_path is not None else None
         self.medsyn_training_images = training_images
 
-        # Ensure cfg is a dict (Ultralytics' get_cfg expects dict, not None)
-        if cfg is None:
-            cfg = {}
+        # Split overrides: pass only YOLO-known keys upstream
+        yolo_overrides, self.medsyn_cfg = _split_overrides_for_yolo(overrides)
 
-        # Make sure 'data' arg is a harmless sentinel to avoid None pretty-printing
-        if overrides is None:
-            overrides = {}
-        overrides.setdefault("task", "classify")
-        overrides.setdefault("mode", "train")
-        overrides.setdefault("data", "__npz__")
-        super().__init__(cfg, overrides, _callbacks)
+        super().__init__(cfg, yolo_overrides, _callbacks)
 
     def get_dataset(self) -> dict:
         """

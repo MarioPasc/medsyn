@@ -115,6 +115,7 @@ def main():
 
         # Initialize trainer with NPZ parameters at construction
         # This ensures medsyn_npz_path is available during BaseTrainer.__init__
+        # The trainer will split overrides into YOLO-compatible and custom config
         trainer: ClassificationTrainer = MedsynClassificationTrainer(
             overrides=cfg.overrides,
             npz_path=str(cfg.npz_path),
@@ -122,6 +123,7 @@ def main():
         )
 
         # Validator
+        # Do NOT add custom keys to trainer.args; use trainer.medsyn_cfg if needed
         trainer.validator = MedsynClassificationValidator(args=trainer.args)
         trainer.validator.medsyn_npz_path = str(cfg.npz_path)
         trainer.validator.medsyn_training_images = cfg.training_images
