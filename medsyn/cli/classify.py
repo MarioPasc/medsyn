@@ -81,6 +81,7 @@ def main():
     # Override device if specified
     if args.device:
         cfg.overrides["device"] = args.device
+    cfg.overrides.setdefault("data", "__npz__")
 
     # Setup logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
