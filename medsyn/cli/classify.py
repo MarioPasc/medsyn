@@ -70,8 +70,8 @@ def main():
             "synth": "synth"
         }
         cfg.training_images = mode_map[args.training_mode]
-        # Update the override (will be separated later)
-        cfg.overrides["medsyn_training_images"] = cfg.training_images
+        # Update the custom medsyn parameter
+        cfg.medsyn_params["medsyn_training_images"] = cfg.training_images
 
     # Override name if specified
     if args.name:
@@ -112,9 +112,13 @@ def main():
         # Trainer with NPZ-backed dataloaders
         logger.info("Initializing trainer...")
 
-        # Initialize trainer with all parameters (including custom medsyn ones)
-        # YOLO's trainer will accept custom parameters as attributes
+        # Initialize trainer with only valid YOLO parameters
         trainer: ClassificationTrainer = MedsynClassificationTrainer(overrides=cfg.overrides)
+
+        # Add custom medsyn parameters to trainer args after initialization
+        for key, value in cfg.medsyn_params.items():
+            setattr(trainer.args, key, value)
+
         trainer.validator = MedsynClassificationValidator(args=trainer.args)
 
         if args.val_only:

@@ -15,7 +15,8 @@ class MedsynYOLOCfg:
     batch: int
     workers: int
     training_images: str  # PathMNIST | PathMNIST_and_synth | synth
-    overrides: Dict[str, Any]  # full hyperparameters
+    overrides: Dict[str, Any]  # YOLO hyperparameters only
+    medsyn_params: Dict[str, Any]  # Custom medsyn parameters
 
 def _exp(s: str | None) -> str | None:
     import os
@@ -42,24 +43,29 @@ def load_cfg(medsyn_cfg: str | Path, hparams_yaml: str | Path) -> MedsynYOLOCfg:
         batch=int(y.get("batch", 128)),
         workers=int(y.get("workers", 8)),
         training_images=str(y.get("training_images", "PathMNIST")),
-        overrides={}
+        overrides={},
+        medsyn_params={}
     )
 
-    # Build Ultralytics overrides
+    # Build Ultralytics overrides (ONLY valid YOLO parameters)
     o: Dict[str, Any] = dict(hp or {})
     o.update({
         "task": "classify",
         "model": cfg.model,
-        "data": "dummy",  # Dummy value to satisfy YOLO's argument parser
+        # Note: We do NOT set "data" here - our custom get_dataset() handles this
         "imgsz": cfg.imgsz,
         "epochs": cfg.epochs,
         "batch": cfg.batch,
         "workers": cfg.workers,
         "project": str(cfg.project),
         "name": cfg.name,
-        # custom keys consumed by our trainer/validator
-        "medsyn_npz_path": str(cfg.npz_path),
-        "medsyn_training_images": cfg.training_images,
     })
     cfg.overrides = o
+
+    # Store custom medsyn parameters separately
+    cfg.medsyn_params = {
+        "medsyn_npz_path": str(cfg.npz_path),
+        "medsyn_training_images": cfg.training_images,
+    }
+
     return cfg
