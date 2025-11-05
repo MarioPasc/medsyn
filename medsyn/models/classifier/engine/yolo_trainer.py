@@ -32,28 +32,40 @@ def _infer_meta_from_train(npz_path: str | Path, training_images: str) -> Tuple[
 
 class MedsynClassificationTrainer(ClassificationTrainer):
     """
-    Ultralytics trainer that consumes NPZ via a custom DataLoader.
-    It bypasses the default path-based dataset checks.
+    Ultralytics trainer that consumes an NPZ via a custom DataLoader.
+    We pass NPZ parameters at construction so they exist during BaseTrainer.__init__.
     """
+
+    # Accept NPZ args BEFORE calling super().__init__()
+    def __init__(self, cfg=None, overrides: dict | None = None, _callbacks=None,
+                 npz_path: str | Path | None = None, training_images: str = "PathMNIST"):
+        self.medsyn_npz_path = str(npz_path) if npz_path is not None else None
+        self.medsyn_training_images = training_images
+        # Make sure 'data' arg is a harmless sentinel to avoid None pretty-printing
+        if overrides is None:
+            overrides = {}
+        overrides.setdefault("task", "classify")
+        overrides.setdefault("mode", "train")
+        overrides.setdefault("data", "__npz__")
+        super().__init__(cfg, overrides, _callbacks)
 
     def get_dataset(self) -> dict:
         """
         Return dict with required keys plus split placeholders so Ultralytics' base loop works.
         """
-        npz_path = getattr(self, "medsyn_npz_path", None)
-        training_images = getattr(self, "medsyn_training_images", "PathMNIST")
-        nc, channels = _infer_meta_from_train(npz_path, training_images)
+        if not self.medsyn_npz_path:
+            raise ValueError("NPZ path is not set; pass npz_path=... to MedsynClassificationTrainer(...)")
+        nc, channels = _infer_meta_from_train(self.medsyn_npz_path, self.medsyn_training_images)
 
-        names = {i: f"class_{i}" for i in range(nc)}  # can be overridden by args.names if provided and length==nc
+        names = {i: f"class_{i}" for i in range(nc)}
         try:
             if isinstance(self.args.names, (list, tuple)) and len(self.args.names) == nc:
                 names = {i: str(self.args.names[i]) for i in range(nc)}
         except AttributeError:
             pass
 
-        sentinel = "__npz__"
-        return {"nc": nc, "channels": channels, "names": names,
-                "train": sentinel, "val": sentinel, "test": sentinel, "path": sentinel}
+        s = "__npz__"
+        return {"nc": nc, "channels": channels, "names": names, "train": s, "val": s, "test": s, "path": s}
 
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
@@ -63,12 +75,12 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         """
         from medsyn.models.classifier.dataloaders import build_npz_loader
         return build_npz_loader(
-            npz_path=getattr(self, "medsyn_npz_path", None),
+            npz_path=self.medsyn_npz_path,
             split={"train": "train", "val": "val", "test": "test"}[mode],
             imgsz=self.args.imgsz,
             batch=batch_size,
             workers=self.args.workers,
-            training_images=getattr(self, "medsyn_training_images", "PathMNIST"),
+            training_images=self.medsyn_training_images,
             augment=(mode == "train"),
         )
 
@@ -82,12 +94,11 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         """
         Runtime guard to check batch labels before training step.
         """
-        # batch["cls"] must be Long in [0, nc-1]
         y = batch["cls"]
         if y.dtype != torch.long:
             raise TypeError(f"Targets dtype must be torch.long, got {y.dtype}")
         nc = self.data["nc"]
         if (y < 0).any() or (y >= nc).any():
             bad = y[(y < 0) | (y >= nc)]
-            raise ValueError(f"Found out-of-range labels in batch: min={int(y.min())}, max={int(y.max())}, nc={nc}; bad={bad[:8].tolist()}")
+            raise ValueError(f"Out-of-range labels in batch: min={int(y.min())}, max={int(y.max())}, nc={nc}; sample={bad[:8].tolist()}")
         return super().train_step(batch)

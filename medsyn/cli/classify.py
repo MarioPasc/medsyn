@@ -113,13 +113,13 @@ def main():
         # Trainer with NPZ-backed dataloaders
         logger.info("Initializing trainer...")
 
-        # Initialize trainer with only valid YOLO parameters
-        trainer: ClassificationTrainer = MedsynClassificationTrainer(overrides=cfg.overrides)
-
-        # Attach custom MedSyn runtime parameters OUTSIDE of YOLO args
-        # (YOLO revalidates args and rejects unknown keys)
-        trainer.medsyn_npz_path = str(cfg.npz_path)
-        trainer.medsyn_training_images = cfg.training_images
+        # Initialize trainer with NPZ parameters at construction
+        # This ensures medsyn_npz_path is available during BaseTrainer.__init__
+        trainer: ClassificationTrainer = MedsynClassificationTrainer(
+            overrides=cfg.overrides,
+            npz_path=str(cfg.npz_path),
+            training_images=cfg.training_images,
+        )
 
         # Validator
         trainer.validator = MedsynClassificationValidator(args=trainer.args)
