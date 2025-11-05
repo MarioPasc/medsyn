@@ -112,6 +112,13 @@ def main():
     try:
         # Trainer with NPZ-backed dataloaders
         logger.info("Initializing trainer...")
+        logger.info(f"Configuration overview:")
+        logger.info(f"  NPZ path exists: {cfg.npz_path.exists() if hasattr(cfg.npz_path, 'exists') else 'N/A'}")
+        logger.info(f"  Training images mode: {cfg.training_images}")
+        logger.info(f"  Overrides type: {type(cfg.overrides)}")
+        logger.info(f"  Number of override keys: {len(cfg.overrides) if cfg.overrides else 0}")
+        if cfg.overrides:
+            logger.info(f"  Override keys: {list(cfg.overrides.keys())}")
 
         # Initialize trainer with NPZ parameters at construction
         # This ensures medsyn_npz_path is available during BaseTrainer.__init__
