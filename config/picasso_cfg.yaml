@@ -139,9 +139,9 @@ yolo:
   # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
   # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
   # is preferred as the main source.
-  model: yolo8n-cls.pt        # any Ultralytics classify model
-  project: /path/to/runs
-  name: pathmnist_npz
+  model: /mnt/home/users/tic_163_uma/mpascual/execs/YOLO_PATHMNIST/yolo8n-cls.pt        # any Ultralytics classify model
+  project: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/yolo_classifier
+  name: picasso_yolo_parallel
   imgsz: 64
   epochs: 100
   batch: 128

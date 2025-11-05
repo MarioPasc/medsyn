@@ -1,6 +1,6 @@
 task: classify
 mode: train 
-model: yolo11n-cls.pt
+model: /mnt/home/users/tic_163_uma/mpascual/execs/YOLO_PATHMNIST/yolo8n-cls.pt
 data: # We are reading this from the medsyn_cfg.yaml
 
 project: # We are reading this from the medsyn_cfg.yaml

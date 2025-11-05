@@ -16,6 +16,10 @@ set -euo pipefail
 # Fixed version addressing all pitfalls identified in code review
 # ========================================================================
 
+# Save the launch directory (where .out and .err files are written)
+LAUNCH_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
+echo "Launch directory: ${LAUNCH_DIR}"
+
 echo "================================================================================"
 echo "YOLO Classifier Parallel Training - Job ID: $SLURM_JOB_ID"
 echo "================================================================================"
@@ -26,7 +30,7 @@ echo "==========================================================================
 
 # ---------- Inputs (UPDATE THESE PATHS FOR YOUR SETUP) ----------
 # Path to your NPZ file with merged synthetic data
-DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/PathMNIST_with_synth.npz"
+DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/merged.npz"
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/yolo_classifier"
 
@@ -39,6 +43,41 @@ OUT_DIR="${WORKDIR}/results"
 
 mkdir -p "${WORKDIR}" "${DATA_DIR}" "${OUT_DIR}"
 echo "Localscratch workdir: ${WORKDIR}"
+
+# ---------- Error trap: copy logs to launch directory on failure ----------
+cleanup_on_error() {
+    local exit_code=$?
+
+    # Only run cleanup if there was an error (non-zero exit code)
+    if [ $exit_code -ne 0 ]; then
+        echo "" >&2
+        echo "================================================================================" >&2
+        echo "ERROR: Job failed with exit code $exit_code! Copying logs to launch directory..." >&2
+        echo "================================================================================" >&2
+
+        # Create emergency logs directory in launch location
+        EMERGENCY_LOG_DIR="${LAUNCH_DIR}/emergency_logs_${SLURM_JOB_ID}"
+        mkdir -p "${EMERGENCY_LOG_DIR}"
+
+        # Copy all logs and results from localscratch
+        if [ -d "${OUT_DIR}" ]; then
+            echo "Copying logs from: ${OUT_DIR}" >&2
+            rsync -av "${OUT_DIR}/" "${EMERGENCY_LOG_DIR}/" 2>&1 || true
+            echo "Emergency logs saved to: ${EMERGENCY_LOG_DIR}" >&2
+        fi
+
+        # Also sync to permanent storage if possible
+        if [ -d "${RESULTS_DST}" ]; then
+            mkdir -p "${RESULTS_DST}"
+            rsync -av "${OUT_DIR}/" "${RESULTS_DST}/" 2>&1 || true
+            echo "Also synced to: ${RESULTS_DST}" >&2
+        fi
+
+        echo "================================================================================" >&2
+    fi
+}
+
+trap cleanup_on_error EXIT
 
 # ---------- 1) Repo to localscratch ----------
 if [ -d "${REPO_DIR}" ] && [ -f "${REPO_DIR}/pyproject.toml" ]; then
@@ -113,7 +152,7 @@ for k in sorted(z.keys()):
 echo ""
 
 # ---------- 6) Configuration files ----------
-CONFIG_FILE="config/medsyn_cfg.yaml"
+CONFIG_FILE="config/picasso_cfg.yaml"
 HPARAMS_FILE="config/yolo_hyperparameters.yaml"
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -162,21 +201,25 @@ run_training() {
     echo "Log file: $LOG_FILE"
     echo "================================================================================"
 
+    # Run training, saving logs to file AND stderr to .err file
+    # Use 'tee' to duplicate stderr so it appears in both the log and SLURM .err
     CUDA_VISIBLE_DEVICES=$GPU_ID python -m medsyn.cli.classify \
         --config "$CONFIG_FILE" \
         --hparams "$HPARAMS_FILE" \
         --training_mode "$TRAINING_MODE" \
         --name "$EXP_NAME" \
-        --device "0" \
+        --device "$GPU_ID" \
         --log_level "INFO" \
-        > "$LOG_FILE" 2>&1
+        > "$LOG_FILE" 2> >(tee -a "$LOG_FILE" >&2)
 
     EXIT_CODE=$?
 
     if [ $EXIT_CODE -eq 0 ]; then
         echo "✓ Training on GPU $GPU_ID completed successfully (mode: $TRAINING_MODE)"
     else
+        echo "✗ Training on GPU $GPU_ID failed with exit code $EXIT_CODE (mode: $TRAINING_MODE)" >&2
         echo "✗ Training on GPU $GPU_ID failed with exit code $EXIT_CODE (mode: $TRAINING_MODE)"
+        echo "Log file: $LOG_FILE" >&2
     fi
 
     return $EXIT_CODE
@@ -293,6 +336,7 @@ fi
 if [ $EXIT_REAL -ne 0 ] || [ $EXIT_SYNTH -ne 0 ]; then
     echo ""
     echo "ERROR: One or more training runs failed"
+    # Trap will handle copying logs on exit
     exit 1
 fi
 
