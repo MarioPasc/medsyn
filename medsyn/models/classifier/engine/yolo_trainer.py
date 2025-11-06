@@ -161,18 +161,27 @@ class MedsynClassificationTrainer(ClassificationTrainer):
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
         """
-        Build the NPZ-backed DataLoader. Ultralytics still calls this with a dataset_path,
-        which we ignore because our data comes from NPZ.
+        Return an Ultralytics InfiniteDataLoader so BaseTrainer can call .reset().
+        We ignore dataset_path and build directly from the NPZ.
         """
-        from medsyn.models.classifier.dataloaders import build_npz_loader
-        return build_npz_loader(
-            npz_path=self.medsyn_npz_path,
+        from ultralytics.data.build import build_dataloader  # returns InfiniteDataLoader
+        from medsyn.models.classifier.dataloaders import NpzClassificationDataset
+
+        ds = NpzClassificationDataset(
+            npz_path=Path(self.medsyn_npz_path),
             split={"train": "train", "val": "val", "test": "test"}[mode],
-            imgsz=self.args.imgsz,
-            batch=batch_size,
-            workers=self.args.workers,
+            imgsz=int(self.args.imgsz),
             training_images=self.medsyn_training_images,
             augment=(mode == "train"),
+        )
+        # build_dataloader provides InfiniteDataLoader with .reset(), proper seeding, and worker reuse
+        return build_dataloader(
+            dataset=ds,
+            batch=batch_size,
+            workers=int(self.args.workers),
+            shuffle=(mode == "train"),
+            rank=rank,
+            pin_memory=True,
         )
 
     def set_model_attributes(self) -> None:
