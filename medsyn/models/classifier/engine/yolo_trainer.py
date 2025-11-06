@@ -126,8 +126,17 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         # Split overrides: pass only YOLO-known keys upstream
         yolo_overrides, self.medsyn_cfg = _split_overrides_for_yolo(overrides)
 
-        LOG.info("Calling parent ClassificationTrainer.__init__...")
-        super().__init__(cfg, yolo_overrides, _callbacks)
+        # Ultralytics expects a dict-like cfg. Supply defaults if None.
+        try:
+            from ultralytics.cfg import DEFAULT_CFG_DICT
+            base_cfg = DEFAULT_CFG_DICT.copy()
+        except Exception:
+            base_cfg = {}
+        # Minimal fields to satisfy cfg checks and make behavior explicit
+        base_cfg.update({"task": "classify", "mode": "train", "save_dir": ""})
+
+        LOG.info("Calling parent ClassificationTrainer.__init__ with a dict cfg...")
+        super().__init__(base_cfg, yolo_overrides, _callbacks)
         LOG.info("MedsynClassificationTrainer initialized successfully")
         LOG.info("=" * 80)
 
