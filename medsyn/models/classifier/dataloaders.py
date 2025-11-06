@@ -60,8 +60,7 @@ class NpzClassificationDataset(Dataset):
             raise ValueError(f"Label out of range after mapping: max={y.max()} >= {self.num_classes}")
 
         self.X, self.y = X, y
-        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD,
-                                      hflip=0.5 if self.augment else 0.0)
+        self.tx = classify_transforms(size=self.imgsz, mean=DEFAULT_MEAN, std=DEFAULT_STD)
 
     def __len__(self) -> int:
         return int(self.y.shape[0])
