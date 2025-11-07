@@ -10,7 +10,10 @@ from ultralytics.nn.autobackend import AutoBackend
 from ultralytics.utils.torch_utils import select_device
 from ultralytics.utils.checks import check_imgsz
 from ultralytics.utils import RANK
-from ultralytics.engine.validator import smart_inference_mode, Profile, TQDM, callbacks
+from ultralytics.utils.torch_utils import smart_inference_mode
+from ultralytics.engine.validator import callbacks
+from ultralytics.utils.ops import Profile
+from ultralytics.utils.tqdm import TQDM
 from sklearn.metrics import roc_auc_score
 from medsyn.models.classifier.dataloaders import build_npz_loader
 
@@ -43,6 +46,7 @@ class MedsynClassificationValidator(ClassificationValidator):
         # fallback to default behavior for folder-based datasets
         return super().get_dataloader(dataset_path, batch_size, rank, mode)
 
+    @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
         """Run validation. In non-training mode with data='__npz__' skip check_cls_dataset and use NPZ loader."""
         # Reset accumulators
@@ -69,7 +73,7 @@ class MedsynClassificationValidator(ClassificationValidator):
             logger.info("Running validation in NPZ mode (bypassing check_cls_dataset)")
 
             # 1) Backend/model setup (copied from BaseValidator, but without check_cls_dataset)
-            with smart_inference_mode():
+            with torch.inference_mode():
                 callbacks.add_integration_callbacks(self)
                 backend = AutoBackend(
                     model=model or self.args.model,
@@ -105,43 +109,26 @@ class MedsynClassificationValidator(ClassificationValidator):
                 model = backend  # for the rest of the validation loop
 
                 # Warmup
-                model.warmup(imgsz=(1 if backend.pt else self.args.batch,
+                backend.warmup(imgsz=(1 if backend.pt else self.args.batch,
                                     self.data["channels"], imgsz, imgsz))
-
-                # 3) Run the same loop as base __call__()
                 self.run_callbacks("on_val_start")
-                dt = (
-                    Profile(device=self.device),
-                    Profile(device=self.device),
-                    Profile(device=self.device),
-                    Profile(device=self.device),
-                )
+                dt = (Profile(device=self.device), Profile(device=self.device),
+                    Profile(device=self.device), Profile(device=self.device))
                 bar = TQDM(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
-                self.init_metrics(model)  # sets self.names, self.nc, clears buffers
+                self.init_metrics(backend)
                 self.jdict = []
-
                 for batch_i, batch in enumerate(bar):
                     self.run_callbacks("on_val_batch_start")
                     self.batch_i = batch_i
-
-                    # Preprocess
                     with dt[0]:
                         batch = self.preprocess(batch)
-
-                    # Inference
                     with dt[1]:
-                        preds = model(batch["img"])
-
-                    # Loss (skip in val-only path)
+                        preds = backend(batch["img"])
                     with dt[2]:
-                        pass
-
-                    # Postprocess
+                        pass  # no loss in val-only
                     with dt[3]:
                         preds = self.postprocess(preds)
-
                     self.update_metrics(preds, batch)
-
                     if self.args.plots and batch_i < 3 and RANK in {-1, 0}:
                         self.plot_val_samples(batch, batch_i)
                         self.plot_predictions(batch, preds, batch_i)
