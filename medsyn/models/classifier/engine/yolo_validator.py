@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import csv
 from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
@@ -221,6 +222,9 @@ class MedsynClassificationValidator(ClassificationValidator):
                 with open(metrics_file, 'w') as f:
                     json.dump(per_class_auc, f, indent=2)
 
+                # Save per-class AUC to CSV for easier analysis across epochs
+                self._save_per_class_auc_to_csv(save_dir, per_class_auc, num_classes)
+
                 # Check if we should print detailed per-class metrics (every 10 epochs)
                 # Use getattr with default to safely access trainer.epoch
                 current_epoch = -1
@@ -255,3 +259,46 @@ class MedsynClassificationValidator(ClassificationValidator):
                 logger.error(f"Failed to compute per-class AUC: {e}")
 
         return results
+
+    def _save_per_class_auc_to_csv(self, save_dir: Path, per_class_auc: dict, num_classes: int):
+        """
+        Save per-class AUC metrics to CSV file for easy analysis across epochs.
+
+        Args:
+            save_dir: Directory to save CSV file
+            per_class_auc: Dictionary containing per-class AUC values
+            num_classes: Number of classes
+        """
+        csv_file = save_dir / "per_class_auc.csv"
+
+        # Get current epoch
+        current_epoch = -1
+        if hasattr(self, 'trainer') and self.trainer is not None:
+            current_epoch = getattr(self.trainer, 'epoch', -1)
+
+        # Prepare row data
+        row_data = {'epoch': current_epoch + 1}
+
+        # Add per-class AUC values
+        for class_idx in range(num_classes):
+            auc_val = per_class_auc.get(f"class_{class_idx}")
+            row_data[f"auc_class_{class_idx}"] = auc_val if auc_val is not None else ''
+
+        # Add macro-average AUC
+        row_data['auc_macro'] = per_class_auc.get('macro_avg_auc', '')
+
+        # Check if file exists to determine if we need to write header
+        file_exists = csv_file.exists()
+
+        try:
+            with open(csv_file, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=row_data.keys())
+
+                # Write header only if file doesn't exist
+                if not file_exists:
+                    writer.writeheader()
+
+                writer.writerow(row_data)
+
+        except Exception as e:
+            logger.error(f"Failed to save per-class AUC to CSV: {e}")

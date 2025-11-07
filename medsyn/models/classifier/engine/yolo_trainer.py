@@ -113,16 +113,20 @@ class MedsynClassificationTrainer(ClassificationTrainer):
 
     # Accept NPZ args BEFORE calling super().__init__()
     def __init__(self, cfg=None, overrides: dict | None = None, _callbacks=None,
-                 npz_path: str | Path | None = None, training_images: str = "PathMNIST"):
+                 npz_path: str | Path | None = None, training_images: str = "PathMNIST",
+                 fold_idx: int | None = None, fold_data: dict | None = None):
         LOG.info("=" * 80)
         LOG.info("Initializing MedsynClassificationTrainer")
         LOG.info(f"  NPZ path: {npz_path}")
         LOG.info(f"  Training images mode: {training_images}")
+        LOG.info(f"  Fold index: {fold_idx if fold_idx is not None else 'None (single split)'}")
         LOG.info(f"  Config (cfg) type: {type(cfg)}")
         LOG.info(f"  Overrides keys: {list(overrides.keys()) if overrides else 'None'}")
-        
+
         self.medsyn_npz_path = str(npz_path) if npz_path is not None else None
         self.medsyn_training_images = training_images
+        self.fold_idx = fold_idx
+        self.fold_data = fold_data  # Dict with 'train' and 'val' keys, each containing fold arrays
 
         # Split overrides: pass only YOLO-known keys upstream
         yolo_overrides, self.medsyn_cfg = _split_overrides_for_yolo(overrides)
@@ -163,10 +167,21 @@ class MedsynClassificationTrainer(ClassificationTrainer):
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
         """
         Return an Ultralytics InfiniteDataLoader so BaseTrainer can call .reset().
-        We ignore dataset_path and build directly from the NPZ.
+        We ignore dataset_path and build directly from the NPZ or fold data.
         """
         from ultralytics.data.build import build_dataloader  # returns InfiniteDataLoader
         from medsyn.models.classifier.dataloaders import NpzClassificationDataset
+
+        # If fold data is provided, use it; otherwise load from NPZ
+        fold_images = None
+        fold_labels = None
+        fold_is_synth = None
+
+        if self.fold_data is not None and mode in ["train", "val"]:
+            fold_dict = self.fold_data.get(mode, {})
+            fold_images = fold_dict.get('images')
+            fold_labels = fold_dict.get('labels')
+            fold_is_synth = fold_dict.get('is_synth')
 
         ds = NpzClassificationDataset(
             npz_path=Path(self.medsyn_npz_path),
@@ -174,6 +189,9 @@ class MedsynClassificationTrainer(ClassificationTrainer):
             imgsz=int(self.args.imgsz),
             training_images=self.medsyn_training_images,
             augment=(mode == "train"),
+            fold_images=fold_images,
+            fold_labels=fold_labels,
+            fold_is_synth=fold_is_synth,
         )
         # build_dataloader provides InfiniteDataLoader with .reset(), proper seeding, and worker reuse
         return build_dataloader(

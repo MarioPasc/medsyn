@@ -35,12 +35,22 @@ class NpzClassificationDataset(Dataset):
     imgsz: int
     training_images: str  # PathMNIST | PathMNIST_and_synth | synth
     augment: bool = False
+    # Optional fold data for k-fold CV (overrides NPZ loading if provided)
+    fold_images: Optional[np.ndarray] = None
+    fold_labels: Optional[np.ndarray] = None
+    fold_is_synth: Optional[np.ndarray] = None
 
     def __post_init__(self):
-        z = np.load(self.npz_path)
-        X = z[f"{self.split}_images"]
-        y = z[f"{self.split}_labels"].reshape(-1).astype(np.int64)
-        syn = z.get(f"{self.split}_is_synth", np.zeros_like(y, dtype=np.uint8))
+        # Use fold data if provided (k-fold CV mode), otherwise load from NPZ
+        if self.fold_images is not None:
+            X = self.fold_images
+            y = self.fold_labels.reshape(-1).astype(np.int64)
+            syn = self.fold_is_synth if self.fold_is_synth is not None else np.zeros_like(y, dtype=np.uint8)
+        else:
+            z = np.load(self.npz_path)
+            X = z[f"{self.split}_images"]
+            y = z[f"{self.split}_labels"].reshape(-1).astype(np.int64)
+            syn = z.get(f"{self.split}_is_synth", np.zeros_like(y, dtype=np.uint8))
 
         # Apply your selection mask first
         keep = select_indices_by_training_images(syn, self.training_images)
