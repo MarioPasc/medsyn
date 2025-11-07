@@ -43,7 +43,6 @@ class MedsynClassificationValidator(ClassificationValidator):
         # fallback to default behavior for folder-based datasets
         return super().get_dataloader(dataset_path, batch_size, rank, mode)
 
-    @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
         """Run validation. In non-training mode with data='__npz__' skip check_cls_dataset and use NPZ loader."""
         # Reset accumulators
@@ -59,99 +58,100 @@ class MedsynClassificationValidator(ClassificationValidator):
             logger.info("Running validation in NPZ mode (bypassing check_cls_dataset)")
 
             # 1) Backend/model setup (copied from BaseValidator, but without check_cls_dataset)
-            callbacks.add_integration_callbacks(self)
-            backend = AutoBackend(
-                model=model or self.args.model,
-                device=select_device(self.args.device, batch=self.args.batch) if RANK == -1 else torch.device("cuda", RANK),
-                dnn=self.args.dnn,
-                fp16=self.args.half,
-            )
-            self.device = backend.device
-            self.args.half = backend.fp16
-            imgsz = check_imgsz(self.args.imgsz, stride=backend.stride)
-
-            # 2) Data meta and dataloader without calling check_cls_dataset()
-            # self._data_meta must contain {"nc","channels","names"}
-            if not self._data_meta:
-                raise ValueError(
-                    "data_meta must be provided when using NPZ mode. "
-                    "Pass data_meta={'nc': ..., 'channels': ..., 'names': ...} to validator constructor."
+            with smart_inference_mode():
+                callbacks.add_integration_callbacks(self)
+                backend = AutoBackend(
+                    model=model or self.args.model,
+                    device=select_device(self.args.device, batch=self.args.batch) if RANK == -1 else torch.device("cuda", RANK),
+                    dnn=self.args.dnn,
+                    fp16=self.args.half,
                 )
+                self.device = backend.device
+                self.args.half = backend.fp16
+                imgsz = check_imgsz(self.args.imgsz, stride=backend.stride)
 
-            self.data = {
-                **self._data_meta,
-                self.args.split: "__npz__",
-                "path": "__npz__"
-            }
+                # 2) Data meta and dataloader without calling check_cls_dataset()
+                # self._data_meta must contain {"nc","channels","names"}
+                if not self._data_meta:
+                    raise ValueError(
+                        "data_meta must be provided when using NPZ mode. "
+                        "Pass data_meta={'nc': ..., 'channels': ..., 'names': ...} to validator constructor."
+                    )
 
-            if self.device.type in {"cpu", "mps"}:
-                self.args.workers = 0
+                self.data = {
+                    **self._data_meta,
+                    self.args.split: "__npz__",
+                    "path": "__npz__"
+                }
 
-            self.stride = backend.stride
-            self.dataloader = self.dataloader or self.get_dataloader("__npz__", self.args.batch)
+                if self.device.type in {"cpu", "mps"}:
+                    self.args.workers = 0
 
-            backend.eval()
-            model = backend  # for the rest of the validation loop
+                self.stride = backend.stride
+                self.dataloader = self.dataloader or self.get_dataloader("__npz__", self.args.batch)
 
-            # Warmup
-            model.warmup(imgsz=(1 if backend.pt else self.args.batch,
-                                self.data["channels"], imgsz, imgsz))
+                backend.eval()
+                model = backend  # for the rest of the validation loop
 
-            # 3) Run the same loop as base __call__()
-            self.run_callbacks("on_val_start")
-            dt = (
-                Profile(device=self.device),
-                Profile(device=self.device),
-                Profile(device=self.device),
-                Profile(device=self.device),
-            )
-            bar = TQDM(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
-            self.init_metrics(model)  # sets self.names, self.nc, clears buffers
-            self.jdict = []
+                # Warmup
+                model.warmup(imgsz=(1 if backend.pt else self.args.batch,
+                                    self.data["channels"], imgsz, imgsz))
 
-            for batch_i, batch in enumerate(bar):
-                self.run_callbacks("on_val_batch_start")
-                self.batch_i = batch_i
+                # 3) Run the same loop as base __call__()
+                self.run_callbacks("on_val_start")
+                dt = (
+                    Profile(device=self.device),
+                    Profile(device=self.device),
+                    Profile(device=self.device),
+                    Profile(device=self.device),
+                )
+                bar = TQDM(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
+                self.init_metrics(model)  # sets self.names, self.nc, clears buffers
+                self.jdict = []
 
-                # Preprocess
-                with dt[0]:
-                    batch = self.preprocess(batch)
+                for batch_i, batch in enumerate(bar):
+                    self.run_callbacks("on_val_batch_start")
+                    self.batch_i = batch_i
 
-                # Inference
-                with dt[1]:
-                    preds = model(batch["img"])
+                    # Preprocess
+                    with dt[0]:
+                        batch = self.preprocess(batch)
 
-                # Loss (skip in val-only path)
-                with dt[2]:
-                    pass
+                    # Inference
+                    with dt[1]:
+                        preds = model(batch["img"])
 
-                # Postprocess
-                with dt[3]:
-                    preds = self.postprocess(preds)
+                    # Loss (skip in val-only path)
+                    with dt[2]:
+                        pass
 
-                self.update_metrics(preds, batch)
+                    # Postprocess
+                    with dt[3]:
+                        preds = self.postprocess(preds)
 
-                if self.args.plots and batch_i < 3 and RANK in {-1, 0}:
-                    self.plot_val_samples(batch, batch_i)
-                    self.plot_predictions(batch, preds, batch_i)
+                    self.update_metrics(preds, batch)
 
-                self.run_callbacks("on_val_batch_end")
+                    if self.args.plots and batch_i < 3 and RANK in {-1, 0}:
+                        self.plot_val_samples(batch, batch_i)
+                        self.plot_predictions(batch, preds, batch_i)
 
-            # Gather and finalize stats
-            stats = {}
-            self.gather_stats()
-            if RANK in {-1, 0}:
-                stats = self.get_stats()
-                self.speed = dict(zip(
-                    self.speed.keys(),
-                    (x.t / len(self.dataloader.dataset) * 1e3 for x in dt)
-                ))
-                self.finalize_metrics()
-                self.print_results()
-                self.run_callbacks("on_val_end")
+                    self.run_callbacks("on_val_batch_end")
 
-            logger.info("Validation completed successfully in NPZ mode")
-            return stats
+                # Gather and finalize stats
+                stats = {}
+                self.gather_stats()
+                if RANK in {-1, 0}:
+                    stats = self.get_stats()
+                    self.speed = dict(zip(
+                        self.speed.keys(),
+                        (x.t / len(self.dataloader.dataset) * 1e3 for x in dt)
+                    ))
+                    self.finalize_metrics()
+                    self.print_results()
+                    self.run_callbacks("on_val_end")
+
+                logger.info("Validation completed successfully in NPZ mode")
+                return stats
 
         # Default behavior for folder/YAML datasets
         logger.info("Running validation in standard mode")
