@@ -190,6 +190,33 @@ class MedsynClassificationTrainer(ClassificationTrainer):
         """
         super().set_model_attributes()
 
+    def get_validator(self):
+        """
+        Override to always return our NPZ-aware validator with proper metadata.
+        This ensures the validator works correctly even in final_eval() and val_only modes.
+        """
+        from copy import copy
+        from medsyn.models.classifier.engine.yolo_validator import MedsynClassificationValidator
+
+        LOG.info("Creating MedsynClassificationValidator with NPZ metadata")
+
+        # Create validator with data metadata to bypass check_cls_dataset()
+        v = MedsynClassificationValidator(
+            dataloader=None,  # Will be created on-demand via get_dataloader
+            save_dir=self.save_dir,
+            args=copy(self.args),
+            data_meta={
+                "nc": self.data["nc"],
+                "channels": self.data["channels"],
+                "names": self.data["names"]
+            }
+        )
+        v.medsyn_npz_path = self.medsyn_npz_path
+        v.medsyn_training_images = self.medsyn_training_images
+
+        LOG.info(f"Validator configured: nc={self.data['nc']}, channels={self.data['channels']}")
+        return v
+
     def train_step(self, batch):
         """
         Runtime guard to check batch labels before training step.
