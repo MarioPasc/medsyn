@@ -130,16 +130,8 @@ def main():
             training_images=cfg.training_images,
         )
 
-        # Validator with dataset metadata for NPZ mode
-        # Pass data_meta so validator can bypass check_cls_dataset() in non-training mode
-        trainer.validator = MedsynClassificationValidator(
-            args=trainer.args,
-            data_meta={
-                "nc": trainer.data["nc"],
-                "channels": trainer.data["channels"],
-                "names": trainer.data["names"]
-            }
-        )
+        # Validator: use trainer's factory so validator.dataloader is set
+        trainer.validator = trainer.get_validator()
         trainer.validator.medsyn_npz_path = str(cfg.npz_path)
         trainer.validator.medsyn_training_images = cfg.training_images
 

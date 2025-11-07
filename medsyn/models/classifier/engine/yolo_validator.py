@@ -50,7 +50,18 @@ class MedsynClassificationValidator(ClassificationValidator):
 
         self.training = trainer is not None
         if self.training:
-            # Training branch: defer to base path which uses trainer.data and never downloads
+            # Ensure dataloader exists in training path (Ultralytics expects it prebuilt)
+            if self.dataloader is None:
+                # Prefer trainer.test_loader if present; otherwise build one
+                self.dataloader = getattr(trainer, "test_loader", None)
+                if self.dataloader is None:
+                    from ultralytics.utils import RANK
+                    # Build NPZ val loader; our get_dataloader ignores dataset_path in NPZ mode
+                    bs = (self.args.batch if self.args else trainer.args.batch)
+                    self.dataloader = self.get_dataloader("__npz__", batch_size=bs, rank=RANK, mode="val")
+            # Mirror trainer.data so class names and nc are consistent
+            if getattr(trainer, "data", None) is not None:
+                self.data = trainer.data
             return super().__call__(trainer=trainer, model=model)
 
         # Non-training branch (final_eval, manual val_only)

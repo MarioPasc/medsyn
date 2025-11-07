@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from ultralytics.models.yolo.classify.train import ClassificationTrainer
 from ultralytics.cfg import get_cfg, DEFAULT_CFG_DICT  # used to discover valid keys
+from ultralytics.utils import RANK
 from medsyn.models.classifier.utils import select_indices_by_training_images
 
 LOG = logging.getLogger(__name__)
@@ -200,16 +201,17 @@ class MedsynClassificationTrainer(ClassificationTrainer):
 
         LOG.info("Creating MedsynClassificationValidator with NPZ metadata")
 
-        # Create validator with data metadata to bypass check_cls_dataset()
+        # Build a proper validation loader here (Ultralytics style)
+        val_loader = self.get_dataloader("__npz__", batch_size=self.args.batch, rank=RANK, mode="val")
         v = MedsynClassificationValidator(
-            dataloader=None,  # Will be created on-demand via get_dataloader
+            dataloader=val_loader,
             save_dir=self.save_dir,
             args=copy(self.args),
             data_meta={
                 "nc": self.data["nc"],
                 "channels": self.data["channels"],
-                "names": self.data["names"]
-            }
+                "names": self.data["names"],
+            },
         )
         v.medsyn_npz_path = self.medsyn_npz_path
         v.medsyn_training_images = self.medsyn_training_images
