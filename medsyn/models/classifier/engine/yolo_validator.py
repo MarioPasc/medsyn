@@ -29,6 +29,7 @@ class MedsynClassificationValidator(ClassificationValidator):
         self.medsyn_training_images: Optional[str] = None       # set from CLI
         self._data_meta: Dict[str, Any] = data_meta or {}       # {"nc": int, "channels": int, "names": list}
         self.all_targets, self.all_probs = [], []
+        self.trainer: Optional[Any] = None  # Set during training, may not exist in val-only mode
 
     def get_dataloader(self, dataset_path, batch_size: int = 16, rank: int = 0, mode: str = "val"):
         """Build NPZ dataloader ignoring dataset_path when we are in NPZ mode."""
@@ -59,7 +60,6 @@ class MedsynClassificationValidator(ClassificationValidator):
                 # Prefer trainer.test_loader if present; otherwise build one
                 self.dataloader = getattr(trainer, "test_loader", None)
                 if self.dataloader is None:
-                    from ultralytics.utils import RANK
                     # Build NPZ val loader; our get_dataloader ignores dataset_path in NPZ mode
                     bs = (self.args.batch if self.args else trainer.args.batch)
                     self.dataloader = self.get_dataloader("__npz__", batch_size=bs, rank=RANK, mode="val")
@@ -77,13 +77,13 @@ class MedsynClassificationValidator(ClassificationValidator):
                 callbacks.add_integration_callbacks(self)
                 backend = AutoBackend(
                     model=model or self.args.model,
-                    device=select_device(self.args.device, batch=self.args.batch) if RANK == -1 else torch.device("cuda", RANK),
+                    device=select_device(self.args.device) if RANK == -1 else torch.device("cuda", RANK),
                     dnn=self.args.dnn,
                     fp16=self.args.half,
                 )
                 self.device = backend.device
                 self.args.half = backend.fp16
-                imgsz = check_imgsz(self.args.imgsz, stride=backend.stride)
+                imgsz = check_imgsz(self.args.imgsz, stride=int(backend.stride) if hasattr(backend.stride, '__int__') else 32)
 
                 # 2) Data meta and dataloader without calling check_cls_dataset()
                 # self._data_meta must contain {"nc","channels","names"}
@@ -140,10 +140,19 @@ class MedsynClassificationValidator(ClassificationValidator):
                 self.gather_stats()
                 if RANK in {-1, 0}:
                     stats = self.get_stats()
-                    self.speed = dict(zip(
-                        self.speed.keys(),
-                        (x.t / len(self.dataloader.dataset) * 1e3 for x in dt)
-                    ))
+                    # Compute speed metrics safely
+                    try:
+                        n_samples = len(self.dataloader.dataset) if hasattr(self.dataloader, 'dataset') else len(self.dataloader)
+                        self.speed = dict(zip(
+                            self.speed.keys(),
+                            (x.t / n_samples * 1e3 for x in dt)
+                        ))
+                    except (TypeError, AttributeError):
+                        # Fallback if length cannot be determined
+                        self.speed = dict(zip(
+                            self.speed.keys(),
+                            (x.t for x in dt)
+                        ))
                     self.finalize_metrics()
                     self.print_results()
                     self.run_callbacks("on_val_end")
@@ -213,7 +222,10 @@ class MedsynClassificationValidator(ClassificationValidator):
                     json.dump(per_class_auc, f, indent=2)
 
                 # Check if we should print detailed per-class metrics (every 10 epochs)
-                current_epoch = getattr(self.trainer, 'epoch', -1) if hasattr(self, 'trainer') else -1
+                # Use getattr with default to safely access trainer.epoch
+                current_epoch = -1
+                if hasattr(self, 'trainer') and self.trainer is not None:
+                    current_epoch = getattr(self.trainer, 'epoch', -1)
                 print_detailed = (current_epoch + 1) % 10 == 0 or current_epoch == -1
 
                 if print_detailed:
