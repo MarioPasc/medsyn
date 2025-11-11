@@ -1,0 +1,38 @@
+# Configuration file for ccDDPM Privacy Audit
+# This file contains all parameters for running memorization and membership inference attacks
+
+# Input/Output Paths
+io:
+  yaml: /home/mpascual/research/code/medsyn/config/medsyn_cfg.yaml  # Path to project YAML configuration (required)
+  checkpoint: /media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel_batch4/ckpts/best.pt  # Path to model checkpoint .pt file (required)
+  outdir: /media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel_batch4/privacy_audit  # Output directory for results (required)
+
+# Generation Configuration
+generation:
+  use_existing_synth: true  # Use existing synthetic images from dataset (is_synth=True) instead of generating new ones
+  existing_synth_split: "train"  # Which split to load existing synthetic images from (train/val/test)
+  per_class: 64  # Number of samples to generate per class (only used if use_existing_synth=false)
+  guidance_scale: 2.0  # Classifier-free guidance scale for inference (only used if use_existing_synth=false)
+  num_inference_steps: 250  # Number of DDPM sampling steps (only used if use_existing_synth=false)
+  seed: 1337  # Random seed for reproducibility
+  save_grid: true  # Whether to save a grid of generated samples
+
+# Nearest Neighbor Analysis Configuration
+nearest_neighbor:
+  k: 5  # Number of nearest neighbors to search (currently unused but reserved)
+  lpips_threshold: 0.12  # LPIPS threshold for identifying "near-copy" (lower = more similar)
+  ssim_threshold: 0.90  # SSIM threshold for identifying "near-copy" (higher = more similar)
+  use_clip: false  # Use CLIP embeddings instead of ResNet50 (requires open_clip)
+  batch_size: 256  # Batch size for embedding extraction
+
+# Membership Inference Attack Configuration
+membership_inference:
+  n_timesteps_per_sample: 32  # Number of timestep samples to average loss over per sample
+  auc_points: 200  # Number of points for ROC curve discretization
+
+# Logging Configuration
+logging:
+  level: INFO  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  save_intermediate: true  # Save intermediate results for debugging
+  log_file: null  # Optional: Path to save logs to file (null = console only)
+  verbose_progress: true  # Show detailed progress bars
