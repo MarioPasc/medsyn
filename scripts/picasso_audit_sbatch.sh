@@ -129,7 +129,7 @@ nearest_neighbor:
   lpips_threshold: 0.12  # LPIPS threshold for identifying "near-copy" (lower = more similar)
   ssim_threshold: 0.90  # SSIM threshold for identifying "near-copy" (higher = more similar)
   use_clip: false  # Use CLIP embeddings instead of ResNet50 (requires open_clip)
-  batch_size: 256  # Batch size for embedding extraction
+  batch_size: 128  # Batch size for embedding extraction (reduced for memory efficiency)
 
 # Membership Inference Attack Configuration
 membership_inference:

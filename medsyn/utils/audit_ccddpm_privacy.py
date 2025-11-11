@@ -341,11 +341,18 @@ def batched_embed(model: EmbeddingModel, imgs: torch.Tensor, bsz: int, device: t
     """
     Extrae embeddings en lotes.
     """
+    import gc
     outs = []
     for i in range(0, imgs.size(0), bsz):
         batch = imgs[i:i+bsz].to(device)
-        outs.append(model(batch).cpu())
-    return torch.cat(outs, 0)
+        emb = model(batch).cpu()
+        outs.append(emb)
+        del batch, emb
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    result = torch.cat(outs, 0)
+    gc.collect()
+    return result
 
 def compute_pair_metrics(x_synth: torch.Tensor, x_ref: torch.Tensor, device: torch.device) -> Tuple[float, float]:
     """
@@ -610,22 +617,40 @@ def main(io: IOPaths, gen: GenCfg, nna: NNACfg, mia: MIACfg) -> None:
     emb_te = batched_embed(emb_model, x_test, nna.batch_size, device)
     logger.info(f"    Completed in {time.time() - start_time:.2f}s, shape: {emb_te.shape}")
 
-    # Distancias coseno -> convertir a "distancia" (1 - cos_sim)
-    def pairwise_cdist_cos(A: torch.Tensor, B: torch.Tensor, bsz: int = 1024) -> np.ndarray:
-        out = []
-        for i in tqdm(range(0, A.size(0), bsz), desc="kNN blocks", leave=False):
-            a = A[i:i+bsz]
-            # sim = a @ B^T
-            sim = (a @ B.t()).clamp(-1,1).cpu().numpy()
-            out.append(1.0 - sim)
-        return np.concatenate(out, 0)
+    # Memory-efficient nearest neighbor search (no full distance matrix)
+    def compute_nearest_neighbors(A: torch.Tensor, B: torch.Tensor, bsz: int = 256) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute nearest neighbor indices and distances without storing full matrix.
+        Returns: (nn_indices, nn_distances)
+        """
+        import gc
+        nn_idx = np.zeros(A.size(0), dtype=np.int64)
+        nn_dist = np.zeros(A.size(0), dtype=np.float32)
 
-    logger.info("Computing nearest neighbors in embedding space...")
+        for i in tqdm(range(0, A.size(0), bsz), desc="NN search", leave=False):
+            a = A[i:i+bsz]  # [batch, dim]
+            # Compute similarities in chunks to avoid huge matrices
+            sim = (a @ B.t()).clamp(-1, 1)  # [batch, N_B]
+            dist = 1.0 - sim  # cosine distance
+
+            # Find min distance (nearest neighbor) for this batch
+            batch_nn_dist, batch_nn_idx = torch.min(dist, dim=1)
+
+            nn_idx[i:i+bsz] = batch_nn_idx.cpu().numpy()
+            nn_dist[i:i+bsz] = batch_nn_dist.cpu().numpy()
+
+            # Free GPU memory
+            del sim, dist, batch_nn_dist, batch_nn_idx
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        gc.collect()
+        return nn_idx, nn_dist
+
+    logger.info("Computing nearest neighbors in embedding space (memory-efficient)...")
     start_time = time.time()
-    D_tr = pairwise_cdist_cos(emb_s, emb_tr)   # [Ns, Ntrain]
-    D_te = pairwise_cdist_cos(emb_s, emb_te)   # [Ns, Ntest]
-    nn_tr_idx = np.argmin(D_tr, axis=1); nn_tr = D_tr[np.arange(D_tr.shape[0]), nn_tr_idx]
-    nn_te_idx = np.argmin(D_te, axis=1); nn_te = D_te[np.arange(D_te.shape[0]), nn_te_idx]
+    nn_tr_idx, nn_tr = compute_nearest_neighbors(emb_s, emb_tr, bsz=256)
+    nn_te_idx, nn_te = compute_nearest_neighbors(emb_s, emb_te, bsz=256)
     logger.info(f"Nearest neighbor search completed in {time.time() - start_time:.2f}s")
     logger.info(f"  - Mean NN distance to train: {nn_tr.mean():.4f} ± {nn_tr.std():.4f}")
     logger.info(f"  - Mean NN distance to test: {nn_te.mean():.4f} ± {nn_te.std():.4f}")
