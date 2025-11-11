@@ -9,9 +9,9 @@ ready for plotting.
 
 CLI:
   python prepare_auc_boxplot_data.py \
-      --real-csv /path/cv_per_class_auc_summary_real_only.csv \
-      --synth-csv /path/cv_per_class_auc_summary_synth_and_real.csv \
-      --out-csv /path/auc_boxplot_data.csv
+      --real-csv /media/mpascual/PortableSSD/medsyn/yolo_classifier/pathmnist_real_only_20251107_174649/cv_per_class_auc_summary_real_only.csv \
+      --synth-csv /media/mpascual/PortableSSD/medsyn/yolo_classifier/pathmnist_real_synth_20251107_174649/cv_per_class_auc_summary_synth_and_real.csv \
+      --out-csv /media/mpascual/PortableSSD/medsyn/yolo_classifier/auc_boxplot_data.csv
 """
 
 from __future__ import annotations

@@ -11,8 +11,8 @@ No title. x-axis: classes + overall. y-axis: AUC.
 
 CLI:
   python plot_auc_boxplot.py \
-      --data-csv /path/auc_boxplot_data.csv \
-      --out-png /path/auc_boxplot.png \
+      --data-csv /media/mpascual/PortableSSD/medsyn/yolo_classifier/auc_boxplot_data.csv \
+      --out-png /media/mpascual/PortableSSD/medsyn/yolo_classifier/auc_boxplot.png \
       --width 8 --height 3 --dpi 300
 """
 
