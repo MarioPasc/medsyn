@@ -72,7 +72,7 @@ bvae-train = "medsyn.cli.train_bVAE:main"
 bvae-generate = "medsyn.cli.generate_bVAE:main"
 ccddpm-train = "medsyn.cli.train_ccDDPM:main"
 ccddpm-generate = "medsyn.cli.generate_ccDDPM:main"
-ccddpm-audit = "medsyn.utils.audit_ccddpm_privacy:cli_main"
+ccddpm-audit = "medsyn.analysis.audit_ccddpm_privacy:cli_main"
 
 [tool.setuptools]
 packages = [
