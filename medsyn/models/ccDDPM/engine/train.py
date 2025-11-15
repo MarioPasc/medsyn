@@ -3,7 +3,7 @@
 # Features: mixed precision, EMA, classifier-free guidance (label drop), checkpointing, CSV logs, DDP support.
 from __future__ import annotations
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import os
 import csv
 import time
@@ -110,16 +110,17 @@ def log_training_progress(rank: int, epoch: int, step: int, total_steps: int,
 
 
 def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
-                     val_metrics: Dict[str, float], epoch_time: float,
-                     best_val_loss: float, is_best: bool) -> None:
+                     val_metrics: Dict[str, float], test_metrics: Dict[str, float],
+                     epoch_time: float, best_val_loss: float, is_best: bool) -> None:
     """
-    Log end-of-epoch summary with training and validation metrics.
+    Log end-of-epoch summary with training, validation, and test metrics.
 
     Args:
         rank: Process rank
         epoch: Current epoch
         train_metrics: Training metrics dictionary
         val_metrics: Validation metrics dictionary
+        test_metrics: Test metrics dictionary
         epoch_time: Total time for epoch (seconds)
         best_val_loss: Best validation loss so far
         is_best: Whether this epoch achieved best validation loss
@@ -134,6 +135,9 @@ def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
         logger.info(f"Validation | loss={val_metrics.get('loss', 0):.4f} | "
                    f"psnr={val_metrics.get('psnr', 0):.2f}dB | "
                    f"ssim={val_metrics.get('ssim', 0):.4f}")
+        logger.info(f"Test       | loss={test_metrics.get('loss', 0):.4f} | "
+                   f"psnr={test_metrics.get('psnr', 0):.2f}dB | "
+                   f"ssim={test_metrics.get('ssim', 0):.4f}")
 
         if is_best:
             logger.info(f"🌟 NEW BEST MODEL! Val loss: {val_metrics.get('loss', 0):.4f} "
@@ -606,6 +610,118 @@ def compute_batch_metrics(
     
     return metrics
 
+@torch.no_grad()
+def evaluate_split(
+    model: nn.Module,
+    dataloader: torch.utils.data.DataLoader,
+    split_name: str,
+    noise_scheduler: DDPMScheduler,
+    device: torch.device,
+    scfg: Any,
+    tcfg: Any,
+    use_ddp: bool,
+    rank: int
+) -> Dict[str, float]:
+    """
+    Evaluate model on a given split (val or test).
+
+    Args:
+        model: The model to evaluate
+        dataloader: DataLoader for the split
+        split_name: Name of the split ("val" or "test")
+        noise_scheduler: DDPM scheduler
+        device: Device to run on
+        scfg: Scheduler config
+        tcfg: Training config
+        use_ddp: Whether DDP is enabled
+        rank: Process rank
+
+    Returns:
+        Dictionary of metrics (loss, psnr, ssim, per-class losses, etc.)
+    """
+    model.eval()
+    split_avg = EpochAverager()
+    split_loss_fn = DDPMNoiseMSE(
+        num_classes=tcfg.num_classes,
+        use_min_snr=tcfg.use_min_snr,
+        min_snr_gamma=tcfg.min_snr_gamma
+    )
+
+    total_steps = len(dataloader)
+    use_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
+
+    # Progress bar (only on rank-0 if using tqdm AND not supercomputer)
+    if use_progress_bar:
+        pbar = tqdm(dataloader, desc=f"{split_name.capitalize()} Eval", unit="batch", leave=False)
+    else:
+        pbar = dataloader
+
+    with torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
+        for step, batch in enumerate(pbar, 1):
+            x0 = batch["pixel_values"].to(device)
+            labels = batch["labels"].to(device)
+            bsz = x0.size(0)
+
+            # Sample t and noise
+            t = torch.randint(0, scfg.num_train_timesteps, (bsz,), device=device, dtype=torch.long)
+            noise = torch.randn_like(x0)
+            x_t = noise_scheduler.add_noise(x0, noise, t)
+
+            # Forward
+            pred = model(x_t, t, labels)
+            loss = split_loss_fn(
+                pred, noise, labels,
+                timesteps=t,
+                alphas_cumprod=noise_scheduler.alphas_cumprod
+            )
+
+            # Reconstruct x0 for metrics
+            sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
+            sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
+
+            # Add epsilon to prevent division by zero
+            sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
+            x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
+
+            # Clamp to prevent extreme values
+            x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+
+            # Compute metrics
+            batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
+            batch_metrics["grad_norm"] = 0.0  # No gradients in evaluation
+            batch_metrics["ema_enabled"] = 1.0 if hasattr(model, '_ema') else 0.0
+            split_avg.update(batch_metrics, batch_size=bsz)
+
+            # Update progress bar (only if tqdm enabled on rank-0)
+            if use_progress_bar:
+                pbar.set_postfix({f"{split_name}_loss": f"{loss.item():.4f}"})
+
+            # Supercomputer mode: periodic logging (3 times per evaluation)
+            if IS_SUPERCOMPUTER and should_log_step(step, total_steps, log_frequency=3):
+                log_validation_progress(
+                    rank=rank,
+                    step=step,
+                    total_steps=total_steps,
+                    loss=loss.item(),
+                    main_process_only=True
+                )
+
+    # Close progress bar if used
+    if use_progress_bar:
+        pbar.close()
+
+    # Get per-class losses (local to this GPU)
+    per_class_losses = split_loss_fn.per_class()
+    metrics = split_avg.means()
+    for c, loss_c in per_class_losses.items():
+        metrics[f"loss_c{c}"] = loss_c
+
+    # CRITICAL: Synchronize metrics across all GPUs
+    metrics = sync_metrics_dict(metrics, device, use_ddp)
+
+    return metrics
+
+
 def train(yaml_path: str, split: str = "train") -> None:
     """
     Train ccDDPM using config at yaml_path. Saves checkpoints and CSV log.
@@ -691,6 +807,7 @@ def train(yaml_path: str, split: str = "train") -> None:
     dl_cfg = cfg.ccddpm.dataloader
     train_sampler = None
     val_sampler = None
+    test_sampler = None
 
     if dl_cfg.type.lower() == "npz":
         if is_main_process():
@@ -708,6 +825,10 @@ def train(yaml_path: str, split: str = "train") -> None:
             dl_cfg.npz_path, "val", tcfg.image_size, normalize=True,
             augmentation_pipeline=None
         )
+        test_dataset = NPZDataset(
+            dl_cfg.npz_path, "test", tcfg.image_size, normalize=True,
+            augmentation_pipeline=None
+        )
 
         if use_ddp:
             # DDP: Create DistributedSamplers (shuffle via sampler, not DataLoader)
@@ -717,9 +838,12 @@ def train(yaml_path: str, split: str = "train") -> None:
             val_sampler = DistributedSampler(
                 val_dataset, num_replicas=world_size, rank=rank, shuffle=False
             )
+            test_sampler = DistributedSampler(
+                test_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
             if is_main_process():
                 logger.info(f"DDP: DistributedSampler created for {len(train_dataset)} train, "
-                           f"{len(val_dataset)} val samples across {world_size} GPUs")
+                           f"{len(val_dataset)} val, {len(test_dataset)} test samples across {world_size} GPUs")
         # else: Legacy path uses shuffle=True in DataLoader, no sampler
 
         # Build loaders (DDP uses sampler with shuffle=False, Legacy uses shuffle=True)
@@ -730,6 +854,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         val_loader = build_npz_loader(
             dl_cfg.npz_path, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
             normalize=True, augmentation_pipeline=None, sampler=val_sampler
+        )
+        test_loader = build_npz_loader(
+            dl_cfg.npz_path, "test", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=None, sampler=test_sampler
         )
 
     else:  # default to JSON
@@ -746,6 +874,10 @@ def train(yaml_path: str, split: str = "train") -> None:
             cfg.data_index_json, "val", tcfg.image_size, normalize=True,
             augmentation_pipeline=None
         )
+        test_dataset = PathMNISTIndexDataset(
+            cfg.data_index_json, "test", tcfg.image_size, normalize=True,
+            augmentation_pipeline=None
+        )
 
         if use_ddp:
             # DDP: Create DistributedSamplers (shuffle via sampler, not DataLoader)
@@ -755,9 +887,12 @@ def train(yaml_path: str, split: str = "train") -> None:
             val_sampler = DistributedSampler(
                 val_dataset, num_replicas=world_size, rank=rank, shuffle=False
             )
+            test_sampler = DistributedSampler(
+                test_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
             if is_main_process():
                 logger.info(f"DDP: DistributedSampler created for {len(train_dataset)} train, "
-                           f"{len(val_dataset)} val samples across {world_size} GPUs")
+                           f"{len(val_dataset)} val, {len(test_dataset)} test samples across {world_size} GPUs")
         # else: Legacy path uses shuffle=True in DataLoader, no sampler
 
         # Build loaders (DDP uses sampler with shuffle=False, Legacy uses shuffle=True)
@@ -769,6 +904,30 @@ def train(yaml_path: str, split: str = "train") -> None:
             cfg.data_index_json, "val", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
             normalize=True, augmentation_pipeline=None, sampler=val_sampler
         )
+        test_loader = build_json_loader(
+            cfg.data_index_json, "test", tcfg.image_size, tcfg.batch_size, tcfg.num_workers,
+            normalize=True, augmentation_pipeline=None, sampler=test_sampler
+        )
+
+    # ========================================================================
+    # DATASET SIZE LOGGING
+    # ========================================================================
+    # Log comprehensive dataset information (only rank-0 to avoid clutter)
+    if is_main_process():
+        logger.info("=" * 80)
+        logger.info("DATASET SIZES (Pre-Augmentation)")
+        logger.info("=" * 80)
+        logger.info(f"Train: {len(train_dataset):,} samples")
+        if augmentation_pipeline is not None:
+            aug_cfg = cfg.ccddpm.augmentation
+            logger.info(f"  Augmentation: ENABLED (probability={aug_cfg.probability})")
+            logger.info(f"  Transforms: {len(aug_cfg.transforms)} configured")
+            logger.info(f"  Note: Effective sample diversity increases due to augmentation")
+        else:
+            logger.info(f"  Augmentation: DISABLED")
+        logger.info(f"Val:   {len(val_dataset):,} samples (no augmentation)")
+        logger.info(f"Test:  {len(test_dataset):,} samples (no augmentation)")
+        logger.info("=" * 80)
 
     # ========================================================================
     # MODEL, SCHEDULER, OPTIMIZER, EMA
@@ -902,6 +1061,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 epoch_augmentation_transforms.extend(batch["applied_transforms"])
 
             # sample t and noise
+            # NOTE: aquí ocurre la magia jeje... 
             bsz = x0.size(0)
             t = torch.randint(0, scfg.num_train_timesteps, (bsz,), device=device, dtype=torch.long)
             noise = torch.randn_like(x0)
@@ -1086,91 +1246,43 @@ def train(yaml_path: str, split: str = "train") -> None:
             logger.info(f"Starting validation on {len(val_loader)} batches...")
 
         val_start_time = time.time()
-        model.eval()
-        val_avg = EpochAverager()
-        val_loss_fn = DDPMNoiseMSE(
-            num_classes=tcfg.num_classes,
-            use_min_snr=tcfg.use_min_snr,
-            min_snr_gamma=tcfg.min_snr_gamma
+        val_metrics = evaluate_split(
+            model=model,
+            dataloader=val_loader,
+            split_name="val",
+            noise_scheduler=noise_scheduler,
+            device=device,
+            scfg=scfg,
+            tcfg=tcfg,
+            use_ddp=use_ddp,
+            rank=rank
         )
-
-        total_val_steps = len(val_loader)
-        use_val_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
-
-        # Validation progress bar (only on rank-0 if using tqdm AND not supercomputer)
-        if use_val_progress_bar:
-            val_pbar = tqdm(val_loader, desc="Validation", unit="batch", leave=False)
-        else:
-            val_pbar = val_loader
-
-        with torch.no_grad(), torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
-            for val_step, batch in enumerate(val_pbar, 1):
-                x0 = batch["pixel_values"].to(device)
-                labels = batch["labels"].to(device)
-                bsz = x0.size(0)
-                
-                # Sample t and noise
-                t = torch.randint(0, scfg.num_train_timesteps, (bsz,), device=device, dtype=torch.long)
-                noise = torch.randn_like(x0)
-                x_t = noise_scheduler.add_noise(x0, noise, t)
-                
-                # Forward
-                pred = model(x_t, t, labels)
-                loss = val_loss_fn(
-                    pred, noise, labels,
-                    timesteps=t,
-                    alphas_cumprod=noise_scheduler.alphas_cumprod
-                )
-                
-                # Reconstruct x0 for metrics
-                sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
-                sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
-
-                # Add epsilon to prevent division by zero
-                sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
-                x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
-
-                # Clamp to prevent extreme values
-                x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
-                
-                # Compute metrics
-                val_batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
-                val_batch_metrics["grad_norm"] = 0.0  # No gradients in validation
-                val_batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
-                val_avg.update(val_batch_metrics, batch_size=bsz)
-
-                # Update progress bar (only if tqdm enabled on rank-0)
-                if use_val_progress_bar:
-                    val_pbar.set_postfix({"val_loss": f"{loss.item():.4f}"})
-
-                # Supercomputer mode: periodic validation logging (3 times per validation)
-                if IS_SUPERCOMPUTER and should_log_step(val_step, total_val_steps, log_frequency=3):
-                    log_validation_progress(
-                        rank=rank,
-                        step=val_step,
-                        total_steps=total_val_steps,
-                        loss=loss.item(),
-                        main_process_only=True
-                    )
-
-        # Close validation progress bar if used
-        if use_val_progress_bar:
-            val_pbar.close()
-
         val_time = time.time() - val_start_time
-
-        # Get per-class validation losses (local to this GPU)
-        val_per_class_losses = val_loss_fn.per_class()
-        val_metrics = val_avg.means()
-        for c, loss_c in val_per_class_losses.items():
-            val_metrics[f"loss_c{c}"] = loss_c
-
-        # CRITICAL: Synchronize ALL validation metrics across GPUs (not just overall loss)
-        val_metrics = sync_metrics_dict(val_metrics, device, use_ddp)
 
         # Extract the globally synchronized validation loss for early stopping
         val_loss = val_metrics.get("loss", float("inf"))
-        
+
+        # ---- Test Evaluation ----
+        if IS_SUPERCOMPUTER and is_main_process():
+            logger.info(f"Starting test evaluation on {len(test_loader)} batches...")
+
+        test_start_time = time.time()
+        test_metrics = evaluate_split(
+            model=model,
+            dataloader=test_loader,
+            split_name="test",
+            noise_scheduler=noise_scheduler,
+            device=device,
+            scfg=scfg,
+            tcfg=tcfg,
+            use_ddp=use_ddp,
+            rank=rank
+        )
+        test_time = time.time() - test_start_time
+
+        # Extract test loss for logging
+        test_loss = test_metrics.get("loss", float("inf"))
+
         # ---- CRITICAL: Compute Training Diagnostics ----
         # These metrics detect common training failures
         # NOTE: In DDP, each rank computes diagnostics on its local validation batch.
@@ -1202,6 +1314,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         if csv_logger is not None:
             csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)
 
+        # Log test metrics (only rank-0)
+        if csv_logger is not None:
+            csv_logger.log_epoch(epoch=epoch, split="test", lr=curr_lr, metrics=test_metrics)
+
         # Log diagnostics separately (only rank-0)
         if csv_logger is not None:
             csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
@@ -1216,6 +1332,13 @@ def train(yaml_path: str, split: str = "train") -> None:
                 print(f"  SSIM: {val_metrics.get('ssim', 0.0):.4f}")
                 print(f"  Noise MSE: {val_metrics.get('noise_mse', 0.0):.4f}")
                 print(f"  Time: {format_time(val_time)}")
+
+                print("\nTest:")
+                print(f"  Average Loss: {test_metrics.get('loss', 0.0):.4f} (Global: {test_loss:.4f})")
+                print(f"  PSNR: {test_metrics.get('psnr', 0.0):.2f} dB")
+                print(f"  SSIM: {test_metrics.get('ssim', 0.0):.4f}")
+                print(f"  Noise MSE: {test_metrics.get('noise_mse', 0.0):.4f}")
+                print(f"  Time: {format_time(test_time)}")
 
                 print("\n🔍 Training Diagnostics (detecting issues):")
                 corr = diagnostics['input_output_correlation']
@@ -1252,6 +1375,10 @@ def train(yaml_path: str, split: str = "train") -> None:
                            f"psnr={val_metrics.get('psnr', 0.0):.2f}dB | "
                            f"ssim={val_metrics.get('ssim', 0.0):.4f} | "
                            f"time={format_time(val_time)}")
+                logger.info(f"Test complete | loss={test_loss:.4f} | "
+                           f"psnr={test_metrics.get('psnr', 0.0):.2f}dB | "
+                           f"ssim={test_metrics.get('ssim', 0.0):.4f} | "
+                           f"time={format_time(test_time)}")
 
                 # Log diagnostics with warnings
                 corr = diagnostics['input_output_correlation']
@@ -1317,12 +1444,14 @@ def train(yaml_path: str, split: str = "train") -> None:
                 "opt": opt.state_dict(),
                 "epoch": epoch,
                 "val_loss": val_loss,
+                "test_loss": test_loss,
                 "ema": (ema.shadow if ema else None),
                 "cfg": tcfg.__dict__,
                 # Save diagnostics for post-training analysis
                 "diagnostics": diagnostics,
                 "train_metrics": train_metrics,
                 "val_metrics": val_metrics,
+                "test_metrics": test_metrics,
                 # EMA verification
                 "ema_enabled": ema is not None,
                 "ema_num_params": len(ema.shadow) if ema else 0,
@@ -1345,7 +1474,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 logger.info(f"Saved periodic checkpoint: {ck.name}")
 
         # Calculate total epoch time
-        total_epoch_time = train_time + val_time
+        total_epoch_time = train_time + val_time + test_time
 
         # Epoch summary logging (supercomputer mode)
         if IS_SUPERCOMPUTER and is_main_process():
@@ -1354,6 +1483,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 epoch=epoch,
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
+                test_metrics=test_metrics,
                 epoch_time=total_epoch_time,
                 best_val_loss=best_val_loss,
                 is_best=is_best
