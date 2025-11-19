@@ -50,6 +50,68 @@ except ImportError:
     logger.warning("Augmentation module not available. Install albumentations to enable augmentation.")
 
 
+def save_class_embeddings_trajectory(
+    model: nn.Module,
+    epoch: int,
+    output_path: Path,
+) -> None:
+    """
+    Append current epoch's class-embedding matrix into a single .pt trajectory file.
+
+    The function expects `model` to have `class_embed.emb.weight`.
+    It accumulates snapshots over epochs in a single file with:
+      - "epochs": list of epoch numbers
+      - "embeddings": tensor [E, num_classes, emb_dim]
+      - "num_classes": int
+      - "emb_dim": int
+
+    Args:
+        model: The model containing class_embed.emb.weight
+        epoch: Current epoch number
+        output_path: Path to save the trajectory file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Current embedding matrix [num_classes, emb_dim]
+    emb_weight = model.class_embed.emb.weight.detach().cpu().clone()
+
+    if output_path.exists():
+        # Load existing trajectory and append
+        state = torch.load(output_path, map_location="cpu")
+        epochs = state.get("epochs", [])
+        prev_emb = state.get("embeddings", None)
+
+        # Ensure shapes are consistent
+        if prev_emb is not None:
+            if prev_emb.shape[1:] != emb_weight.shape:
+                raise RuntimeError(
+                    f"Embedding shape changed from {tuple(prev_emb.shape[1:])} "
+                    f"to {tuple(emb_weight.shape)}; cannot append trajectory."
+                )
+            embeddings = torch.cat([prev_emb, emb_weight.unsqueeze(0)], dim=0)
+        else:
+            embeddings = emb_weight.unsqueeze(0)
+        epochs.append(int(epoch))
+    else:
+        # First snapshot
+        epochs = [int(epoch)]
+        embeddings = emb_weight.unsqueeze(0)
+
+    state_out = {
+        "epochs": epochs,
+        "embeddings": embeddings,              # [E, num_classes, emb_dim]
+        "num_classes": embeddings.shape[1],
+        "emb_dim": embeddings.shape[2],
+    }
+
+    torch.save(state_out, output_path)
+    logger.info(
+        "Saved class embedding snapshot for epoch %d to %s "
+        "(total snapshots: %d)",
+        epoch, str(output_path), len(epochs)
+    )
+
+
 def format_time(seconds: float) -> str:
     """
     Format seconds into human-readable time string.
@@ -1346,6 +1408,13 @@ def train(yaml_path: str, split: str = "train") -> None:
             device=device
         )
         diagnostics["full_chain_psnr"] = full_chain_psnr
+
+        # ---- Save class embedding trajectory (rank-0 only) ----
+        if is_main_process() and hasattr(tcfg, 'snapshot_class_embedding_every'):
+            if tcfg.snapshot_class_embedding_every > 0 and (epoch % tcfg.snapshot_class_embedding_every) == 0:
+                emb_out_path = out_dir / "embeddings" / "class_embeddings_trajectory.pt"
+                # Use base_model to avoid DDP wrappers; EMA is not active here
+                save_class_embeddings_trajectory(base_model, epoch, emb_out_path)
 
         # Log validation metrics (only rank-0)
         if csv_logger is not None:

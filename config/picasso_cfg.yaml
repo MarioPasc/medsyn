@@ -28,7 +28,7 @@ ccddpm:
   dist:
     enabled: true  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
-    num_gpus: 4  # 'auto' uses all available GPUs (set by torchrun)
+    num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
     grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
@@ -65,14 +65,14 @@ ccddpm:
     statistics:
       enabled: true  # Track which augmentations were applied
       output_path: augmentation_stats.csv  # Relative to output_dir or absolute path
-      save_every_n_epochs: 10  # 0 = save only at end, 1 = every epoch, etc.
+      save_every_n_epochs: 1  # 0 = save only at end, 1 = every epoch, etc.
 
   train:
     image_size: 64
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 4
+    batch_size: 8
     epochs: 1000
     mixed_precision: true
     grad_clip_norm: 5.0        # STABILITY FIX: Reduced from 10.0 to 5.0 to prevent gradient explosion
@@ -82,7 +82,8 @@ ccddpm:
     use_min_snr: true          # STABILITY: If issues persist, set to false to disable Min-SNR weighting
     min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
-    patience: 50               # Early stopping: stop if no improvement for 50 epochs
+    snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
+    patience: 5               # Early stopping: stop if no improvement for 5 epochs
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
