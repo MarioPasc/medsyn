@@ -70,23 +70,23 @@ ccddpm:
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 32  
+    class_embed_dim: 32
     num_classes: 9
     batch_size: 4
     epochs: 1000
     mixed_precision: true
-    grad_clip_norm: 10.0       # FIXED: Was 1.0 (too aggressive), now 10.0 to allow learning
+    grad_clip_norm: 5.0        # STABILITY FIX: Reduced from 10.0 to 5.0 to prevent gradient explosion
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
     ema_use: true
     ema_decay: 0.9995
-    use_min_snr: true          # ENABLED: Min-SNR loss weighting stabilizes training
-    min_snr_gamma: 5.0         # Standard value for Min-SNR
+    use_min_snr: true          # STABILITY: If issues persist, set to false to disable Min-SNR weighting
+    min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     patience: 50               # Early stopping: stop if no improvement for 50 epochs
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     output_dir: ${OUTPUT_DIR}
   optim:
-    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
+    lr: 1.0e-4  # STABILITY FIX: Reduced from 2.0e-4 to 1.0e-4 to prevent gradient explosion
     wd: 0.0
   sched:
     num_train_timesteps: 1000

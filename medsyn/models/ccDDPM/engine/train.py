@@ -607,7 +607,12 @@ def compute_batch_metrics(
     
     metrics["psnr"] = compute_psnr(x0_recon_01, x0_orig_01, max_val=1.0)
     metrics["ssim"] = compute_ssim(x0_recon_01, x0_orig_01, max_val=1.0)
-    
+
+    # Guard against non-finite PSNR/SSIM values (e.g., inf from zero MSE)
+    for key in ["psnr", "ssim"]:
+        if key in metrics and not math.isfinite(float(metrics[key])):
+            metrics[key] = 0.0
+
     return metrics
 
 @torch.no_grad()
@@ -649,6 +654,7 @@ def evaluate_split(
 
     total_steps = len(dataloader)
     use_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
+    n_bad_batches = 0  # Track batches with non-finite loss
 
     # Progress bar (only on rank-0 if using tqdm AND not supercomputer)
     if use_progress_bar:
@@ -656,55 +662,68 @@ def evaluate_split(
     else:
         pbar = dataloader
 
-    with torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
-        for step, batch in enumerate(pbar, 1):
-            x0 = batch["pixel_values"].to(device)
-            labels = batch["labels"].to(device)
-            bsz = x0.size(0)
+    for step, batch in enumerate(pbar, 1):
+        x0 = batch["pixel_values"].to(device)
+        labels = batch["labels"].to(device)
+        bsz = x0.size(0)
 
-            # Sample t and noise
-            t = torch.randint(0, scfg.num_train_timesteps, (bsz,), device=device, dtype=torch.long)
-            noise = torch.randn_like(x0)
-            x_t = noise_scheduler.add_noise(x0, noise, t)
+        # Sample t and noise
+        t = torch.randint(0, scfg.num_train_timesteps, (bsz,), device=device, dtype=torch.long)
+        noise = torch.randn_like(x0)
+        x_t = noise_scheduler.add_noise(x0, noise, t)
 
-            # Forward
+        # Forward with mixed precision (for model efficiency)
+        with torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
             pred = model(x_t, t, labels)
-            loss = split_loss_fn(
-                pred, noise, labels,
-                timesteps=t,
-                alphas_cumprod=noise_scheduler.alphas_cumprod
+
+        # Compute loss in full precision (float32) for stability
+        pred_fp32 = pred.float()
+        noise_fp32 = noise.float()
+        loss = split_loss_fn(
+            pred_fp32, noise_fp32, labels,
+            timesteps=t,
+            alphas_cumprod=noise_scheduler.alphas_cumprod
+        )
+
+        # Guard: skip batches with non-finite loss
+        if not torch.isfinite(loss):
+            logger.warning(
+                f"[{split_name}] Non-finite loss at batch_idx={step}; "
+                f"skipping batch from metrics."
             )
+            n_bad_batches += 1
+            continue
 
-            # Reconstruct x0 for metrics
-            sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
-            sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
+        # Reconstruct x0 for metrics
+        sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt()
+        sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt()
 
-            # Add epsilon to prevent division by zero
-            sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
-            x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
+        # Add epsilon to prevent division by zero
+        sqrt_alpha_prod = torch.clamp(sqrt_alpha_prod, min=1e-6)
+        x0_pred = (x_t - sqrt_one_minus_alpha_prod.view(-1, 1, 1, 1) * pred) / sqrt_alpha_prod.view(-1, 1, 1, 1)
 
-            # Clamp to prevent extreme values
-            x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+        # Clamp to prevent extreme values
+        x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
 
-            # Compute metrics
-            batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
-            batch_metrics["grad_norm"] = 0.0  # No gradients in evaluation
-            batch_metrics["ema_enabled"] = 1.0 if hasattr(model, '_ema') else 0.0
-            split_avg.update(batch_metrics, batch_size=bsz)
+        # Compute metrics
+        batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
+        batch_metrics["grad_norm"] = 0.0  # No gradients in evaluation
+        batch_metrics["ema_enabled"] = 1.0 if hasattr(model, '_ema') else 0.0
+        split_avg.update(batch_metrics, batch_size=bsz)
 
-            # Update progress bar (only if tqdm enabled on rank-0)
-            if use_progress_bar:
-                pbar.set_postfix({f"{split_name}_loss": f"{loss.item():.4f}"})
+        # Update progress bar (only if tqdm enabled on rank-0)
+        if use_progress_bar:
+            pbar.set_postfix({f"{split_name}_loss": f"{loss.item():.4f}"})
 
-            # Supercomputer mode: periodic logging (3 times per evaluation)
-            if IS_SUPERCOMPUTER and should_log_step(step, total_steps, log_frequency=3):
-                log_validation_progress(
-                    rank=rank,
-                    step=step,
-                    total_steps=total_steps,
-                    loss=loss.item(),
-                    main_process_only=True
-                )
+        # Supercomputer mode: periodic logging (3 times per evaluation)
+        if IS_SUPERCOMPUTER and should_log_step(step, total_steps, log_frequency=3):
+            log_validation_progress(
+                rank=rank,
+                step=step,
+                total_steps=total_steps,
+                loss=loss.item(),
+                main_process_only=True
+            )
 
     # Close progress bar if used
     if use_progress_bar:
@@ -716,8 +735,18 @@ def evaluate_split(
     for c, loss_c in per_class_losses.items():
         metrics[f"loss_c{c}"] = loss_c
 
+    # Add number of bad batches to metrics (for monitoring numerical stability)
+    metrics["n_bad_batches"] = float(n_bad_batches)
+
     # CRITICAL: Synchronize metrics across all GPUs
     metrics = sync_metrics_dict(metrics, device, use_ddp)
+
+    # Log warning if validation had many bad batches (indicates training divergence)
+    if metrics["n_bad_batches"] > 0:
+        logger.warning(
+            f"[{split_name}] Encountered {metrics['n_bad_batches']:.0f} batches with non-finite loss. "
+            "This indicates potential training divergence."
+        )
 
     return metrics
 
@@ -734,6 +763,14 @@ def train(yaml_path: str, split: str = "train") -> None:
     tcfg = cfg.ccddpm.train
     scfg = cfg.ccddpm.sched
     ocfg = cfg.ccddpm.optim
+
+    # ========================================================================
+    # DDP/NCCL DEBUGGING: Set environment variables for better error reporting
+    # ========================================================================
+    # Enable detailed distributed debugging (helps identify collective operation failures)
+    os.environ.setdefault("TORCH_DISTRIBUTED_DEBUG", "DETAIL")
+    # Enable async error handling in NCCL (reports errors immediately rather than timeout)
+    os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
 
     # ========================================================================
     # PROTECTION: Detect misconfiguration
@@ -1082,16 +1119,18 @@ def train(yaml_path: str, split: str = "train") -> None:
                     timesteps=t,
                     alphas_cumprod=noise_scheduler.alphas_cumprod
                 )
-            # Guard: skip non-finite loss early
+            # Guard: treat non-finite loss as fatal
             if not torch.isfinite(loss):
-                logger.warning(f"⚠️  Skipping step {global_step} due to non-finite loss")
-                opt.zero_grad(set_to_none=True); scaler.update(); global_step += 1; continue
+                logger.error(
+                    f"Non-finite loss at global_step={global_step}, epoch={epoch}, "
+                    f"loss={loss.item()}"
+                )
+                raise FloatingPointError("Non-finite loss; aborting training.")
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
 
             # Compute gradient norm and check for NaN/Inf BEFORE optimizer step
-            skip_step = False
             if tcfg.grad_clip_norm:
                 scaler.unscale_(opt)
                 # Clip gradients; error_if_nonfinite=False prevents crashes on overflow
@@ -1099,11 +1138,13 @@ def train(yaml_path: str, split: str = "train") -> None:
                     model.parameters(), tcfg.grad_clip_norm, error_if_nonfinite=False
                 )
                 grad_norm_val = float(grad_norm)
-                # Check if gradients are non-finite
+                # Check if gradients are non-finite - treat as fatal
                 if not math.isfinite(grad_norm_val):
-                    skip_step = True
-                    grad_norm_val = float("nan")
-                    logger.warning(f"⚠️  Skipping step {global_step} due to non-finite gradients (grad_norm={grad_norm})")
+                    logger.error(
+                        f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                        f"grad_norm={grad_norm}"
+                    )
+                    raise FloatingPointError("Non-finite gradients; aborting training.")
             else:
                 # Compute gradient norm for logging
                 total_norm = 0.0
@@ -1113,22 +1154,18 @@ def train(yaml_path: str, split: str = "train") -> None:
                         total_norm += param_norm.item() ** 2
                 grad_norm_val = total_norm ** 0.5
                 if not math.isfinite(grad_norm_val):
-                    skip_step = True
-                    grad_norm_val = float("nan")
-                    logger.warning(f"⚠️  Skipping step {global_step} due to non-finite gradients (grad_norm={grad_norm_val})")
+                    logger.error(
+                        f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                        f"grad_norm={grad_norm_val}"
+                    )
+                    raise FloatingPointError("Non-finite gradients; aborting training.")
 
-            # Only update model if gradients are finite
-            if not skip_step:
-                scaler.step(opt)
-                scaler.update()
-                if ema:
-                    # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
-                    ema.update(base_model)
-            else:
-                # Still update scaler state even when skipping
-                scaler.update()
-                # Zero out gradients to prevent accumulation
-                opt.zero_grad(set_to_none=True)
+            # Update model (no need to check skip_step anymore, as we raise on non-finite)
+            scaler.step(opt)
+            scaler.update()
+            if ema:
+                # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
+                ema.update(base_model)
 
             global_step += 1
             
