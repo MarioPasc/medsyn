@@ -1181,56 +1181,87 @@ def train(yaml_path: str, split: str = "train") -> None:
                     timesteps=t,
                     alphas_cumprod=noise_scheduler.alphas_cumprod
                 )
-            # Guard: treat non-finite loss as fatal
+            # Guard: check for non-finite loss
+            skip_step = False
+            grad_norm_val = 0.0  # Initialize gradient norm
             if not torch.isfinite(loss):
-                logger.error(
-                    f"Non-finite loss at global_step={global_step}, epoch={epoch}, "
-                    f"loss={loss.item()}"
-                )
-                raise FloatingPointError("Non-finite loss; aborting training.")
-
-            opt.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-
-            # Compute gradient norm and check for NaN/Inf BEFORE optimizer step
-            if tcfg.grad_clip_norm:
-                scaler.unscale_(opt)
-                # Clip gradients; error_if_nonfinite=False prevents crashes on overflow
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), tcfg.grad_clip_norm, error_if_nonfinite=False
-                )
-                grad_norm_val = float(grad_norm)
-                # Check if gradients are non-finite - treat as fatal
-                if not math.isfinite(grad_norm_val):
-                    logger.error(
-                        f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
-                        f"grad_norm={grad_norm}"
+                if tcfg.skip_nonfinite_grads:
+                    logger.warning(
+                        f"Non-finite loss at global_step={global_step}, epoch={epoch}, "
+                        f"loss={loss.item()} - skipping batch"
                     )
-                    raise FloatingPointError("Non-finite gradients; aborting training.")
+                    skip_step = True
+                else:
+                    logger.error(
+                        f"Non-finite loss at global_step={global_step}, epoch={epoch}, "
+                        f"loss={loss.item()}"
+                    )
+                    raise FloatingPointError("Non-finite loss; aborting training.")
+
+            # Skip backward pass and optimizer step if loss is non-finite
+            if not skip_step:
+                opt.zero_grad(set_to_none=True)
+                scaler.scale(loss).backward()
+
+                # Compute gradient norm and check for NaN/Inf BEFORE optimizer step
+                if tcfg.grad_clip_norm:
+                    scaler.unscale_(opt)
+                    # Clip gradients; error_if_nonfinite=False prevents crashes on overflow
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), tcfg.grad_clip_norm, error_if_nonfinite=False
+                    )
+                    grad_norm_val = float(grad_norm)
+                    # Check if gradients are non-finite
+                    if not math.isfinite(grad_norm_val):
+                        if tcfg.skip_nonfinite_grads:
+                            logger.warning(
+                                f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                                f"grad_norm={grad_norm} - skipping batch"
+                            )
+                            skip_step = True
+                        else:
+                            logger.error(
+                                f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                                f"grad_norm={grad_norm}"
+                            )
+                            raise FloatingPointError("Non-finite gradients; aborting training.")
+                else:
+                    # Compute gradient norm for logging
+                    total_norm = 0.0
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.detach().data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    grad_norm_val = total_norm ** 0.5
+                    if not math.isfinite(grad_norm_val):
+                        if tcfg.skip_nonfinite_grads:
+                            logger.warning(
+                                f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                                f"grad_norm={grad_norm_val} - skipping batch"
+                            )
+                            skip_step = True
+                        else:
+                            logger.error(
+                                f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
+                                f"grad_norm={grad_norm_val}"
+                            )
+                            raise FloatingPointError("Non-finite gradients; aborting training.")
+
+            # Only update model if step is not skipped
+            if not skip_step:
+                scaler.step(opt)
+                scaler.update()
+                if ema:
+                    # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
+                    ema.update(base_model)
+
+                global_step += 1
             else:
-                # Compute gradient norm for logging
-                total_norm = 0.0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.detach().data.norm(2)
-                        total_norm += param_norm.item() ** 2
-                grad_norm_val = total_norm ** 0.5
-                if not math.isfinite(grad_norm_val):
-                    logger.error(
-                        f"Non-finite gradients at global_step={global_step}, epoch={epoch}, "
-                        f"grad_norm={grad_norm_val}"
-                    )
-                    raise FloatingPointError("Non-finite gradients; aborting training.")
+                # Reset gradients and scaler state on skipped step
+                opt.zero_grad(set_to_none=True)
+                # Update scaler to reset internal state (prevents scale from growing indefinitely)
+                scaler.update()
 
-            # Update model (no need to check skip_step anymore, as we raise on non-finite)
-            scaler.step(opt)
-            scaler.update()
-            if ema:
-                # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
-                ema.update(base_model)
-
-            global_step += 1
-            
             # Compute x0 reconstruction for metrics (predict x0 from predicted noise)
             with torch.no_grad():
                 # Use scheduler to predict x0 from noise
@@ -1246,7 +1277,7 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                 # Compute batch metrics
                 batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
-                batch_metrics["grad_norm"] = grad_norm_val
+                batch_metrics["grad_norm"] = grad_norm_val if not skip_step else 0.0
                 batch_metrics["ema_enabled"] = 1.0 if ema else 0.0
                 batch_metrics["skipped_step"] = 1.0 if skip_step else 0.0
 

@@ -50,6 +50,7 @@ class TrainCfg:
     snapshot_class_embedding_every: int = 0  # Save class embedding snapshots every X epochs (0 = disabled)
     patience: int = 15  # Early stopping: number of epochs without improvement
     use_tqdm: bool = True  # Enable/disable tqdm progress bars (useful for HPC logs)
+    skip_nonfinite_grads: bool = False  # If True, skip batches with non-finite gradients; if False, raise error
     output_dir: Path = Path("./outputs/ccddpm")
 
 @dataclass
