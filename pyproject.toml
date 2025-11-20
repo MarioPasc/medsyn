@@ -7,7 +7,7 @@ name = "medsyn"
 version = "0.1.0"
 description = "Medical Image Synthesis project for in-depth evaluation of synthesis models (bVAE) on medical image datasets (PathMNIST)"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10.6"
 license = {file = "LICENSE"}
 keywords = [
     "medical-imaging",
@@ -72,10 +72,10 @@ distdiff = [
     "packaging>=21.3",
 
     # Hugging Face ecosystem (specific versions for DistDiff compatibility)
-    "transformers==4.19.2",  # DistDiff requires this specific version
+    "transformers>=4.29,<5",  # DistDiff requires this specific version
     "accelerate>=0.12.0",
     "huggingface-hub>=0.8.1",
-
+    "diffusers[torch]>=0.21,<0.30",
     # CLIP for text-image embeddings
     "open-clip-torch>=2.0.0",
 

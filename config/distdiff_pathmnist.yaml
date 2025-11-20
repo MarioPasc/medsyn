@@ -75,6 +75,11 @@ expansion:
   # Stable Diffusion model
   pretrained_model: "CompVis/stable-diffusion-v1-4"  # Or "stabilityai/stable-diffusion-2-1-base"
 
+  # Model cache directory for offline execution (HPC clusters without internet)
+  # Pre-download models using: python scripts/predownload_distdiff_models.py --cache_dir /path/
+  # Set to null to use default HuggingFace cache (~/.cache/huggingface)
+  cache_dir: null  # Example: /scratch/$USER/models/distdiff or /shared/scratch/models/distdiff
+
   # Generation parameters (PathMNIST paper settings)
   num_images_per_prompt: 5  # Images to generate per sample (must match expand_factor)
   strength: 0.2             # PathMNIST paper: 0.2 (NOT 0.5 like other datasets)

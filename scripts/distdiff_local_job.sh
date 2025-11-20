@@ -48,6 +48,16 @@ echo ""
 # ---------- Parse config ----------
 NPZ_PATH=$(grep "npz_path:" "$CONFIG_FILE" | head -1 | awk '{print $2}')
 OUTPUT_DIR=$(grep "output_dir:" "$CONFIG_FILE" | grep -v "^#" | head -1 | awk '{print $2}')
+CACHE_DIR=$(grep "cache_dir:" "$CONFIG_FILE" | grep -v "^#" | head -1 | awk '{print $2}')
+
+# Handle null cache_dir
+if [ "$CACHE_DIR" = "null" ] || [ -z "$CACHE_DIR" ]; then
+    CACHE_DIR_ARG=""
+    echo "Cache dir: Using default HuggingFace cache"
+else
+    CACHE_DIR_ARG="--cache_dir ${CACHE_DIR}"
+    echo "Cache dir: ${CACHE_DIR}"
+fi
 
 echo "NPZ Dataset: $NPZ_PATH"
 echo "Output Directory: $OUTPUT_DIR"
@@ -192,6 +202,7 @@ for (( split=0; split<NUM_GPUS; split++ )); do
         --data_dir "${NPZ_PATH}" \
         --output_dir "${SYNTH_DATA_DIR}/split_${split}" \
         --pretrained_model_name_or_path "CompVis/stable-diffusion-v1-4" \
+        ${CACHE_DIR_ARG} \
         --gradient_checkpointing \
         --K 5 \
         --train_batch_size 1 \

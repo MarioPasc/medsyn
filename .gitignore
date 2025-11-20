@@ -208,3 +208,5 @@ __marimo__/
 
 PathMNIST/
 .vscode/
+
+distdiff_models/
