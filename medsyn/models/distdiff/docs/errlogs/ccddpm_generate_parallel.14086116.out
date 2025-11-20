@@ -1,0 +1,195 @@
+================================================================================
+🚀 Parallel Multi-GPU Image Generation for ccDDPM
+================================================================================
+Job ID: 14086116
+Number of GPUs: 4
+CPUs per task: 16
+Memory: 65536MB
+Localscratch: /localscratch/users/mpascual/14086116
+================================================================================
+
+[→] Copying repository from /mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn...
+[✓] Repository copied
+[→] Copying checkpoint from /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel/ckpts/best.pt...
+[✓] Checkpoint copied (1.1G)
+
+[→] Setting up conda environment...
+[ℹ] No conda module loaded; assuming conda in PATH
+[✓] Python: /mnt/home/users/tic_163_uma/mpascual/fscratch/conda_envs/medsyn/bin/python
+[✓] Python version: 3.9.24
+[✓] PyTorch: 2.8.0+cu128
+[✓] CUDA available: True
+[✓] Number of GPUs: 4
+
+================================================================================
+📊 GPU Information
+================================================================================
+GPU 0: NVIDIA A100-SXM4-40GB (40960 MB total, 39688 MB free)
+GPU 1: NVIDIA A100-SXM4-40GB (40960 MB total, 40339 MB free)
+GPU 2: NVIDIA A100-SXM4-40GB (40960 MB total, 40339 MB free)
+GPU 3: NVIDIA A100-SXM4-40GB (40960 MB total, 40339 MB free)
+================================================================================
+
+[✓] Configuration prepared
+    Config: /localscratch/users/mpascual/14086116/work/picasso_cfg_generate.yaml
+    Checkpoint: /localscratch/users/mpascual/14086116/work/checkpoints/best.pt
+    Output: /localscratch/users/mpascual/14086116/work/generated
+
+================================================================================
+🎨 Starting Parallel Image Generation on 4 GPUs
+================================================================================
+Start time: Mon Nov  3 11:13:11 PM CET 2025
+
+================================================================================
+   Class-Conditioned DDPM - Parallel Multi-GPU Image Generation
+================================================================================
+
+Generation Configuration:
+  Checkpoint: /localscratch/users/mpascual/14086116/work/checkpoints/best.pt
+  Output directory: /localscratch/users/mpascual/14086116/work/generated
+  Number of GPUs: 4
+  Total tasks: 18
+  Visualizations: Enabled
+
+Samples per split and class:
+  Train split: 25970 samples
+    Class 0: 3519 samples
+    Class 1: 3376 samples
+    Class 2: 2525 samples
+    Class 3: 2484 samples
+    Class 4: 4879 samples
+    Class 5: 703 samples
+    Class 6: 4999 samples
+    Class 7: 3484 samples
+    Class 8: 1 samples
+  Val split: 2885 samples
+    Class 0: 391 samples
+    Class 1: 375 samples
+    Class 2: 280 samples
+    Class 3: 276 samples
+    Class 4: 542 samples
+    Class 5: 78 samples
+    Class 6: 555 samples
+    Class 7: 387 samples
+    Class 8: 1 samples
+  Grand total: 28855 images
+
+================================================================================
+Starting parallel generation...
+================================================================================
+
+
+================================================================================
+Aggregating results from all workers...
+================================================================================
+
+
+================================================================================
+Generation completed successfully!
+================================================================================
+  Total images generated: 28855
+  Total time: 49.2 seconds
+  Throughput: 586.18 samples/second
+  Output directory: /localscratch/users/mpascual/14086116/work/generated
+  Splits processed: train, val
+  Denoising visualizations: 2
+================================================================================
+
+
+================================================================================
+✅ Generation completed successfully
+================================================================================
+End time: Mon Nov  3 11:14:15 PM CET 2025
+Total time: 1m 4s
+================================================================================
+
+================================================================================
+📦 Syncing Generated Images to Permanent Storage
+================================================================================
+[→] Copying results to /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel_generated...
+
+[ℹ] Output directory contents:
+total 8.0K
+drwxr-xr-x 11 mpascual tic_163_uma 4.0K Nov  3 23:14 train
+drwxr-xr-x 11 mpascual tic_163_uma 4.0K Nov  3 23:14 val
+
+[→] Syncing 4 PNG files, 2 NPZ files, 2 JSON files...
+sending incremental file list
+./
+train/
+train/pathmnist_train_index.json
+            201   0%    0.00kB/s    0:00:00              201   0%    0.00kB/s    0:00:00 (xfr#1, to-chk=25/29)            201   0%    0.00kB/s    0:00:00 (xfr#1, to-chk=15/29)
+train/pathmnist_train_synth.npz
+         11,975   2%   11.23MB/s    0:00:00 (xfr#2, to-chk=24/29)
+train/class_0/
+train/class_1/
+train/class_2/
+train/class_3/
+train/class_4/
+train/class_5/
+train/class_6/
+train/class_7/
+train/class_8/
+train/class_8/denoising_process_class8_d3ede7e40917.png
+        223,761  47%   71.07MB/s    0:00:00 (xfr#3, to-chk=14/29)
+train/class_8/synth_81a5c433b5ce_class8.png
+        232,394  49%   73.81MB/s    0:00:00 (xfr#4, to-chk=13/29)
+val/
+val/pathmnist_val_index.json
+        232,593  49%   73.88MB/s    0:00:00 (xfr#5, to-chk=12/29)
+val/pathmnist_val_synth.npz
+        244,455  52%   77.65MB/s    0:00:00 (xfr#6, to-chk=11/29)
+val/class_0/
+val/class_1/
+val/class_2/
+val/class_3/
+val/class_4/
+val/class_5/
+val/class_6/
+val/class_7/
+val/class_8/
+val/class_8/denoising_process_class8_62d7ced143e5.png
+        457,443  97%   62.29MB/s    0:00:00 (xfr#7, to-chk=1/29) 
+val/class_8/synth_6efad97b0b7b_class8.png
+        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   63.63MB/s    0:00:00 (xfr#8, to-chk=0/29)        467,216 100%   55.67MB/s    0:00:00 (xfr#8, to-chk=0/29)
+
+sent 468,614 bytes  received 267 bytes  937,762.00 bytes/sec
+total size is 467,216  speedup is 1.00
+[✓] Sync completed successfully
+
+================================================================================
+📊 Generation Summary
+================================================================================
+Output location: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel_generated
+
+Generated files:
+  - Images: 2
+  - NPZ files: 2
+  - JSON indexes: 2
+  - Visualizations: 2
+
+Per-split breakdown:
+  - train: 1 images across 9 classes
+    NPZ file: 0
+  - val: 1 images across 9 classes
+    NPZ file: 0
+
+Performance:
+  - Total time: 1m 4s
+  - Throughput: .03 images/second
+  - GPUs used: 4
+  - Estimated speedup: ~4.0x vs single GPU
+================================================================================
+
+[→] Cleaning up localscratch...
+[✓] Cleanup complete
+
+================================================================================
+🎉 Parallel generation job completed successfully!
+================================================================================
+Results location: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel_generated
+Job ID: 14086116
+Total time: 1m 4s
+GPUs used: 4
+================================================================================
+
