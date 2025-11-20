@@ -1,0 +1,135 @@
+# DistDiff Configuration for PathMNIST Experiments
+# This config defines paths and hyperparameters for running DistDiff on MedSyn's custom NPZ dataset
+#
+# Pipeline stages:
+#   1. Train guide model on original data (NPZ)
+#   2. Generate synthetic data using guide model + Stable Diffusion
+#   3. Train classifier on original + synthetic data
+#
+# Author: MedSyn Project
+
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data:
+  dataset_name: pathmnist_npz  # Use NPZ adapter for MedSyn format
+
+  # Path to custom NPZ file (MedSyn format with train/val/test splits + is_synth)
+  npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz
+
+  # Dataset properties
+  num_classes: 9
+  image_size: 64  # PathMNIST images are 64x64
+  channels: 3     # RGB
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  # Guide model architecture (used for prototype extraction and guidance)
+  arch: open_clip_vit_b32
+  pretrained: true  # Use ImageNet pretrained weights
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training:
+  # Random seed for reproducibility
+  seed: 23102003
+
+  # Batch sizes
+  train_batch_size: 64
+  val_batch_size: 64
+
+  # Optimization
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005  # 5e-4
+
+  # Learning rate schedule
+  schedule: [41, 81]  # Epochs to decay LR
+  gamma: 0.1          # LR decay factor
+
+  # Training duration
+  epochs: 100
+
+  # Data loading
+  num_workers: 8
+
+# =============================================================================
+# EXPANSION (DATA GENERATION) CONFIGURATION
+# =============================================================================
+expansion:
+  # Output directory for all DistDiff artifacts
+  output_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/distdiff_experiments
+
+  # Expansion factor (how many synthetic images to generate per original image)
+  expand_factor: 5  # 5x expansion
+
+  # Parallel generation across multiple GPUs
+  num_gpus: 4  # Split generation across 4 GPUs
+
+  # Prototype configuration
+  K: 5  # Number of sub-prototypes per class (local prototypes)
+
+  # Stable Diffusion model
+  pretrained_model: "CompVis/stable-diffusion-v1-4"  # Or "stabilityai/stable-diffusion-2-1-base"
+
+  # Generation parameters (PathMNIST paper settings)
+  num_images_per_prompt: 5  # Images to generate per sample (must match expand_factor)
+  strength: 0.2             # PathMNIST paper: 0.2 (NOT 0.5 like other datasets)
+  guidance_scale: 7.5       # Classifier-free guidance scale
+
+  # Guidance configuration (PathMNIST paper settings)
+  guidance_type: transform_guidance
+  optimize_targets: global_prototype-local_prototype
+  guidance_step: 10         # PathMNIST paper: M=10 (NOT 20 like other datasets)
+  guidance_period: 2        # Guide for 2 consecutive steps
+
+  # Optimization constraints
+  constraint_value: 0.2     # Constraint for linf ball projection
+  rho: 10.0                 # Learning rate for optimization
+
+  # Memory optimization
+  gradient_checkpointing: true  # Enable gradient checkpointing to save memory
+
+# =============================================================================
+# PATHS (auto-generated from output_dir, usually don't need to change)
+# =============================================================================
+paths:
+  # Checkpoints for guide model
+  guide_model_checkpoint: ${expansion.output_dir}/checkpoints/guide_model
+
+  # Checkpoints for classifier trained on expanded data
+  expanded_classifier_checkpoint: ${expansion.output_dir}/checkpoints/classifier_on_expanded
+
+  # Generated synthetic data (will have split_0, split_1, ..., split_N subdirectories)
+  synthetic_data: ${expansion.output_dir}/synthetic_data
+
+  # Logs and metrics
+  logs: ${expansion.output_dir}/logs
+
+# =============================================================================
+# EXECUTION CONFIGURATION
+# =============================================================================
+execution:
+  # Device configuration
+  device: cuda
+
+  # SLURM cluster settings (for HPC execution)
+  slurm:
+    job_name: distdiff_pathmnist
+    time: "24:00:00"
+    mem: "64G"
+    cpus_per_task: 16
+    constraint: "dgx"  # Or remove if not using specific node types
+    partition: null    # Set if your cluster requires a partition
+
+  # Conda environment
+  conda_env: medsyn
+
+  # Directories for cluster execution (LocalScratch staging)
+  scratch:
+    enabled: true  # Use LocalScratch for faster I/O on HPC
+    repo_src: /mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn
+    results_dst: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_DistDiff

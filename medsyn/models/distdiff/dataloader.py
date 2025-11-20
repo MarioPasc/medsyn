@@ -7,6 +7,8 @@ import torch
 import numpy as np
 import torchvision
 import torchvision.transforms as transforms
+# MedSyn NPZ adapter for custom dataset format
+from medsyn.adapters.distdiff_npz_adapter import create_npz_dataloaders
 import torch.nn.functional as F
 from collections import defaultdict
 import argparse
@@ -56,7 +58,8 @@ CUSTOM_TEMPLATES = {
     "stl10": "a photo of a {}.",
     "imagenette2-320": "a photo of a {}.",
     "caltech-101": "a photo of a {}.",
-    "pathmnist": "a colon pathological image of {}.",
+    "pathmnist": "A COLON PATHOLOGICAL IMAGE OF {}.",  # Paper specification: uppercase
+    "pathmnist_npz": "A COLON PATHOLOGICAL IMAGE OF {}.",  # Paper specification: uppercase
     "breastmnist": "a photo of {} ultrasound image.",
     "bloodmnist": "a photo of {}, a type of cell.",
 }
@@ -104,7 +107,20 @@ class StandardDataLoader:
         self.train_preprocess = train_preprocess
 
     def load_dataset(self):
-        if self.args.dataset == 'stanford_cars':
+        # Check for NPZ format first (MedSyn custom datasets)
+        if self.args.dataset == 'pathmnist_npz' or (hasattr(self.args, 'data_dir') and self.args.data_dir.endswith('.npz')):
+            # Use NPZ adapter for MedSyn format
+            outputs = create_npz_dataloaders(
+                npz_path=self.args.data_dir if hasattr(self.args, 'data_dir') else self.dataset_path,
+                train_transform=self.train_preprocess,
+                test_transform=self.test_preprocess,
+                train_batch_size=self.args.train_batch_size,
+                val_batch_size=self.args.val_batch_size,
+                num_workers=8,
+                filter_synthetic_train=True,  # Filter synthetics for guide model training
+                filter_synthetic_val=True,
+            )
+        elif self.args.dataset == 'stanford_cars':
             outputs = self.stanfordcars_load()
         elif self.args.dataset == 'caltech-101':
             outputs = self.caltech101_load()

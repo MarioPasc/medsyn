@@ -59,6 +59,30 @@ dependencies = [
     "albumentationsx",
 ]
 
+[project.optional-dependencies]
+# Optional dependencies for DistDiff integration
+# Install with: pip install -e ".[distdiff]"
+# Or create separate conda env and install: pip install -e ".[distdiff]"
+distdiff = [
+    # Core dependencies for DistDiff (not already in base)
+    "scipy>=1.9.0",
+    "scikit-image>=0.19.0",
+    "timm>=0.6.12",
+    "regex>=2022.1.18",
+    "packaging>=21.3",
+
+    # Hugging Face ecosystem (specific versions for DistDiff compatibility)
+    "transformers==4.19.2",  # DistDiff requires this specific version
+    "accelerate>=0.12.0",
+    "huggingface-hub>=0.8.1",
+
+    # CLIP for text-image embeddings
+    "open-clip-torch>=2.0.0",
+
+    # Optional: CutMix augmentation (not required but recommended)
+    # "cutmix @ git+https://github.com/ildoonet/cutmix",  # Commented out - install manually if needed
+]
+
 [project.urls]
 Homepage = "https://github.com/MarioPasc/medsyn"
 Documentation = "https://github.com/MarioPasc/medsyn#readme"
