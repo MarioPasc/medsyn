@@ -25,8 +25,8 @@ set -euo pipefail
 # ========================================================================
 # ERROR HANDLING: Always copy results back on failure
 # ========================================================================
-RESULTS_DST=""
-OUT_DIR=""
+RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_DistDiff"
+OUT_DIR="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_DistDiff"
 
 cleanup_and_sync() {
     local exit_code=$?
