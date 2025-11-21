@@ -22,6 +22,67 @@ set -euo pipefail
 # This script follows the picasso_parallel_job.sh pattern for consistency
 # ========================================================================
 
+# ========================================================================
+# ERROR HANDLING: Always copy results back on failure
+# ========================================================================
+RESULTS_DST=""
+OUT_DIR=""
+
+cleanup_and_sync() {
+    local exit_code=$?
+    echo ""
+    echo "================================================================================"
+    if [ ${exit_code} -ne 0 ]; then
+        echo "❌ Job failed with exit code ${exit_code}"
+    else
+        echo "✅ Job completed successfully"
+    fi
+    echo "================================================================================"
+
+    # Always sync results back, even on failure
+    if [ -n "${RESULTS_DST}" ] && [ -n "${OUT_DIR}" ] && [ -d "${OUT_DIR}" ]; then
+        echo ""
+        echo "📦 Syncing results/logs back to permanent storage..."
+        mkdir -p "${RESULTS_DST}"
+
+        # Copy everything: checkpoints, logs, synthetic data, and error traces
+        echo "[sync] Copying from ${OUT_DIR} to ${RESULTS_DST}"
+        rsync -av "${OUT_DIR}/" "${RESULTS_DST}/" 2>&1 || echo "⚠️  rsync failed, but continuing..."
+
+        echo ""
+        echo "Synced contents:"
+        ls -lah "${RESULTS_DST}" 2>/dev/null || echo "  (could not list)"
+
+        if [ ${exit_code} -ne 0 ]; then
+            echo ""
+            echo "================================================================================"
+            echo "🔍 Debug Information"
+            echo "================================================================================"
+            echo "Check the following for error details:"
+            echo "  • SLURM logs: ${SLURM_JOB_NAME}.${SLURM_JOB_ID}.{out,err}"
+            echo "  • Results dir: ${RESULTS_DST}"
+            echo "  • Generation logs: ${RESULTS_DST}/logs/generation_split_*.log"
+            echo "  • Python logs: ${RESULTS_DST}/logs/*.log"
+            echo "================================================================================"
+        fi
+    else
+        echo "⚠️  Cannot sync results: RESULTS_DST or OUT_DIR not set or not accessible"
+    fi
+
+    # Cleanup localscratch
+    echo ""
+    echo "🧹 Cleaning up localscratch..."
+    if [ -n "${MYLOCALSCRATCH:-}" ] && cd "${LOCALSCRATCH%/}/${USER}" 2>/dev/null; then
+        rm -rf --one-file-system "${MYLOCALSCRATCH}" 2>/dev/null || true
+        echo "✓ Cleanup complete"
+    fi
+
+    exit ${exit_code}
+}
+
+# Register cleanup function to run on exit (success or failure)
+trap cleanup_and_sync EXIT
+
 echo "================================================================================"
 echo "🎯 DistDiff Multi-Stage Pipeline for PathMNIST"
 echo "================================================================================"
@@ -339,12 +400,38 @@ echo ""
 SYNTH_COUNT=0
 for split in $(seq 0 $((NUM_GPUS - 1))); do
     if [ -d "${SYNTH_DATA_DIR}/split_${split}" ]; then
-        SYNTH_COUNT=$((SYNTH_COUNT + 1))
+        # Check if directory actually contains class directories with images
+        CLASS_COUNT=$(find "${SYNTH_DATA_DIR}/split_${split}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+        if [ ${CLASS_COUNT} -gt 0 ]; then
+            SYNTH_COUNT=$((SYNTH_COUNT + 1))
+        else
+            echo "⚠️  Warning: split_${split} exists but is empty (no class directories)"
+        fi
     fi
 done
 
 if [ ${SYNTH_COUNT} -ne ${NUM_GPUS} ]; then
-    echo "⚠️  Warning: Only ${SYNTH_COUNT}/${NUM_GPUS} synthetic data splits found"
+    echo ""
+    echo "================================================================================"
+    echo "❌ ERROR: Synthetic data generation failed"
+    echo "================================================================================"
+    echo "Expected: ${NUM_GPUS} synthetic data splits"
+    echo "Found:    ${SYNTH_COUNT} splits"
+    echo ""
+    echo "Generation output directories:"
+    ls -la "${SYNTH_DATA_DIR}" 2>/dev/null || echo "  (directory not accessible)"
+    echo ""
+    echo "Check generation logs for errors:"
+    for split in $(seq 0 $((NUM_GPUS - 1))); do
+        log_file="${OUT_DIR}/logs/generation_split_${split}.log"
+        if [ -f "${log_file}" ]; then
+            echo ""
+            echo "=== Last 30 lines of generation_split_${split}.log ==="
+            tail -n 30 "${log_file}"
+        fi
+    done
+    echo "================================================================================"
+    exit 1
 fi
 
 echo "✓ Synthetic data generation verified (${SYNTH_COUNT}/${NUM_GPUS} splits)"
@@ -398,44 +485,15 @@ echo "✅ Stage 3 completed successfully"
 echo ""
 
 # ========================================================================
-# RESULTS SYNCHRONIZATION
+# PIPELINE COMPLETE
 # ========================================================================
-echo ""
-echo "================================================================================"
-echo "📤 Syncing Results Back to Permanent Storage"
-echo "================================================================================"
-
-echo "Copying results from ${OUT_DIR} to ${RESULTS_DST}..."
-mkdir -p "${RESULTS_DST}"
-rsync -av "${OUT_DIR}/" "${RESULTS_DST}/"
-
-echo "✅ Results successfully copied to ${RESULTS_DST}"
-echo ""
-
-# ========================================================================
-# CLEANUP
-# ========================================================================
-echo ""
-echo "================================================================================"
-echo "🧹 Cleaning Up LocalScratch"
-echo "================================================================================"
-
-if cd "${LOCALSCRATCH%/}/${USER}"; then
-    [ -n "${MYLOCALSCRATCH:-}" ] && rm -rf --one-file-system "${MYLOCALSCRATCH}"
-    echo "✓ Cleanup complete"
-fi
-echo ""
-
-# ========================================================================
-# SUMMARY
-# ========================================================================
+# Note: Results sync and cleanup handled by trap on EXIT
 echo ""
 echo "================================================================================"
 echo "🎉 DistDiff Pipeline Complete!"
 echo "================================================================================"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Dataset: PathMNIST (NPZ format)"
-echo "Results location: ${RESULTS_DST}"
 echo ""
 echo "Configuration Used:"
 echo "  • Model: ${MODEL_ARCH}"
@@ -449,11 +507,15 @@ echo "  ✅ Stage 1: Guide model trained (${MODEL_ARCH})"
 echo "  ✅ Stage 2: Synthetic data generated (${EXPAND_FACTOR}x expansion, ${NUM_GPUS} parallel jobs)"
 echo "  ✅ Stage 3: Classifier trained on expanded data"
 echo ""
-echo "Checkpoints:"
-echo "  • Guide model: ${RESULTS_DST}/checkpoints/guide_model/"
-echo "  • Expanded classifier: ${RESULTS_DST}/checkpoints/classifier_on_expanded/"
+echo "Results will be synced to: ${RESULTS_DST}"
+echo "  • Guide model: checkpoints/guide_model/"
+echo "  • Expanded classifier: checkpoints/classifier_on_expanded/"
+echo "  • Synthetic data: synthetic_data/"
+echo "  • Logs: logs/"
+echo "================================================================================"
 echo ""
-echo "Synthetic data: ${RESULTS_DST}/synthetic_data/"
+echo "Note: Result synchronization and cleanup will run automatically on exit."
 echo "================================================================================"
 
+# Exit with success - trap will handle sync and cleanup
 exit 0

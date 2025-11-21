@@ -813,6 +813,33 @@ def encode_prompt(text_encoder, input_ids, attention_mask, text_encoder_use_atte
 
 
 def main(args):
+    # Configure logging to write to both console and file
+    log_file = os.path.join(args.logging_dir, f"generation_split_{args.split}_detailed.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+    # Configure root logger
+    file_handler = logging.FileHandler(log_file, mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    logger.info("="*80)
+    logger.info(f"Starting synthetic data generation for split {args.split}/{args.total_split}")
+    logger.info("="*80)
+    logger.info(f"Output directory: {args.output_dir}")
+    logger.info(f"Log file: {log_file}")
+    logger.info(f"Arguments: {args}")
+    logger.info("="*80)
+
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -1127,7 +1154,15 @@ def main(args):
         total_global_proto = total_local_proto = None
 
     unet.eval()
+
+    logger.info(f"Starting generation loop: {len(train_dataloader)} batches, {args.num_images_per_prompt} images per sample")
+    generated_count = 0
+    skipped_count = 0
+
     for step, batch in enumerate(train_dataloader):
+        if step % 10 == 0:
+            logger.info(f"Processing batch {step+1}/{len(train_dataloader)}")
+
         for image_i in range(args.first_image_index, args.num_images_per_prompt):
             batch_image_exists = True
             for i in range(len(batch["image_paths"])):
@@ -1136,7 +1171,9 @@ def main(args):
                 if not os.path.exists(path):
                     batch_image_exists = False
                 else:
-                    print(f"File {path} exists, so skipped.")
+                    if step == 0 and image_i == args.first_image_index:
+                        logger.debug(f"File {path} exists, skipping")
+                    skipped_count += 1
             if batch_image_exists:
                 progress_bar.update(1)
                 global_step += 1
@@ -1229,9 +1266,19 @@ def main(args):
 
                         for i in range(len(batch["image_paths"])):
                             image_file_path = os.path.basename(batch["image_paths"][i]).split(".")[0]
-                            path = f'{args.output_dir}/{batch["class_names"][i]}/{image_file_path}_expand_{image_i}.png'
-                            os.makedirs(os.path.dirname(path), exist_ok=True)
-                            save_image([image[i]], path)
+                            class_name = batch["class_names"][i]
+                            path = f'{args.output_dir}/{class_name}/{image_file_path}_expand_{image_i}.png'
+
+                            try:
+                                os.makedirs(os.path.dirname(path), exist_ok=True)
+                                save_image([image[i]], path)
+                                generated_count += 1
+
+                                if generated_count <= 5 or generated_count % 100 == 0:
+                                    logger.info(f"Saved image {generated_count}: {path}")
+                            except Exception as e:
+                                logger.error(f"Failed to save image to {path}: {e}")
+                                raise
 
                 torch.cuda.empty_cache()
 
@@ -1246,6 +1293,30 @@ def main(args):
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
+
+    logger.info("="*80)
+    logger.info("Generation Summary")
+    logger.info("="*80)
+    logger.info(f"Total images generated: {generated_count}")
+    logger.info(f"Total images skipped (already exist): {skipped_count}")
+    logger.info(f"Output directory: {args.output_dir}")
+    logger.info("="*80)
+
+    # Verify output directory structure
+    if os.path.exists(args.output_dir):
+        class_dirs = [d for d in os.listdir(args.output_dir) if os.path.isdir(os.path.join(args.output_dir, d))]
+        logger.info(f"Generated class directories: {len(class_dirs)}")
+        for class_dir in sorted(class_dirs):
+            class_path = os.path.join(args.output_dir, class_dir)
+            img_count = len([f for f in os.listdir(class_path) if f.endswith('.png')])
+            logger.info(f"  • {class_dir}: {img_count} images")
+    else:
+        logger.error(f"Output directory does not exist: {args.output_dir}")
+
+    logger.info("="*80)
+    logger.info(f"Generation for split {args.split}/{args.total_split} completed successfully")
+    logger.info("="*80)
+
     accelerator.end_training()
 
 

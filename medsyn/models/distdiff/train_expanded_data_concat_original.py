@@ -91,13 +91,116 @@ best_acc = 0  # best test accuracy
 class DatasetByClassNames(data.Dataset):
     def __init__(self, root, classnames, transforms):
         self.imgs, self.labels = [], []
+
+        # Validate root directory exists
+        if not os.path.exists(root):
+            raise FileNotFoundError(
+                f"\n{'='*80}\n"
+                f"ERROR: Synthetic data directory not found\n"
+                f"{'='*80}\n"
+                f"Expected directory: {root}\n"
+                f"\n"
+                f"This usually means Stage 2 (synthetic data generation) failed.\n"
+                f"Possible causes:\n"
+                f"  • Generation jobs crashed due to OOM or other errors\n"
+                f"  • Stable Diffusion model weights not downloaded\n"
+                f"  • Guide model checkpoint missing or corrupted\n"
+                f"\n"
+                f"How to debug:\n"
+                f"  1. Check generation logs: logs/generation_split_*.log\n"
+                f"  2. Verify guide model exists: checkpoints/guide_model/model_best.pth.tar\n"
+                f"  3. Check available disk space in localscratch\n"
+                f"  4. Review SLURM error logs for OOM or CUDA errors\n"
+                f"{'='*80}\n"
+            )
+
+        # Check if root directory is empty
+        if not os.listdir(root):
+            raise FileNotFoundError(
+                f"\n{'='*80}\n"
+                f"ERROR: Synthetic data directory is empty\n"
+                f"{'='*80}\n"
+                f"Directory exists but contains no class folders: {root}\n"
+                f"\n"
+                f"Generation may have started but failed to save any images.\n"
+                f"Check generation logs for errors.\n"
+                f"{'='*80}\n"
+            )
+
+        # Load images from each class directory
+        missing_classes = []
         for i, cls in enumerate(classnames):
-            imgs = os.listdir(os.path.join(root, cls))
-            imgs = [os.path.join(root, cls, x) for x in imgs]
-            self.imgs.extend(imgs)
-            self.labels.extend([i for _ in range(len(imgs))])
+            class_dir = os.path.join(root, cls)
+
+            # Check if this class directory exists
+            if not os.path.exists(class_dir):
+                missing_classes.append(cls)
+                continue
+
+            # List images in this class directory
+            try:
+                imgs = os.listdir(class_dir)
+                imgs = [os.path.join(root, cls, x) for x in imgs if not x.startswith('.')]
+
+                if not imgs:
+                    print(f"Warning: Class '{cls}' directory is empty: {class_dir}")
+                    continue
+
+                self.imgs.extend(imgs)
+                self.labels.extend([i for _ in range(len(imgs))])
+            except PermissionError:
+                raise PermissionError(
+                    f"\n{'='*80}\n"
+                    f"ERROR: Permission denied reading class directory\n"
+                    f"{'='*80}\n"
+                    f"Cannot read: {class_dir}\n"
+                    f"Check file permissions in localscratch.\n"
+                    f"{'='*80}\n"
+                )
+
+        # Report missing classes
+        if missing_classes:
+            found_dirs = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+            raise FileNotFoundError(
+                f"\n{'='*80}\n"
+                f"ERROR: Missing class directories in synthetic data\n"
+                f"{'='*80}\n"
+                f"Root directory: {root}\n"
+                f"\n"
+                f"Expected {len(classnames)} class directories:\n"
+                f"  {classnames}\n"
+                f"\n"
+                f"Missing {len(missing_classes)} classes:\n"
+                f"  {missing_classes}\n"
+                f"\n"
+                f"Found {len(found_dirs)} directories:\n"
+                f"  {found_dirs}\n"
+                f"\n"
+                f"This indicates incomplete generation. Generation may have:\n"
+                f"  • Crashed before processing all classes\n"
+                f"  • Run out of disk space\n"
+                f"  • Been killed by SLURM resource limits\n"
+                f"\n"
+                f"Check generation logs for the split that owns this directory.\n"
+                f"{'='*80}\n"
+            )
+
+        # Validate that we loaded some images
+        if not self.imgs:
+            raise ValueError(
+                f"\n{'='*80}\n"
+                f"ERROR: No images loaded from synthetic data\n"
+                f"{'='*80}\n"
+                f"Root directory: {root}\n"
+                f"Class directories exist but contain no image files.\n"
+                f"\n"
+                f"This indicates generation completed but saved no images.\n"
+                f"Check generation logs for save errors.\n"
+                f"{'='*80}\n"
+            )
 
         self.transforms = transforms
+        print(f"Loaded {len(self.imgs)} synthetic images from {root}")
 
     def __getitem__(self, index):
         """
