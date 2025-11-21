@@ -27,7 +27,7 @@ echo "🎯 DistDiff Multi-Stage Pipeline for PathMNIST"
 echo "================================================================================"
 
 # ---------- Configuration ----------
-CONFIG_FILE="${1:-config/distdiff_pathmnist.yaml}"
+CONFIG_FILE="${1:-/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn/config/distdiff_pathmnist.yaml}"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "❌ Error: Config file not found: $CONFIG_FILE"
     echo "Usage: sbatch $0 [config_file.yaml]"
