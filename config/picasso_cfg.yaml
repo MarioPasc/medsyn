@@ -72,7 +72,7 @@ ccddpm:
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 8
+    batch_size: 4
     epochs: 1000
 
     patience: 5               # Early stopping: stop if no improvement for 5 epochs
@@ -91,7 +91,7 @@ ccddpm:
     skip_nonfinite_grads: true  # # Skip batches with non-finite gradients instead of  aborting
     output_dir: ${OUTPUT_DIR}
   optim:
-    lr: 1.0e-4  # STABILITY FIX: Reduced from 2.0e-4 to 1.0e-4 to prevent gradient explosion
+    lr: 5.0e-5  # STABILITY FIX: Reduced from 2.0e-4 to 1.0e-4 to prevent gradient explosion
     wd: 0.0
   sched:
     num_train_timesteps: 1000

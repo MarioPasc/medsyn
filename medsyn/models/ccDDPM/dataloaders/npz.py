@@ -172,6 +172,11 @@ class NPZDataset(Dataset):
             # Keep a consistent contract: when normalize=False, always return [0,1]
             img_tensor = torch.clamp(img_tensor, 0.0, 1.0)
 
+        # Generate a random number between 0 and 25, if number is 4, log the image pixel range
+        if np.random.randint(0, 26) == 4:
+            logger.info(f"Was normalized? {self.normalize}")
+            logger.info(f"Image pixel range at idx {idx}: min={img_tensor.min().item()}, max={img_tensor.max().item()}")
+
         return {
             "pixel_values": img_tensor,
             "labels": torch.tensor(self.labels[idx], dtype=torch.long),
