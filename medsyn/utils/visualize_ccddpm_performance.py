@@ -9,7 +9,7 @@ Creates a comprehensive performance panel showing:
 - Generated synthetic samples from all 9 PathMNIST classes
 
 Usage:
-    python -m medsyn.utils.visualize_ccddpm_performance --data_dir docs/performance --output performance_panel.png
+    python -m medsyn.utils.visualize_ccddpm_performance --data_dir /media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel --output performance_panel.png
 """
 from __future__ import annotations
 import argparse
@@ -77,6 +77,8 @@ def load_composite_class_image(data_dir: Path) -> np.ndarray:
         Composite image as numpy array, or None if not found
     """
     # Look for epoch_*_classes.png files
+    logger.info(f"Searching for composite class images in {data_dir}")
+    data_dir = Path(data_dir) / "samples"
     composite_files = sorted(data_dir.glob("epoch_*_classes.png"))
 
     if not composite_files:
@@ -86,7 +88,7 @@ def load_composite_class_image(data_dir: Path) -> np.ndarray:
     # Use the most recent one (last in sorted order)
     composite_path = composite_files[-1]
     logger.info(f"Loading composite class image: {composite_path.name}")
-
+    composite_path = [file for file in composite_files if "10" in file.name][0]
     img = np.array(Image.open(composite_path))
     logger.info(f"Loaded composite image with shape: {img.shape}")
 
@@ -94,16 +96,19 @@ def load_composite_class_image(data_dir: Path) -> np.ndarray:
 
 
 def plot_loss_curves(ax: plt.Axes, df: pd.DataFrame) -> None:
-    """Plot training and validation loss curves."""
-    # Filter train and val splits
+    """Plot training, validation, and test loss curves."""
+    # Filter train, val, and test splits
     train_df = df[df['split'] == 'train'].copy()
     val_df = df[df['split'] == 'val'].copy()
+    test_df = df[df['split'] == 'test'].copy()
 
     # Plot loss curves
     ax.plot(train_df['epoch'], train_df['loss'],
             label='Train Loss', linewidth=2, color='#2E86AB', marker='o', markersize=3)
     ax.plot(val_df['epoch'], val_df['loss'],
             label='Val Loss', linewidth=2, color='#A23B72', marker='s', markersize=3)
+    ax.plot(test_df['epoch'], test_df['loss'],
+            label='Test Loss', linewidth=2, color='#F18F01', marker='^', markersize=3)
 
     # Optionally add std deviation bands
     if 'loss_std' in train_df.columns:
@@ -114,88 +119,106 @@ def plot_loss_curves(ax: plt.Axes, df: pd.DataFrame) -> None:
 
     ax.set_xlabel('Epoch', fontsize=11, fontweight='bold')
     ax.set_ylabel('Loss', fontsize=11, fontweight='bold')
-    ax.set_title('Training & Validation Loss', fontsize=12, fontweight='bold', pad=10)
+    ax.set_title('Training, Validation & Test Loss', fontsize=12, fontweight='bold', pad=10)
     ax.legend(loc='upper right', framealpha=0.9)
     ax.grid(True, alpha=0.3, linestyle='--')
     ax.set_xlim(left=1)
 
 
 def plot_quality_metrics(ax: plt.Axes, df: pd.DataFrame) -> None:
-    """Plot PSNR and SSIM metrics over epochs."""
+    """Plot PSNR and SSIM metrics over epochs for validation and test sets."""
     val_df = df[df['split'] == 'val'].copy()
+    test_df = df[df['split'] == 'test'].copy()
 
     # Create twin axis for SSIM
     ax2 = ax.twinx()
 
-    # Plot PSNR on primary axis
+    # Plot PSNR on primary axis (Val and Test)
     line1 = ax.plot(val_df['epoch'], val_df['psnr'],
-                    label='PSNR', linewidth=2, color='#F18F01', marker='o', markersize=3)
+                    label='Val PSNR', linewidth=2, color='#F18F01', marker='o', markersize=3)
+    line2 = ax.plot(test_df['epoch'], test_df['psnr'],
+                    label='Test PSNR', linewidth=2, color='#F18F01', marker='s', markersize=3, linestyle='--', alpha=0.7)
     ax.set_xlabel('Epoch', fontsize=11, fontweight='bold')
     ax.set_ylabel('PSNR (dB)', fontsize=11, fontweight='bold', color='#F18F01')
     ax.tick_params(axis='y', labelcolor='#F18F01')
 
-    # Plot SSIM on secondary axis
-    line2 = ax2.plot(val_df['epoch'], val_df['ssim'],
-                     label='SSIM', linewidth=2, color='#6A994E', marker='s', markersize=3)
+    # Plot SSIM on secondary axis (Val and Test)
+    line3 = ax2.plot(val_df['epoch'], val_df['ssim'],
+                     label='Val SSIM', linewidth=2, color='#6A994E', marker='o', markersize=3)
+    line4 = ax2.plot(test_df['epoch'], test_df['ssim'],
+                     label='Test SSIM', linewidth=2, color='#6A994E', marker='s', markersize=3, linestyle='--', alpha=0.7)
     ax2.set_ylabel('SSIM', fontsize=11, fontweight='bold', color='#6A994E')
     ax2.tick_params(axis='y', labelcolor='#6A994E')
 
     # Combine legends
-    lines = line1 + line2
+    lines = line1 + line2 + line3 + line4
     labels = [l.get_label() for l in lines]
-    ax.legend(lines, labels, loc='lower right', framealpha=0.9)
+    ax.legend(lines, labels, loc='lower right', framealpha=0.9, fontsize=9)
 
-    ax.set_title('Quality Metrics (Validation)', fontsize=12, fontweight='bold', pad=10)
+    ax.set_title('Quality Metrics (Val & Test)', fontsize=12, fontweight='bold', pad=10)
     ax.grid(True, alpha=0.3, linestyle='--')
     ax.set_xlim(left=1)
 
 
 def plot_per_class_loss(ax: plt.Axes, df: pd.DataFrame) -> None:
-    """Plot per-class validation loss at final epoch."""
-    # Get final validation epoch
+    """Plot per-class validation and test loss at final epoch."""
+    # Get final epoch
     val_df = df[df['split'] == 'val'].copy()
+    test_df = df[df['split'] == 'test'].copy()
     final_epoch = val_df['epoch'].max()
-    final_data = val_df[val_df['epoch'] == final_epoch].iloc[0]
 
-    # Extract per-class losses
-    class_losses = []
+    final_val_data = val_df[val_df['epoch'] == final_epoch].iloc[0]
+    final_test_data = test_df[test_df['epoch'] == final_epoch].iloc[0]
+
+    # Extract per-class losses for val and test
+    val_losses = []
+    test_losses = []
     for class_id in range(9):
         col_name = f'loss_c{class_id}'
-        if col_name in final_data:
-            class_losses.append(final_data[col_name])
+        if col_name in final_val_data:
+            val_losses.append(final_val_data[col_name])
+            test_losses.append(final_test_data[col_name])
         else:
-            class_losses.append(np.nan)
+            val_losses.append(np.nan)
+            test_losses.append(np.nan)
 
-    # Create color map (gradient from best to worst)
+    # Create grouped bar chart
     class_ids = np.arange(9)
-    colors = plt.cm.RdYlGn_r(np.linspace(0.2, 0.8, 9))
+    bar_width = 0.35
+    x_pos_val = class_ids - bar_width/2
+    x_pos_test = class_ids + bar_width/2
 
-    # Sort by loss for color mapping
-    sorted_indices = np.argsort(class_losses)
-    color_map = np.zeros((9, 4))
-    for rank, idx in enumerate(sorted_indices):
-        color_map[idx] = colors[rank]
+    # Create bars
+    bars_val = ax.bar(x_pos_val, val_losses, bar_width,
+                      label='Validation', color='#A23B72', edgecolor='black', linewidth=1.2, alpha=0.8)
+    bars_test = ax.bar(x_pos_test, test_losses, bar_width,
+                       label='Test', color='#F18F01', edgecolor='black', linewidth=1.2, alpha=0.8)
 
-    # Create bar chart
-    bars = ax.bar(class_ids, class_losses, color=color_map, edgecolor='black', linewidth=1.5, alpha=0.8)
-
-    # Add value labels on bars
-    for i, (bar, loss) in enumerate(zip(bars, class_losses)):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height * 1.02,
-                f'{loss:.4f}',
-                ha='center', va='bottom', fontsize=7.5, fontweight='bold')
+    # Add value labels on bars (smaller font to fit both)
+    for i, (bar_val, bar_test, loss_val, loss_test) in enumerate(zip(bars_val, bars_test, val_losses, test_losses)):
+        # Val labels
+        height_val = bar_val.get_height()
+        ax.text(bar_val.get_x() + bar_val.get_width()/2., height_val * 1.01,
+                f'{loss_val:.3f}',
+                ha='center', va='bottom', fontsize=6.5, fontweight='bold')
+        # Test labels
+        height_test = bar_test.get_height()
+        ax.text(bar_test.get_x() + bar_test.get_width()/2., height_test * 1.01,
+                f'{loss_test:.3f}',
+                ha='center', va='bottom', fontsize=6.5, fontweight='bold')
 
     ax.set_xlabel('Class', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Validation Loss', fontsize=11, fontweight='bold')
-    ax.set_title(f'Per-Class Loss (Epoch {final_epoch})', fontsize=12, fontweight='bold', pad=10)
+    ax.set_ylabel('Loss', fontsize=11, fontweight='bold')
+    ax.set_title(f'Per-Class Loss - Val vs Test (Epoch {final_epoch})', fontsize=12, fontweight='bold', pad=10)
     ax.set_xticks(class_ids)
     ax.set_xticklabels([PathMNISTClass.LABELS_SHORT.get(i, str(i)) for i in class_ids],
                        fontsize=7.5, rotation=45, ha='right')
+    ax.legend(loc='upper right', framealpha=0.9, fontsize=9)
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_axisbelow(True)
     # Add some top margin for labels
-    ax.set_ylim(top=max(class_losses) * 1.12)
+    max_loss = max(max(val_losses), max(test_losses))
+    ax.set_ylim(top=max_loss * 1.15)
 
 
 def plot_synthetic_samples(fig: plt.Figure, gs: gridspec.GridSpec,
