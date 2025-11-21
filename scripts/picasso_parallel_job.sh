@@ -37,23 +37,15 @@ OUT_DIR="${WORKDIR}/results"
 mkdir -p "${WORKDIR}" "${DATA_DIR}" "${OUT_DIR}"
 echo "Localscratch workdir: ${WORKDIR}"
 
-# ---------- 1) Repo to localscratch (idempotent) ----------
-if [ -d "${REPO_DIR}" ] && [ -f "${REPO_DIR}/pyproject.toml" ]; then
-  echo "[repo] found at ${REPO_DIR}. skip copy."
-else
-  echo "[repo] copying from ${REPO_SRC} ..."
-  mkdir -p "${REPO_DIR}"
-  rsync -a "${REPO_SRC}/" "${REPO_DIR}/"
-fi
+# ---------- 1) Repo to localscratch ----------
+echo "[repo] copying from ${REPO_SRC} ..."
+mkdir -p "${REPO_DIR}"
+rsync -a "${REPO_SRC}/" "${REPO_DIR}/"
 
-# ---------- 2) Dataset to localscratch (idempotent) ----------
+# ---------- 2) Dataset to localscratch ----------
 DATA_DST="${DATA_DIR}/PathMNIST.npz"
-if [ -f "${DATA_DST}" ]; then
-  echo "[data] found at ${DATA_DST}. skip copy."
-else
-  echo "[data] copying ${DATA_SRC} -> ${DATA_DST}"
-  rsync -a "${DATA_SRC}" "${DATA_DST}"
-fi
+echo "[data] copying ${DATA_SRC} -> ${DATA_DST}"
+rsync -a "${DATA_SRC}" "${DATA_DST}"
 
 # ---------- 3) Load conda module and activate prebuilt env ----------
 # Try common module names seen on clusters

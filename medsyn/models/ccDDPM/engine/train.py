@@ -1689,8 +1689,8 @@ def train(yaml_path: str, split: str = "train") -> None:
                 save_image(comparison, out_dir / "samples" / f"epoch_{epoch:04d}_recon.png",
                           nrow=3, normalize=False, value_range=(0, 1))
 
-            # Every 10 epochs: Save DDPM-specific visualizations
-            if epoch % 10 == 0 or epoch == 1:
+            # Every epoch: Save DDPM-specific visualizations
+            if epoch % 1 == 0 or epoch == 1:
                 with torch.no_grad():
                     # Get a single image for detailed visualization
                     single_img = x0_vis[0:1]
@@ -1711,7 +1711,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                         class_label=single_label,
                         num_steps=10,
                         device=device,
-                        guidance_scale=1.0
+                        guidance_scale=cfg.ccddpm.infer.guidance_scale
                     )
                     # Now returns initial + 10 intermediate + final = 12 images
                     denoising_steps_01 = (denoising_steps + 1.0) / 2.0
@@ -1738,9 +1738,9 @@ def train(yaml_path: str, split: str = "train") -> None:
                             model, noise_scheduler,
                             shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                             class_label=class_label_sample,
-                            num_steps=1,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
+                            num_steps=8,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
                             device=device,
-                            guidance_scale=1.0
+                            guidance_scale=cfg.ccddpm.infer.guidance_scale
                         )
                         # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
                         # Take only the final denoised image

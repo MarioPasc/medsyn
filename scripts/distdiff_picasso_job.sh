@@ -202,13 +202,9 @@ echo "==========================================================================
 echo "📦 Staging Repository to LocalScratch"
 echo "================================================================================"
 
-if [ -d "${REPO_DIR}" ] && [ -f "${REPO_DIR}/pyproject.toml" ]; then
-    echo "[repo] Found at ${REPO_DIR}. Skip copy."
-else
-    echo "[repo] Copying from ${REPO_SRC} ..."
-    mkdir -p "${REPO_DIR}"
-    rsync -a "${REPO_SRC}/" "${REPO_DIR}/"
-fi
+echo "[repo] Copying from ${REPO_SRC} ..."
+mkdir -p "${REPO_DIR}"
+rsync -a "${REPO_SRC}/" "${REPO_DIR}/"
 echo ""
 
 # ---------- 2) Dataset to localscratch ----------
@@ -217,12 +213,8 @@ echo "📦 Staging Dataset to LocalScratch"
 echo "================================================================================"
 
 DATA_DST="${DATA_DIR}/pathmnist.npz"
-if [ -f "${DATA_DST}" ]; then
-    echo "[data] Found at ${DATA_DST}. Skip copy."
-else
-    echo "[data] Copying ${NPZ_PATH} -> ${DATA_DST}"
-    rsync -a "${NPZ_PATH}" "${DATA_DST}"
-fi
+echo "[data] Copying ${NPZ_PATH} -> ${DATA_DST}"
+rsync -a "${NPZ_PATH}" "${DATA_DST}"
 echo ""
 
 # ---------- 3) Load conda and activate environment ----------
