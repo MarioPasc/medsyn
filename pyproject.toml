@@ -57,6 +57,9 @@ dependencies = [
     "ultralytics>=8.0.0",
     "scienceplots>=1.0.0",
     "albumentationsx",
+    "seaborn>=0.12.0",
+    "scikit-learn>=1.0.0",
+    "scipy>=1.7.0",
 ]
 
 [project.optional-dependencies]
@@ -97,6 +100,7 @@ bvae-generate = "medsyn.cli.generate_bVAE:main"
 ccddpm-train = "medsyn.cli.train_ccDDPM:main"
 ccddpm-generate = "medsyn.cli.generate_ccDDPM:main"
 ccddpm-audit = "medsyn.analysis.audit_ccddpm_privacy:cli_main"
+medsyn-analyze-embeddings = "medsyn.analysis.visualize_embedding_evolution:main"
 
 [tool.setuptools]
 packages = [
@@ -108,7 +112,8 @@ packages = [
     "medsyn.models.bVAE.engine",
     "medsyn.models.ccDDPM",
     "medsyn.models.ccDDPM.engine",
-    "medsyn.utils"
+    "medsyn.utils",
+    "medsyn.analysis"
 ]
 
 [tool.setuptools.package-data]
