@@ -15,7 +15,7 @@ data:
   dataset_name: pathmnist_npz  # Use NPZ adapter for MedSyn format
 
   # Path to custom NPZ file (MedSyn format with train/val/test splits + is_synth)
-  npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz
+  npz_path: /mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/merged.npz
 
   # Dataset properties
   num_classes: 9
@@ -61,7 +61,7 @@ training:
 # =============================================================================
 expansion:
   # Output directory for all DistDiff artifacts
-  output_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST/distdiff_experiments
+  output_dir: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_DistDiff
 
   # Expansion factor (how many synthetic images to generate per original image)
   expand_factor: 5  # 5x expansion
