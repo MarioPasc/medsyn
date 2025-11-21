@@ -210,3 +210,4 @@ PathMNIST/
 .vscode/
 
 distdiff_models/
+.claude/

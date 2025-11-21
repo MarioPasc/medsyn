@@ -726,6 +726,7 @@ def evaluate_split(
 
     for step, batch in enumerate(pbar, 1):
         x0 = batch["pixel_values"].to(device)
+        logger.info(f"Pixel range (train): min={x0.min().item():.3f}, max={x0.max().item():.3f}")
         labels = batch["labels"].to(device)
         bsz = x0.size(0)
 
@@ -1482,27 +1483,6 @@ def train(yaml_path: str, split: str = "train") -> None:
                 pred_std = diagnostics['prediction_std']
                 recon_psnr = diagnostics['reconstruction_psnr_t500']
 
-                # Color-coded warnings
-                print(f"  Input-Output Correlation: {corr:.4f}", end="")
-                if corr > 0.7:
-                    print(" ⚠️  WARNING: Model is echoing input! (should be < 0.5)")
-                elif corr > 0.5:
-                    print(" ⚠️  High correlation, model may not be learning properly")
-                else:
-                    print(" ✓ (healthy)")
-
-                print(f"  Prediction Std: {pred_std:.4f}", end="")
-                if pred_std < 0.5 or pred_std > 1.5:
-                    print(" ⚠️  Unusual (should be ~0.8-1.2)")
-                else:
-                    print(" ✓")
-
-                print(f"  Reconstruction PSNR@t500: {recon_psnr:.2f} dB", end="")
-                if recon_psnr < 15.0:
-                    print(" ⚠️  Low quality (should improve over epochs)")
-                else:
-                    print(" ✓")
-
                 print(f"  Reconstruction MSE@t500: {diagnostics['reconstruction_mse_t500']:.4f}")
                 print(f"  Gradient Norm (mean): {train_metrics.get('grad_norm', 0.0):.4f}")
                 print("="*80 + "\n")
@@ -1524,20 +1504,7 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                 diag_msg = (f"Diagnostics | corr={corr:.4f} | pred_std={pred_std:.4f} | "
                            f"recon_psnr@t500={recon_psnr:.2f}dB")
-
-                # Add warnings if needed
-                warnings = []
-                if corr > 0.7:
-                    warnings.append("HIGH_CORRELATION")
-                if pred_std < 0.5 or pred_std > 1.5:
-                    warnings.append("UNUSUAL_STD")
-                if recon_psnr < 15.0:
-                    warnings.append("LOW_RECON_PSNR")
-
-                if warnings:
-                    logger.warning(f"{diag_msg} | WARNINGS: {', '.join(warnings)}")
-                else:
-                    logger.info(diag_msg)
+                logger.info(diag_msg)
 
         model.train()
 
@@ -1738,9 +1705,9 @@ def train(yaml_path: str, split: str = "train") -> None:
                             model, noise_scheduler,
                             shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                             class_label=class_label_sample,
-                            num_steps=8,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
+                            num_steps=10,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
                             device=device,
-                            guidance_scale=cfg.ccddpm.infer.guidance_scale
+                            guidance_scale=cfg.ccddpm.infer.guidance_scale 
                         )
                         # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
                         # Take only the final denoised image
@@ -1761,7 +1728,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                         num_classes=tcfg.num_classes,
                         image_shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                         device=device,
-                        num_samples=5
+                        num_samples=10
                     )
                     logger.info("Conditioning check: gap_mean={:.4f}, gap_std={:.4f} (should be >0 and growing over epochs)".format(
                         cond_stats['conditioning_gap_mean'], cond_stats['conditioning_gap_std']))
