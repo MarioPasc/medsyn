@@ -192,6 +192,12 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--data_dir",
+        type=str,
+        default=None,
+        help="Path to NPZ dataset file (for pathmnist_npz dataset type).",
+    )
+    parser.add_argument(
         "--arch", "-a",
         type=str,
         default='open_clip_vit_b32',
