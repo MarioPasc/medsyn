@@ -8,7 +8,7 @@ import numpy as np
 import torchvision
 import torchvision.transforms as transforms
 # MedSyn NPZ adapter for custom dataset format
-from medsyn.adapters.distdiff_npz_adapter import create_npz_dataloaders
+from medsyn.adapters.distdiff_npz_adapter import create_npz_dataloaders, NPZDataset
 import torch.nn.functional as F
 from collections import defaultdict
 import argparse
@@ -816,8 +816,12 @@ class SDDataset(data.Dataset):
         vae = vae.cuda()
         latents = []
         for path in tqdm(self.imgs):
-            instance_image = Image.open(path)
-            instance_image = exif_transpose(instance_image)
+            # Handle both virtual NPZ paths and regular file paths
+            if NPZDataset.is_virtual_path(path):
+                instance_image = NPZDataset.get_image_from_virtual_path(path)
+            else:
+                instance_image = Image.open(path)
+                instance_image = exif_transpose(instance_image)
             if not instance_image.mode == "RGB":
                 instance_image = instance_image.convert("RGB")
             instance_image = self.image_transforms(instance_image).cuda()
@@ -838,8 +842,12 @@ class SDDataset(data.Dataset):
         path = self.imgs[index]
         target = self.labels[index]
 
-        instance_image = Image.open(path)
-        instance_image = exif_transpose(instance_image)
+        # Handle both virtual NPZ paths and regular file paths
+        if NPZDataset.is_virtual_path(path):
+            instance_image = NPZDataset.get_image_from_virtual_path(path)
+        else:
+            instance_image = Image.open(path)
+            instance_image = exif_transpose(instance_image)
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
         example["pil_images"] = instance_image

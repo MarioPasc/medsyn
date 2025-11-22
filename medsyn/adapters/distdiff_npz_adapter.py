@@ -33,7 +33,13 @@ class NPZDataset(Dataset):
     Dataset for loading from custom NPZ files (MedSyn format).
 
     Compatible with DistDiff's training pipeline - returns (image, label) tuples.
+
+    Also provides `image_paths` attribute for compatibility with SDDataset,
+    using virtual paths in the format "npz:<index>".
     """
+
+    # Class-level registry to allow SDDataset to retrieve images by virtual path
+    _instances: dict = {}
 
     def __init__(
         self,
@@ -63,6 +69,53 @@ class NPZDataset(Dataset):
         self.labels = labels
         self.transform = transform
 
+        # Generate unique instance ID and register for virtual path resolution
+        self._instance_id = id(self)
+        NPZDataset._instances[self._instance_id] = self
+
+        # Create virtual image paths for SDDataset compatibility
+        # Format: "npz:<instance_id>:<index>"
+        self._image_paths = [f"npz:{self._instance_id}:{i}" for i in range(len(self.images))]
+
+    @property
+    def image_paths(self) -> List[str]:
+        """Virtual paths for SDDataset compatibility."""
+        return self._image_paths
+
+    def get_pil_image(self, idx: int) -> Image.Image:
+        """Get PIL Image by index (for SDDataset compatibility)."""
+        img = self.images[idx]  # [H, W, C] uint8
+        return Image.fromarray(img)
+
+    @classmethod
+    def get_image_from_virtual_path(cls, virtual_path: str) -> Image.Image:
+        """
+        Resolve a virtual path to a PIL Image.
+
+        Args:
+            virtual_path: Path in format "npz:<instance_id>:<index>"
+
+        Returns:
+            PIL Image
+        """
+        parts = virtual_path.split(":")
+        if len(parts) != 3 or parts[0] != "npz":
+            raise ValueError(f"Invalid virtual path format: {virtual_path}")
+
+        instance_id = int(parts[1])
+        idx = int(parts[2])
+
+        if instance_id not in cls._instances:
+            raise ValueError(f"NPZDataset instance {instance_id} not found. "
+                           "Dataset may have been garbage collected.")
+
+        return cls._instances[instance_id].get_pil_image(idx)
+
+    @classmethod
+    def is_virtual_path(cls, path: str) -> bool:
+        """Check if a path is a virtual NPZ path."""
+        return isinstance(path, str) and path.startswith("npz:")
+
     def __len__(self):
         return len(self.images)
 
@@ -78,6 +131,11 @@ class NPZDataset(Dataset):
             img = self.transform(img)
 
         return img, label
+
+    def __del__(self):
+        """Cleanup: remove from class registry when garbage collected."""
+        if hasattr(self, '_instance_id') and self._instance_id in NPZDataset._instances:
+            del NPZDataset._instances[self._instance_id]
 
 
 def load_npz_dataset(
