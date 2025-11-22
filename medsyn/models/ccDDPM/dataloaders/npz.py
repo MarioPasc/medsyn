@@ -17,21 +17,6 @@ logger = logging.getLogger(__name__)
 # Usage: export MEDSYN_DEBUG_DATALOADER=1
 DEBUG_DATALOADER = os.getenv("MEDSYN_DEBUG_DATALOADER", "0") == "1"
 
-# medsyn/models/ccDDPM/data/npz_dataset.py
-
-from __future__ import annotations
-from pathlib import Path
-from typing import Any, Dict, Optional
-import logging
-
-import numpy as np
-import torch
-from torch.utils.data import Dataset
-from torchvision import transforms as T
-
-logger = logging.getLogger(__name__)
-
-
 class NPZDataset(Dataset):
     """
     Dataset backed by a compressed NPZ file containing:
