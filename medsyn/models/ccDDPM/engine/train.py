@@ -23,9 +23,14 @@ from medsyn.models.ccDDPM.dataloaders.json import build_json_loader
 from medsyn.models.ccDDPM.dataloaders.npz import build_npz_loader
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE, estimate_elbo_terms
-from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
+from medsyn.models.ccDDPM.metrics import (
+    compute_psnr, compute_ssim,
+    compute_per_class_metrics,
+    PerClassMetricsAccumulator,
+    compute_class_weight_correlation,
+)
 from medsyn.models.ccDDPM.training_logging import (
-    CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS
+    CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES
 )
 from medsyn.models.ccDDPM.engine.ddp_utils import (
     ddp_is_enabled, ddp_init, is_main_process,
@@ -51,6 +56,299 @@ try:
 except ImportError:
     AUGMENTATION_AVAILABLE = False
     logger.warning("Augmentation module not available. Install albumentations to enable augmentation.")
+
+
+# =============================================================================
+# EARLY STOPPING TRACKER WITH EMA SMOOTHING
+# =============================================================================
+
+class EarlyStoppingTracker:
+    """
+    Early stopping tracker with EMA smoothing of the validation score.
+
+    Computes a composite validation score:
+        S = (psnr_weight * PSNR / 20) + (ssim_weight * SSIM)
+
+    where PSNR is divided by 20 to put it on a similar scale to SSIM (~0-1).
+
+    The score is optionally smoothed with an exponential moving average:
+        S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
+
+    Higher ema_alpha means more smoothing (less sensitive to fluctuations).
+
+    Attributes:
+        patience: Number of epochs without improvement before stopping
+        psnr_weight: Weight for PSNR in composite score
+        ssim_weight: Weight for SSIM in composite score
+        ema_alpha: EMA smoothing factor (0 = no smoothing)
+        use_ema_for_stopping: Whether to use EMA score for stopping decisions
+        min_delta: Minimum improvement to count as "better"
+    """
+
+    def __init__(
+        self,
+        patience: int = 5,
+        psnr_weight: float = 1.0,
+        ssim_weight: float = 1.0,
+        ema_alpha: float = 0.7,
+        use_ema_for_stopping: bool = True,
+        min_delta: float = 0.001,
+        metric: str = "psnr_ssim_composite",
+    ):
+        self.patience = patience
+        self.psnr_weight = psnr_weight
+        self.ssim_weight = ssim_weight
+        self.ema_alpha = ema_alpha
+        self.use_ema_for_stopping = use_ema_for_stopping
+        self.min_delta = min_delta
+        self.metric = metric
+
+        # State
+        self.best_score: float = float("-inf")
+        self.best_ema_score: float = float("-inf")
+        self.best_epoch: int = 0
+        self.epochs_without_improvement: int = 0
+        self.score_ema: Optional[float] = None
+        self._history: list = []
+
+    def compute_score(self, val_metrics: Dict[str, float]) -> float:
+        """
+        Compute the validation score from metrics.
+
+        Args:
+            val_metrics: Dictionary with 'psnr', 'ssim', and/or 'loss' keys
+
+        Returns:
+            Composite validation score (higher is better)
+        """
+        if self.metric == "psnr_ssim_composite":
+            psnr = val_metrics.get("psnr", 0.0)
+            ssim = val_metrics.get("ssim", 0.0)
+            # Divide PSNR by 20 to put it on similar scale to SSIM (~0-1)
+            score = (self.psnr_weight * psnr / 20.0) + (self.ssim_weight * ssim)
+        elif self.metric == "psnr":
+            score = val_metrics.get("psnr", 0.0)
+        elif self.metric == "ssim":
+            score = val_metrics.get("ssim", 0.0)
+        elif self.metric == "loss":
+            # Negate loss so higher is still better
+            score = -val_metrics.get("loss", float("inf"))
+        else:
+            raise ValueError(f"Unknown metric: {self.metric}")
+
+        return score
+
+    def update(self, epoch: int, val_metrics: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Update tracker with new validation metrics.
+
+        Args:
+            epoch: Current epoch number
+            val_metrics: Dictionary with validation metrics
+
+        Returns:
+            Dictionary with early stopping diagnostics:
+                - val_score_raw: Raw composite validation score
+                - val_score_ema: EMA-smoothed validation score
+                - is_best: Whether this epoch is the best so far
+                - should_stop: Whether early stopping should trigger
+                - epochs_without_improvement: Number of epochs since last improvement
+                - best_score: Best score seen so far
+                - best_epoch: Epoch that achieved best score
+        """
+        # Compute raw score
+        score_raw = self.compute_score(val_metrics)
+
+        # Update EMA
+        if self.score_ema is None:
+            # First epoch: initialize EMA to raw score
+            self.score_ema = score_raw
+        else:
+            self.score_ema = (
+                self.ema_alpha * self.score_ema + (1 - self.ema_alpha) * score_raw
+            )
+
+        # Determine which score to use for early stopping
+        score_for_stopping = self.score_ema if self.use_ema_for_stopping else score_raw
+
+        # Check if improved
+        is_best = score_for_stopping > (self.best_score + self.min_delta)
+
+        if is_best:
+            self.best_score = score_for_stopping
+            self.best_ema_score = self.score_ema
+            self.best_epoch = epoch
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+
+        # Check if should stop
+        should_stop = self.epochs_without_improvement >= self.patience
+
+        # Store history for analysis
+        self._history.append({
+            "epoch": epoch,
+            "score_raw": score_raw,
+            "score_ema": self.score_ema,
+            "is_best": is_best,
+            "epochs_without_improvement": self.epochs_without_improvement,
+        })
+
+        return {
+            "val_score_raw": score_raw,
+            "val_score_ema": self.score_ema,
+            "is_best": is_best,
+            "should_stop": should_stop,
+            "epochs_without_improvement": self.epochs_without_improvement,
+            "best_score": self.best_score,
+            "best_epoch": self.best_epoch,
+            "early_stop_flag": 1.0 if should_stop else 0.0,
+        }
+
+    @classmethod
+    def from_config(cls, cfg: Any) -> "EarlyStoppingTracker":
+        """
+        Create an EarlyStoppingTracker from a config object.
+
+        Handles both old-style configs (tcfg.patience) and new-style configs
+        (tcfg.early_stopping.patience).
+        """
+        # Check for new-style config
+        if hasattr(cfg, 'early_stopping') and cfg.early_stopping is not None:
+            es_cfg = cfg.early_stopping
+            return cls(
+                patience=getattr(es_cfg, 'patience', 5),
+                psnr_weight=getattr(es_cfg, 'psnr_weight', 1.0),
+                ssim_weight=getattr(es_cfg, 'ssim_weight', 1.0),
+                ema_alpha=getattr(es_cfg, 'ema_alpha', 0.7),
+                use_ema_for_stopping=getattr(es_cfg, 'use_ema_for_stopping', True),
+                min_delta=getattr(es_cfg, 'min_delta', 0.001),
+                metric=getattr(es_cfg, 'metric', 'psnr_ssim_composite'),
+            )
+        else:
+            # Fallback to old-style config
+            return cls(
+                patience=getattr(cfg, 'patience', 5),
+                psnr_weight=1.0,
+                ssim_weight=50.0,  # Match old behavior: PSNR + 50*SSIM
+                ema_alpha=0.0,  # No smoothing in old behavior
+                use_ema_for_stopping=False,
+                min_delta=0.0,
+                metric='psnr_ssim_composite',
+            )
+
+
+# =============================================================================
+# LEARNING RATE SCHEDULER FACTORY
+# =============================================================================
+
+def create_lr_scheduler(
+    optimizer: optim.Optimizer,
+    scheduler_cfg: Any,
+    steps_per_epoch: int,
+    total_epochs: int,
+    base_lr: float,
+) -> tuple:
+    """
+    Create a learning rate scheduler based on configuration.
+
+    Args:
+        optimizer: The optimizer to schedule
+        scheduler_cfg: Configuration object with scheduler parameters
+        steps_per_epoch: Number of training steps per epoch
+        total_epochs: Total number of training epochs
+        base_lr: Base learning rate from optimizer config
+
+    Returns:
+        Tuple of (scheduler, step_per_batch: bool)
+        step_per_batch indicates whether to step the scheduler after each batch (True)
+        or after each epoch (False).
+
+    Supported scheduler types:
+        - "onecycle": One-Cycle LR (steps per batch)
+        - "cosine": Cosine annealing (steps per epoch)
+        - "cosine_warmup": Cosine with linear warmup (steps per batch)
+        - "constant": No scheduling
+        - "step": Step decay (steps per epoch)
+    """
+    total_steps = steps_per_epoch * total_epochs
+    scheduler_type = getattr(scheduler_cfg, 'type', 'constant').lower()
+
+    if scheduler_type == "onecycle":
+        max_lr = getattr(scheduler_cfg, 'max_lr', base_lr * 2)
+        pct_start = getattr(scheduler_cfg, 'pct_start', 0.3)
+        div_factor = getattr(scheduler_cfg, 'div_factor', 25.0)
+        final_div_factor = getattr(scheduler_cfg, 'final_div_factor', 1000.0)
+
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=pct_start,
+            div_factor=div_factor,
+            final_div_factor=final_div_factor,
+        )
+        logger.info(f"Using OneCycleLR scheduler: max_lr={max_lr}, pct_start={pct_start}, "
+                   f"total_steps={total_steps}")
+        return scheduler, True  # Step per batch
+
+    elif scheduler_type == "cosine":
+        T_max = getattr(scheduler_cfg, 'T_max', None) or total_epochs
+        eta_min = getattr(scheduler_cfg, 'eta_min', 1e-7)
+
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=T_max,
+            eta_min=eta_min,
+        )
+        logger.info(f"Using CosineAnnealingLR scheduler: T_max={T_max}, eta_min={eta_min}")
+        return scheduler, False  # Step per epoch
+
+    elif scheduler_type == "cosine_warmup":
+        warmup_epochs = getattr(scheduler_cfg, 'warmup_epochs', 5)
+        eta_min = getattr(scheduler_cfg, 'eta_min', 1e-7)
+        warmup_steps = warmup_epochs * steps_per_epoch
+
+        # Use SequentialLR with linear warmup + cosine decay
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.01,
+            end_factor=1.0,
+            total_iters=warmup_steps,
+        )
+        cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=total_steps - warmup_steps,
+            eta_min=eta_min,
+        )
+        scheduler = optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_steps],
+        )
+        logger.info(f"Using Cosine with Warmup scheduler: warmup_epochs={warmup_epochs}, "
+                   f"eta_min={eta_min}")
+        return scheduler, True  # Step per batch
+
+    elif scheduler_type == "step":
+        step_size = getattr(scheduler_cfg, 'step_size', 30)
+        gamma = getattr(scheduler_cfg, 'gamma', 0.1)
+
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=step_size,
+            gamma=gamma,
+        )
+        logger.info(f"Using StepLR scheduler: step_size={step_size}, gamma={gamma}")
+        return scheduler, False  # Step per epoch
+
+    elif scheduler_type in ("constant", "none"):
+        logger.info("Using constant learning rate (no scheduler)")
+        return None, False
+
+    else:
+        logger.warning(f"Unknown scheduler type '{scheduler_type}', using constant LR")
+        return None, False
 
 
 def save_class_embeddings_trajectory(
@@ -537,18 +835,24 @@ def compute_elbo_diagnostics(
     device: torch.device,
     num_samples: int = 32,
     num_timesteps_per_sample: int = 8,
+    use_min_snr: bool = False,
+    min_snr_gamma: float = 5.0,
 ) -> Dict[str, float]:
     """
     Compute ELBO-related diagnostic metrics using estimate_elbo_terms.
 
     This function samples random timesteps across the batch and computes:
     - L_simple: Unweighted ε-MSE (standard training loss before any weighting)
-    - L_t_weighted: KL-like term from ELBO (Ho et al. 2020, Eq. 12)
+    - L_weighted: ε-MSE weighted by Min-SNR factor (matches training loss when enabled)
     - SNR: Signal-to-noise ratio at each timestep
+    - min_snr_weight: The Min-SNR weight applied (for analysis)
 
     These metrics help analyze whether Min-SNR weighting is aligned with the
-    parts of the ELBO that matter. By binning results by timestep range, you
-    can see which regions dominate the approximate bound.
+    parts of the loss that matter. By binning results by timestep range, you
+    can see which regions dominate the loss and how weighting affects them.
+
+    When use_min_snr=False, L_weighted == L_simple and weight_ratio ≈ 1.0.
+    When use_min_snr=True, L_weighted < L_simple at high SNR timesteps.
 
     Args:
         model: DDPM model
@@ -558,16 +862,19 @@ def compute_elbo_diagnostics(
         device: Compute device
         num_samples: Number of samples from batch to use
         num_timesteps_per_sample: Number of random timesteps to sample per image
+        use_min_snr: If True, compute L_weighted with Min-SNR weighting
+        min_snr_gamma: Clipping parameter γ for Min-SNR (typically 3–5)
 
     Returns:
         Dictionary with ELBO diagnostic metrics:
         - elbo_L_simple_mean: Mean L_simple across all samples
-        - elbo_L_weighted_mean: Mean L_t_weighted across all samples
+        - elbo_L_weighted_mean: Mean L_weighted across all samples
         - elbo_snr_mean: Mean SNR across all samples
         - elbo_L_simple_low_t, elbo_L_weighted_low_t, elbo_snr_low_t: Metrics for t < 333
         - elbo_L_simple_mid_t, elbo_L_weighted_mid_t, elbo_snr_mid_t: Metrics for 333 <= t < 666
         - elbo_L_simple_high_t, elbo_L_weighted_high_t, elbo_snr_high_t: Metrics for t >= 666
         - elbo_weight_ratio_*: Ratio of L_weighted/L_simple per timestep bin
+        - elbo_min_snr_weight_mean: Mean of Min-SNR weights (1.0 when disabled)
     """
     model.eval()
 
@@ -575,7 +882,6 @@ def compute_elbo_diagnostics(
     T = noise_scheduler.config.num_train_timesteps
     scheduler_cfg = {
         "alphas_cumprod": noise_scheduler.alphas_cumprod,
-        "betas": noise_scheduler.betas,
     }
 
     # Take subset of batch
@@ -587,6 +893,7 @@ def compute_elbo_diagnostics(
     all_L_simple = []
     all_L_weighted = []
     all_snr = []
+    all_min_snr_weight = []
     all_t = []
 
     # Sample multiple random timesteps per image to get coverage across t
@@ -601,31 +908,36 @@ def compute_elbo_diagnostics(
         # Model prediction
         eps_pred = model(x_t, t, labels)
 
-        # Compute ELBO terms (no gradient needed)
+        # Compute ELBO terms with Min-SNR settings matching training
         elbo_result = estimate_elbo_terms(
             x0=x0,
             x_t=x_t,
             t=t,
             eps_pred=eps_pred,
             scheduler_cfg=scheduler_cfg,
+            use_min_snr=use_min_snr,
+            min_snr_gamma=min_snr_gamma,
         )
 
         # Accumulate results
         all_L_simple.append(elbo_result["L_simple"])
-        all_L_weighted.append(elbo_result["L_t_weighted"])
+        all_L_weighted.append(elbo_result["L_weighted"])
         all_snr.append(elbo_result["snr"])
+        all_min_snr_weight.append(elbo_result["min_snr_weight"])
         all_t.append(elbo_result["t"])
 
     # Concatenate all results
     all_L_simple = torch.cat(all_L_simple, dim=0)
     all_L_weighted = torch.cat(all_L_weighted, dim=0)
     all_snr = torch.cat(all_snr, dim=0)
+    all_min_snr_weight = torch.cat(all_min_snr_weight, dim=0)
     all_t = torch.cat(all_t, dim=0)
 
     # Overall means
     elbo_L_simple_mean = all_L_simple.mean().item()
     elbo_L_weighted_mean = all_L_weighted.mean().item()
     elbo_snr_mean = all_snr.mean().item()
+    elbo_min_snr_weight_mean = all_min_snr_weight.mean().item()
 
     # Bin by timestep: low (t < T/3), mid (T/3 <= t < 2T/3), high (t >= 2T/3)
     t_low_threshold = T // 3      # 333 for T=1000
@@ -660,7 +972,13 @@ def compute_elbo_diagnostics(
     snr_mid = safe_mean(all_snr, mask_mid)
     snr_high = safe_mean(all_snr, mask_high)
 
-    # Weight ratios show how much the KL weighting affects each region
+    # Min-SNR weights per region (should be ~1.0 when disabled)
+    min_snr_weight_low = safe_mean(all_min_snr_weight, mask_low)
+    min_snr_weight_mid = safe_mean(all_min_snr_weight, mask_mid)
+    min_snr_weight_high = safe_mean(all_min_snr_weight, mask_high)
+
+    # Weight ratios show how much the Min-SNR weighting affects each region
+    # When use_min_snr=False, these should all be ~1.0
     weight_ratio_low = safe_ratio(L_weighted_low, L_simple_low)
     weight_ratio_mid = safe_ratio(L_weighted_mid, L_simple_mid)
     weight_ratio_high = safe_ratio(L_weighted_high, L_simple_high)
@@ -672,23 +990,27 @@ def compute_elbo_diagnostics(
         "elbo_L_simple_mean": float(elbo_L_simple_mean),
         "elbo_L_weighted_mean": float(elbo_L_weighted_mean),
         "elbo_snr_mean": float(elbo_snr_mean),
+        "elbo_min_snr_weight_mean": float(elbo_min_snr_weight_mean),
 
         # Low timesteps (t < T/3): low noise, high SNR
         "elbo_L_simple_low_t": float(L_simple_low),
         "elbo_L_weighted_low_t": float(L_weighted_low),
         "elbo_snr_low_t": float(snr_low),
+        "elbo_min_snr_weight_low_t": float(min_snr_weight_low),
 
         # Mid timesteps (T/3 <= t < 2T/3)
         "elbo_L_simple_mid_t": float(L_simple_mid),
         "elbo_L_weighted_mid_t": float(L_weighted_mid),
         "elbo_snr_mid_t": float(snr_mid),
+        "elbo_min_snr_weight_mid_t": float(min_snr_weight_mid),
 
         # High timesteps (t >= 2T/3): high noise, low SNR
         "elbo_L_simple_high_t": float(L_simple_high),
         "elbo_L_weighted_high_t": float(L_weighted_high),
         "elbo_snr_high_t": float(snr_high),
+        "elbo_min_snr_weight_high_t": float(min_snr_weight_high),
 
-        # Weight ratios
+        # Weight ratios (L_weighted / L_simple)
         "elbo_weight_ratio_low_t": float(weight_ratio_low),
         "elbo_weight_ratio_mid_t": float(weight_ratio_mid),
         "elbo_weight_ratio_high_t": float(weight_ratio_high),
@@ -979,9 +1301,11 @@ def evaluate_split(
         Dictionary of metrics (loss, psnr, ssim, per-class losses, etc.)
     """
     model.eval()
-    split_avg = EpochAverager()
+    num_classes = getattr(tcfg, 'num_classes', NUM_CLASSES)
+    split_avg = EpochAverager(num_classes=num_classes)
+    per_class_acc = PerClassMetricsAccumulator(num_classes=num_classes)
     split_loss_fn = DDPMNoiseMSE(
-        num_classes=tcfg.num_classes,
+        num_classes=num_classes,
         use_min_snr=tcfg.use_min_snr,
         min_snr_gamma=tcfg.min_snr_gamma
     )
@@ -998,7 +1322,7 @@ def evaluate_split(
 
     for step, batch in enumerate(pbar, 1):
         x0 = batch["pixel_values"].to(device)
-        logger.info(f"Pixel range (train): min={x0.min().item():.3f}, max={x0.max().item():.3f}")
+        logger.debug(f"Pixel range ({split_name}): min={x0.min().item():.3f}, max={x0.max().item():.3f}")
         labels = batch["labels"].to(device)
         bsz = x0.size(0)
 
@@ -1040,11 +1364,22 @@ def evaluate_split(
         # Clamp to prevent extreme values
         x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
 
-        # Compute metrics
+        # Compute global metrics
         batch_metrics = compute_batch_metrics(pred, noise, x0_pred, x0, loss)
         batch_metrics["grad_norm"] = 0.0  # No gradients in evaluation
         batch_metrics["ema_enabled"] = 1.0 if hasattr(model, '_ema') else 0.0
         split_avg.update(batch_metrics, batch_size=bsz)
+
+        # Compute per-class PSNR/SSIM metrics
+        # Rescale x0 and x0_pred from [-1, 1] to [0, 1] for metrics computation
+        x0_01 = (x0 + 1.0) / 2.0
+        x0_pred_01 = (x0_pred.clamp(-1, 1) + 1.0) / 2.0
+        per_class_acc.update(
+            x_hat=x0_pred_01,
+            x=x0_01,
+            labels=labels,
+            max_val=1.0,
+        )
 
         # Update progress bar (only if tqdm enabled on rank-0)
         if use_progress_bar:
@@ -1064,11 +1399,24 @@ def evaluate_split(
     if use_progress_bar:
         pbar.close()
 
-    # Get per-class losses (local to this GPU) - use weighted losses by default
-    per_class_losses = split_loss_fn.per_class(weighted=True)
+    # Get per-class losses (local to this GPU)
+    per_class_losses_weighted = split_loss_fn.per_class(weighted=True)
+    per_class_losses_raw = split_loss_fn.per_class(weighted=False)
     metrics = split_avg.means()
-    for c, loss_c in per_class_losses.items():
-        metrics[f"loss_c{c}"] = loss_c
+
+    # Add per-class losses to metrics
+    for c, loss_c in per_class_losses_weighted.items():
+        metrics[f"loss_weighted_c{c}"] = loss_c
+    for c, loss_c in per_class_losses_raw.items():
+        metrics[f"loss_raw_c{c}"] = loss_c
+
+    # Add per-class PSNR/SSIM metrics
+    per_class_metrics = per_class_acc.compute()
+    for key, value in per_class_metrics.items():
+        # Skip global psnr/ssim since they're already in metrics
+        if key in ("psnr", "ssim"):
+            continue
+        metrics[key] = value
 
     # Add number of bad batches to metrics (for monitoring numerical stability)
     metrics["n_bad_batches"] = float(n_bad_batches)
@@ -1485,11 +1833,40 @@ def train(yaml_path: str, split: str = "train") -> None:
     if use_ddp:
         barrier()
 
-    # Track best validation score (based on PSNR + SSIM) for best.pt and early stopping
-    best_val_score = float("-inf")
-    best_epoch = 0
-    epochs_without_improvement = 0
-    
+    # ========================================================================
+    # EARLY STOPPING TRACKER
+    # ========================================================================
+    # Uses composite validation score with EMA smoothing
+    early_stop_tracker = EarlyStoppingTracker.from_config(tcfg)
+    if is_main_process():
+        logger.info("Early stopping configuration:")
+        logger.info(f"  Patience: {early_stop_tracker.patience}")
+        logger.info(f"  Metric: {early_stop_tracker.metric}")
+        logger.info(f"  PSNR weight: {early_stop_tracker.psnr_weight}")
+        logger.info(f"  SSIM weight: {early_stop_tracker.ssim_weight}")
+        logger.info(f"  EMA alpha: {early_stop_tracker.ema_alpha}")
+        logger.info(f"  Use EMA for stopping: {early_stop_tracker.use_ema_for_stopping}")
+        logger.info(f"  Min delta: {early_stop_tracker.min_delta}")
+
+    # ========================================================================
+    # LEARNING RATE SCHEDULER
+    # ========================================================================
+    steps_per_epoch = len(train_loader)
+    lr_scheduler = None
+    lr_step_per_batch = False
+
+    if hasattr(tcfg, 'lr_scheduler') and tcfg.lr_scheduler is not None:
+        lr_scheduler, lr_step_per_batch = create_lr_scheduler(
+            optimizer=opt,
+            scheduler_cfg=tcfg.lr_scheduler,
+            steps_per_epoch=steps_per_epoch,
+            total_epochs=tcfg.epochs,
+            base_lr=ocfg.lr,
+        )
+    else:
+        if is_main_process():
+            logger.info("No LR scheduler configured, using constant learning rate")
+
     global_step = 0
     model.train()
 
@@ -1638,6 +2015,10 @@ def train(yaml_path: str, split: str = "train") -> None:
                     # CRITICAL: Update EMA with base_model (unwrapped), not DDP wrapper
                     ema.update(base_model)
 
+                # Step LR scheduler per batch (if configured)
+                if lr_scheduler is not None and lr_step_per_batch:
+                    lr_scheduler.step()
+
                 global_step += 1
             else:
                 # Reset gradients and scaler state on skipped step
@@ -1772,20 +2153,26 @@ def train(yaml_path: str, split: str = "train") -> None:
         )
         val_time = time.time() - val_start_time
 
-        # Extract a composite validation score (higher is better) for early stopping
-        try:
-            val_psnr = float(val_metrics["psnr"])
-            val_ssim = float(val_metrics["ssim"])
-        except KeyError as exc:
-            raise KeyError(
-                "Validation metrics must contain 'psnr' and 'ssim' "
-                "to compute the early-stopping score."
-            ) from exc
+        # Extract loss for reference logging
+        val_loss = val_metrics.get("loss", float("inf"))
 
-        # Simple composite score: PSNR (dB) + 50 * SSIM to keep both terms
-        # on comparable scales. You may tune this weighting if needed.
-        val_score = val_psnr + 50.0 * val_ssim
-        val_loss = val_metrics.get("loss", float("inf"))  # Still log loss for reference
+        # ---- Update Early Stopping Tracker ----
+        # This computes composite score and updates EMA smoothing
+        if is_main_process():
+            early_stop_info = early_stop_tracker.update(epoch, val_metrics)
+        else:
+            early_stop_info = {
+                "val_score_raw": 0.0,
+                "val_score_ema": 0.0,
+                "is_best": False,
+                "should_stop": False,
+                "epochs_without_improvement": 0,
+                "best_score": 0.0,
+                "best_epoch": 0,
+                "early_stop_flag": 0.0,
+            }
+        # For backward compatibility with logging
+        val_score = early_stop_info["val_score_raw"]
 
         # ---- Test Evaluation ----
         if IS_SUPERCOMPUTER and is_main_process():
@@ -1838,7 +2225,9 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         # ---- ELBO Diagnostics ----
         # Compute approximate ELBO decomposition to analyze Min-SNR weighting alignment.
-        # This helps identify which timestep regions dominate the variational bound.
+        # This helps identify which timestep regions dominate the loss.
+        # Pass the same use_min_snr and min_snr_gamma settings as training so that
+        # L_weighted in diagnostics matches the actual training loss.
         elbo_diagnostics = compute_elbo_diagnostics(
             model=model,
             x0_batch=x0_diag,
@@ -1847,6 +2236,8 @@ def train(yaml_path: str, split: str = "train") -> None:
             device=device,
             num_samples=min(32, len(x0_diag)),
             num_timesteps_per_sample=8,
+            use_min_snr=getattr(tcfg, 'use_min_snr', False),
+            min_snr_gamma=getattr(tcfg, 'min_snr_gamma', 5.0),
         )
         diagnostics.update(elbo_diagnostics)
 
@@ -1857,9 +2248,20 @@ def train(yaml_path: str, split: str = "train") -> None:
                 # Use base_model to avoid DDP wrappers; EMA is not active here
                 save_class_embeddings_trajectory(base_model, epoch, emb_out_path)
 
-        # Log validation metrics (only rank-0)
+        # Log validation metrics with early stopping diagnostics (only rank-0)
         if csv_logger is not None:
-            csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics)
+            # Merge early stopping diagnostics into validation metrics
+            val_metrics_with_es = dict(val_metrics)
+            val_metrics_with_es.update({
+                "val_score_raw": early_stop_info["val_score_raw"],
+                "val_score_ema": early_stop_info["val_score_ema"],
+                "best_val_score": early_stop_info["best_score"],
+                "best_val_epoch": early_stop_info["best_epoch"],
+                "epochs_without_improvement": early_stop_info["epochs_without_improvement"],
+                "early_stop_flag": early_stop_info["early_stop_flag"],
+                "is_best_epoch": 1.0 if early_stop_info["is_best"] else 0.0,
+            })
+            csv_logger.log_epoch(epoch=epoch, split="val", lr=curr_lr, metrics=val_metrics_with_es)
 
         # Log test metrics (only rank-0)
         if csv_logger is not None:
@@ -1928,24 +2330,27 @@ def train(yaml_path: str, split: str = "train") -> None:
                     augmentation_stats.save_csv(final=False)
                     logger.info(f"Saved augmentation statistics (epoch {epoch})")
 
+        # ---- LR Scheduler (per-epoch stepping) ----
+        # Step the scheduler at end of epoch (if not per-batch)
+        if lr_scheduler is not None and not lr_step_per_batch:
+            lr_scheduler.step()
+
         # ---- Checkpointing & Early Stopping ----
-        # Note: val_loss is already synchronized across GPUs above
+        # Note: early_stop_info was computed earlier with the EarlyStoppingTracker
 
-        # Determine if this is the best model (on rank-0, then broadcast)
-        # Early stopping now based on the composite validation score (higher is better)
+        # Extract early stopping decisions from tracker (rank-0 computed earlier)
         if is_main_process():
-            is_best = val_score > best_val_score
-            if is_best:
-                best_val_score = val_score
-                best_epoch = epoch
-                epochs_without_improvement = 0
-            else:
-                epochs_without_improvement += 1
-
-            should_stop = epochs_without_improvement >= tcfg.patience
+            is_best = early_stop_info["is_best"]
+            should_stop = early_stop_info["should_stop"]
+            best_val_score = early_stop_info["best_score"]
+            best_epoch = early_stop_info["best_epoch"]
+            epochs_without_improvement = early_stop_info["epochs_without_improvement"]
         else:
             is_best = False
             should_stop = False
+            best_val_score = 0.0
+            best_epoch = 0
+            epochs_without_improvement = 0
 
         # Broadcast early stopping decision to all processes
         if use_ddp:
@@ -1969,6 +2374,10 @@ def train(yaml_path: str, split: str = "train") -> None:
                 # EMA verification
                 "ema_enabled": ema is not None,
                 "ema_num_params": len(ema.shadow) if ema else 0,
+                # Early stopping state
+                "early_stop_info": early_stop_info,
+                # LR scheduler state (for resume)
+                "lr_scheduler": lr_scheduler.state_dict() if lr_scheduler is not None else None,
             }
 
             # Always save last.pt
@@ -1977,9 +2386,11 @@ def train(yaml_path: str, split: str = "train") -> None:
             # Save best.pt if this is the best validation score so far
             if is_best:
                 torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
-                logger.info(f"✓ New best model at epoch {epoch} with val_score={val_score:.2f}")
+                logger.info(f"✓ New best model at epoch {epoch} with val_score={val_score:.4f} "
+                           f"(EMA: {early_stop_info['val_score_ema']:.4f})")
             else:
-                logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_score:.2f} at epoch {best_epoch})")
+                logger.info(f"No improvement for {epochs_without_improvement}/{early_stop_tracker.patience} epochs "
+                           f"(best: {best_val_score:.4f} at epoch {best_epoch})")
 
             # Save periodic checkpoint every X epochs
             if (epoch % tcfg.ckpt_every_epochs) == 0:
@@ -2010,15 +2421,17 @@ def train(yaml_path: str, split: str = "train") -> None:
                     logger.info("=" * 80)
                     logger.warning(f"EARLY STOPPING at Epoch {epoch}")
                     logger.info("=" * 80)
-                    logger.warning(f"No improvement in validation score for {tcfg.patience} consecutive epochs.")
-                    logger.info(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.2f}")
+                    logger.warning(f"No improvement in validation score for {early_stop_tracker.patience} consecutive epochs.")
+                    logger.info(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.4f}")
+                    logger.info(f"Final EMA score: {early_stop_info['val_score_ema']:.4f}")
                     logger.info("=" * 80)
                 else:
                     print(f"\n{'='*80}")
                     print(f"⚠ Early Stopping at Epoch {epoch}")
                     print(f"{'='*80}")
-                    print(f"No improvement in validation score for {tcfg.patience} consecutive epochs.")
-                    print(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.2f}")
+                    print(f"No improvement in validation score for {early_stop_tracker.patience} consecutive epochs.")
+                    print(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.4f}")
+                    print(f"Final EMA score: {early_stop_info['val_score_ema']:.4f}")
                     print(f"{'='*80}\n")
             break
         
@@ -2166,18 +2579,20 @@ def train(yaml_path: str, split: str = "train") -> None:
         print(f"\n{'='*80}")
         print("Training Completed!")
         print("="*80)
-        print("Best Validation Score: {:.2f} (Epoch {})".format(best_val_score, best_epoch))
+        print("Best Validation Score: {:.4f} (Epoch {})".format(best_val_score, best_epoch))
+        print("Final EMA Score: {:.4f}".format(early_stop_info.get("val_score_ema", best_val_score)))
         print("Completed Epochs: {}/{}".format(epoch, tcfg.epochs))
-        if epochs_without_improvement >= tcfg.patience:
-            print("Stopped early: No improvement for {} epochs".format(tcfg.patience))
+        if epochs_without_improvement >= early_stop_tracker.patience:
+            print("Stopped early: No improvement for {} epochs".format(early_stop_tracker.patience))
         print("\nCheckpoints saved in: {}".format(out_dir / 'ckpts'))
-        print("  - best.pt: Best model (epoch {}, val_score={:.2f})".format(best_epoch, best_val_score))
+        print("  - best.pt: Best model (epoch {}, val_score={:.4f})".format(best_epoch, best_val_score))
         print("  - last.pt: Final epoch model (epoch {})".format(epoch))
         print("  - epoch_XXXX.pt: Periodic checkpoints every {} epochs".format(tcfg.ckpt_every_epochs))
         print("\nVisualizations saved in: {}".format(out_dir / 'samples'))
         print("Metrics logged in: {}".format(out_dir / 'training_metrics.csv'))
+        print("Early stopping diagnostics in: val_score_raw, val_score_ema columns")
         print("="*80 + "\n")
-        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_score={best_val_score:.2f}")
+        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_score={best_val_score:.4f}")
 
         # Generate training evolution visualizations (only rank-0)
         try:

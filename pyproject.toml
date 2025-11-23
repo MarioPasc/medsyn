@@ -63,6 +63,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional dependencies for FID and generation quality metrics
+# Install with: pip install -e ".[metrics]"
+metrics = [
+    "torch-fidelity>=0.3.0",  # For FID/IS/KID computation
+    "clean-fid>=0.1.35",       # Alternative FID implementation
+    "lpips>=0.1.4",            # Learned Perceptual Image Patch Similarity
+]
+
 # Optional dependencies for DistDiff integration
 # Install with: pip install -e ".[distdiff]"
 # Or create separate conda env and install: pip install -e ".[distdiff]"

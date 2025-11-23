@@ -143,13 +143,32 @@ ccddpm:
     batch_size: 4
     epochs: 1000
 
-    patience: 5               # Early stopping: stop if no improvement for 5 epochs
+    # ========================================================================
+    # EARLY STOPPING CONFIGURATION
+    # ========================================================================
+    # Early stopping is based on a composite validation score combining PSNR and SSIM.
+    # The score is smoothed with an exponential moving average (EMA) to reduce noise sensitivity.
+    #
+    # Composite score formula:
+    #   S = (psnr_weight * PSNR / 20) + (ssim_weight * SSIM)
+    # where PSNR is divided by 20 to put it on a similar scale to SSIM (both ~0-1).
+    #
+    # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
+    # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
+    early_stopping:
+      patience: 5              # Stop if no improvement for this many epochs
+      metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
+      psnr_weight: 1.0         # Weight for PSNR in composite score
+      ssim_weight: 1.0         # Weight for SSIM in composite score
+      ema_alpha: 0.7           # EMA smoothing factor (0 = no smoothing, 0.9 = heavy smoothing)
+      use_ema_for_stopping: true  # If true, use smoothed score for early stopping decisions
+      min_delta: 0.001         # Minimum improvement to count as "better"
 
     mixed_precision: true
-    
+
     grad_clip_norm: 5.0        # STABILITY FIX: Reduced from 10.0 to 5.0 to prevent gradient explosion
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
-    
+
     ema_use: true
     ema_decay: 0.9995
 
@@ -162,10 +181,25 @@ ccddpm:
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     skip_nonfinite_grads: true  # # Skip batches with non-finite gradients instead of  aborting
     output_dir: ${OUTPUT_DIR}
-    
-  optim:
-    lr: 5.0e-5  # STABILITY FIX: Reduced from 2.0e-4 to 1.0e-4 to prevent gradient explosion
-    wd: 0.0
+
+    # ========================================================================
+    # LEARNING RATE SCHEDULER CONFIGURATION
+    # ========================================================================
+    # Supports: "onecycle", "cosine", "cosine_warmup", "constant", "step"
+    lr_scheduler:
+      type: "cosine"           # LR scheduler type
+      # OneCycle parameters (used when type="onecycle")
+      max_lr: 1.0e-4             # Peak learning rate (default: 2x base lr)
+      pct_start: 0.3             # Fraction of training spent ramping up LR
+      div_factor: 25.0           # Initial LR = max_lr / div_factor
+      final_div_factor: 1000.0   # Final LR = max_lr / (div_factor * final_div_factor)
+      # Cosine parameters (used when type="cosine" or "cosine_warmup")
+      T_max: null                # Number of iterations for cosine (null = total_steps)
+      eta_min: 1.0e-7            # Minimum learning rate
+      warmup_epochs: 5           # Warmup epochs (for cosine_warmup)
+      # Step parameters (used when type="step")
+      step_size: 30              # Decay LR every step_size epochs
+      gamma: 0.1                 # Multiplicative factor of LR decay
 
   sched:
     num_train_timesteps: 1000

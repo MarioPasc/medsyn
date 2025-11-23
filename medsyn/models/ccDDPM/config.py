@@ -30,6 +30,36 @@ class SchedCfg:
 
 
 @dataclass
+class EarlyStoppingCfg:
+    """Configuration for early stopping with EMA smoothing."""
+    patience: int = 5  # Number of epochs without improvement before stopping
+    metric: str = "psnr_ssim_composite"  # Metric for early stopping: psnr_ssim_composite, psnr, ssim, loss
+    psnr_weight: float = 1.0  # Weight for PSNR in composite score
+    ssim_weight: float = 1.0  # Weight for SSIM in composite score
+    ema_alpha: float = 0.7  # EMA smoothing factor (0 = no smoothing, higher = more smoothing)
+    use_ema_for_stopping: bool = True  # Whether to use EMA score for stopping decisions
+    min_delta: float = 0.001  # Minimum improvement to count as "better"
+
+
+@dataclass
+class LRSchedulerCfg:
+    """Configuration for learning rate scheduling."""
+    type: str = "constant"  # Scheduler type: onecycle, cosine, cosine_warmup, step, constant
+    # OneCycle parameters
+    max_lr: Optional[float] = None  # Peak LR (default: 2x base lr)
+    pct_start: float = 0.3  # Fraction of training spent ramping up LR
+    div_factor: float = 25.0  # Initial LR = max_lr / div_factor
+    final_div_factor: float = 1000.0  # Final LR = max_lr / (div_factor * final_div_factor)
+    # Cosine parameters
+    T_max: Optional[int] = None  # Number of iterations for cosine (None = total_epochs)
+    eta_min: float = 1e-7  # Minimum learning rate
+    warmup_epochs: int = 5  # Warmup epochs (for cosine_warmup)
+    # Step parameters
+    step_size: int = 30  # Decay LR every step_size epochs
+    gamma: float = 0.1  # Multiplicative factor of LR decay
+
+
+@dataclass
 class UNetCfg:
     """
     Configuration for UNet2DModel architecture.
@@ -262,10 +292,15 @@ class TrainCfg:
     log_every: int = 100
     ckpt_every_epochs: int = 1
     snapshot_class_embedding_every: int = 0  # Save class embedding snapshots every X epochs (0 = disabled)
-    patience: int = 15  # Early stopping: number of epochs without improvement
+    patience: int = 15  # Early stopping: number of epochs without improvement (legacy, use early_stopping.patience)
     use_tqdm: bool = True  # Enable/disable tqdm progress bars (useful for HPC logs)
     skip_nonfinite_grads: bool = False  # If True, skip batches with non-finite gradients; if False, raise error
+    per_class_loss_weighting: bool = False  # Enable per-class loss weighting based on class frequencies
     output_dir: Path = Path("./outputs/ccddpm")
+    # New: Early stopping configuration (replaces simple patience)
+    early_stopping: Optional[EarlyStoppingCfg] = None
+    # New: Learning rate scheduler configuration
+    lr_scheduler: Optional[LRSchedulerCfg] = None
 
 @dataclass
 class InferenceCfg:
@@ -372,7 +407,28 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
 
     # ccddpm section with deep defaults
     cc = raw.get("ccddpm", {}) or {}
-    train = TrainCfg(**{**TrainCfg().__dict__, **{k: cc.get("train", {}).get(k, v) for k, v in TrainCfg().__dict__.items()}})
+
+    # Parse TrainCfg with nested early_stopping and lr_scheduler configs
+    train_dict = cc.get("train", {})
+    train_base = {**TrainCfg().__dict__, **{k: train_dict.get(k, v) for k, v in TrainCfg().__dict__.items() if k not in ('early_stopping', 'lr_scheduler')}}
+
+    # Parse early_stopping nested config
+    early_stopping_dict = train_dict.get("early_stopping")
+    if early_stopping_dict and isinstance(early_stopping_dict, dict):
+        early_stopping_cfg = EarlyStoppingCfg(**{**EarlyStoppingCfg().__dict__, **early_stopping_dict})
+    else:
+        early_stopping_cfg = None
+    train_base["early_stopping"] = early_stopping_cfg
+
+    # Parse lr_scheduler nested config
+    lr_scheduler_dict = train_dict.get("lr_scheduler")
+    if lr_scheduler_dict and isinstance(lr_scheduler_dict, dict):
+        lr_scheduler_cfg = LRSchedulerCfg(**{**LRSchedulerCfg().__dict__, **lr_scheduler_dict})
+    else:
+        lr_scheduler_cfg = None
+    train_base["lr_scheduler"] = lr_scheduler_cfg
+
+    train = TrainCfg(**train_base)
     optim = OptimCfg(**{**OptimCfg().__dict__, **cc.get("optim", {})})
     sched = SchedCfg(**{**SchedCfg().__dict__, **cc.get("sched", {})})
     infer = InferenceCfg(**{**InferenceCfg().__dict__, **cc.get("infer", {})})
