@@ -277,7 +277,7 @@ export NCCL_DEBUG=INFO
 export IS_SUPERCOMPUTER=1
 
 # ========================================================================
-# STAGE 1: TRAIN GUIDE MODEL
+# STAGE 1: TRAIN GUIDE MODEL (or skip if already trained)
 # ========================================================================
 echo ""
 echo "================================================================================"
@@ -287,33 +287,71 @@ echo "==========================================================================
 CHECKPOINT_DIR="${OUT_DIR}/checkpoints/guide_model"
 mkdir -p "${CHECKPOINT_DIR}"
 
-echo "[stage1] Training guide model (ResNet50) on NPZ dataset..."
-echo "[stage1] Dataset: ${DATA_DST}"
-echo "[stage1] Checkpoint: ${CHECKPOINT_DIR}"
-echo ""
+# Check if a pre-trained guide model exists in permanent storage
+EXISTING_GUIDE_MODEL="${RESULTS_DST}/checkpoints/guide_model/model_best.pth.tar"
+EXISTING_RESULTS_YAML="${RESULTS_DST}/checkpoints/guide_model/results.yaml"
 
-# Use only first GPU for guide model training
-# All parameters read from config file
-CUDA_VISIBLE_DEVICES=0 python medsyn/models/distdiff/train.py \
-    -a "${MODEL_ARCH}" \
-    -d pathmnist_npz \
-    --data_dir "${DATA_DST}" \
-    --checkpoint "${CHECKPOINT_DIR}" \
-    --manualSeed "${SEED}" \
-    --train-batch-size "${TRAIN_BATCH_SIZE}" \
-    --val-batch-size "${VAL_BATCH_SIZE}" \
-    --lr "${LEARNING_RATE}" \
-    --epochs "${EPOCHS}"
+SKIP_STAGE1=false
+if [ -f "${EXISTING_GUIDE_MODEL}" ] && [ -f "${EXISTING_RESULTS_YAML}" ]; then
+    echo ""
+    echo "================================================================================"
+    echo "📦 Found existing guide model in permanent storage!"
+    echo "================================================================================"
+    echo "  • Model: ${EXISTING_GUIDE_MODEL}"
+    echo "  • Results: ${EXISTING_RESULTS_YAML}"
+    echo ""
+    echo "Copying pre-trained guide model to localscratch..."
 
-STAGE1_EXIT_CODE=$?
+    # Copy the entire guide_model directory to preserve all files
+    rsync -av "${RESULTS_DST}/checkpoints/guide_model/" "${CHECKPOINT_DIR}/"
 
-if [ ${STAGE1_EXIT_CODE} -ne 0 ]; then
-    echo "❌ Stage 1 failed with exit code ${STAGE1_EXIT_CODE}"
-    exit ${STAGE1_EXIT_CODE}
+    if [ $? -eq 0 ] && [ -f "${CHECKPOINT_DIR}/model_best.pth.tar" ]; then
+        echo ""
+        echo "✅ Successfully copied pre-trained guide model"
+        echo "⏭️  SKIPPING Stage 1 training (using existing model)"
+        echo ""
+
+        # Display previous training results
+        echo "Previous training results:"
+        cat "${CHECKPOINT_DIR}/results.yaml" 2>/dev/null || echo "  (could not read results.yaml)"
+        echo ""
+
+        SKIP_STAGE1=true
+    else
+        echo "⚠️  Failed to copy guide model, will train from scratch"
+        SKIP_STAGE1=false
+    fi
 fi
 
-echo "✅ Stage 1 completed successfully"
-echo ""
+if [ "${SKIP_STAGE1}" = false ]; then
+    echo "[stage1] Training guide model (${MODEL_ARCH}) on NPZ dataset..."
+    echo "[stage1] Dataset: ${DATA_DST}"
+    echo "[stage1] Checkpoint: ${CHECKPOINT_DIR}"
+    echo ""
+
+    # Use only first GPU for guide model training
+    # All parameters read from config file
+    CUDA_VISIBLE_DEVICES=0 python medsyn/models/distdiff/train.py \
+        -a "${MODEL_ARCH}" \
+        -d pathmnist_npz \
+        --data_dir "${DATA_DST}" \
+        --checkpoint "${CHECKPOINT_DIR}" \
+        --manualSeed "${SEED}" \
+        --train-batch-size "${TRAIN_BATCH_SIZE}" \
+        --val-batch-size "${VAL_BATCH_SIZE}" \
+        --lr "${LEARNING_RATE}" \
+        --epochs "${EPOCHS}"
+
+    STAGE1_EXIT_CODE=$?
+
+    if [ ${STAGE1_EXIT_CODE} -ne 0 ]; then
+        echo "❌ Stage 1 failed with exit code ${STAGE1_EXIT_CODE}"
+        exit ${STAGE1_EXIT_CODE}
+    fi
+
+    echo "✅ Stage 1 completed successfully"
+    echo ""
+fi
 
 # Verify guide model checkpoint exists
 GUIDE_MODEL_PATH="${CHECKPOINT_DIR}/model_best.pth.tar"

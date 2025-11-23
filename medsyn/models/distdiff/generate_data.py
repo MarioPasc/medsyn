@@ -819,6 +819,17 @@ def encode_prompt(text_encoder, input_ids, attention_mask, text_encoder_use_atte
 
 
 def main(args):
+    # Initialize Accelerator FIRST - required before using accelerate.logging
+    logging_dir = Path(args.logging_dir)
+    accelerator_project_config = ProjectConfiguration(project_dir=args.logging_dir, logging_dir=logging_dir)
+
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision=args.mixed_precision,
+        log_with=args.report_to,
+        project_config=accelerator_project_config,
+    )
+
     # Configure logging to write to both console and file
     log_file = os.path.join(args.logging_dir, f"generation_split_{args.split}_detailed.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -851,16 +862,6 @@ def main(args):
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
             " Please use `huggingface-cli login` to authenticate with the Hub."
         )
-
-    logging_dir = Path(args.logging_dir)
-    accelerator_project_config = ProjectConfiguration(project_dir=args.logging_dir, logging_dir=logging_dir)
-
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with=args.report_to,
-        project_config=accelerator_project_config,
-    )
 
     if args.report_to == "wandb":
         if not is_wandb_available():
