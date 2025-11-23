@@ -153,7 +153,7 @@ ccddpm:
     ema_use: true
     ema_decay: 0.9995
 
-    use_min_snr: true          # Min-SNR weighting
+    use_min_snr: false          # Min-SNR weighting
     min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
 
