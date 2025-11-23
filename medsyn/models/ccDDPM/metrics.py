@@ -91,12 +91,10 @@ def try_lpips(x: torch.Tensor, y: torch.Tensor, net: str = "alex", device: str =
 
 def export_per_class_loss(loss_tracker, out_csv: Path) -> None:
     """
-    Dump per-class training loss means to CSV.
+    Dump per-class training loss means to CSV with columns [class, raw_loss, weighted_loss].
+
+    Uses the loss_tracker's per_class_table() method which returns a pandas DataFrame
+    with both raw and weighted per-class losses.
     """
-    import csv
-    stats = loss_tracker.per_class()
-    with open(out_csv, "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["class","mse_loss"])
-        for c, v in stats.items():
-            w.writerow([c, v])
+    table = loss_tracker.per_class_table()
+    table.to_csv(out_csv, index=False)

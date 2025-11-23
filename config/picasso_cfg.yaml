@@ -146,12 +146,16 @@ ccddpm:
     patience: 5               # Early stopping: stop if no improvement for 5 epochs
 
     mixed_precision: true
+    
     grad_clip_norm: 5.0        # STABILITY FIX: Reduced from 10.0 to 5.0 to prevent gradient explosion
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
+    
     ema_use: true
     ema_decay: 0.9995
-    use_min_snr: true          # STABILITY: If issues persist, set to false to disable Min-SNR weighting
-    min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+
+    use_min_snr: true          # Min-SNR weighting
+    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs

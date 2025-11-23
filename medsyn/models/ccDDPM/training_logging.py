@@ -31,7 +31,80 @@ DEFAULT_FIELDS: List[str] = [
     "ema_enabled",
 
     # Total samples processed
-    "total_count"
+    "total_count",
+
+    # ========================================================================
+    # DIAGNOSTIC METRICS (split="diag")
+    # ========================================================================
+    # These fields are populated for split="diag" to track training health.
+    # For train/val/test splits, these will be empty or NaN.
+    #
+    # Noise-prediction correlation: measures how well the model predicts noise
+    # A high correlation (>0.5) indicates the model is learning the noise pattern.
+    # A value close to 0 or negative may indicate training issues.
+    "noise_pred_corr",          # Correlation between predicted and true noise (ideally high >0.5)
+    "noise_pred_corr_t100",     # Correlation at timestep t=100 (high noise)
+    "noise_pred_corr_t500",     # Correlation at timestep t=500 (medium noise)
+
+    # Prediction statistics
+    "pred_std",                 # Std of model predictions (should be ~0.8-1.2 for normalized data)
+    "pred_std_t100",            # Std at t=100
+    "pred_std_t500",            # Std at t=500
+
+    # Single-step reconstruction metrics (x0 estimated from single denoising step)
+    "recon_mse_t100",           # MSE of x0 reconstruction at t=100
+    "recon_mse_t500",           # MSE of x0 reconstruction at t=500
+    "recon_psnr_t100",          # PSNR of x0 reconstruction at t=100
+    "recon_psnr_t500",          # PSNR of x0 reconstruction at t=500
+    "recon_ssim_t100",          # SSIM of x0 reconstruction at t=100
+    "recon_ssim_t500",          # SSIM of x0 reconstruction at t=500
+
+    # Full-chain reconstruction (complete diffusion + denoising)
+    "full_chain_psnr",          # PSNR after full denoising chain
+    "full_chain_ssim",          # SSIM after full denoising chain
+
+    # ========================================================================
+    # ELBO DIAGNOSTICS (split="diag")
+    # ========================================================================
+    # These fields track the approximate ELBO decomposition from estimate_elbo_terms.
+    # Used to analyze whether Min-SNR weighting is aligned with important timesteps.
+    #
+    # L_simple: Unweighted ε-MSE (standard training loss before weighting)
+    # L_t_weighted: KL-like term from ELBO (Ho et al. Eq. 12)
+    # SNR: Signal-to-noise ratio at each timestep
+    #
+    # Overall means (averaged across random timesteps in diagnostic batch):
+    "elbo_L_simple_mean",       # Mean L_simple across batch
+    "elbo_L_weighted_mean",     # Mean L_t_weighted (KL term) across batch
+    "elbo_snr_mean",            # Mean SNR across batch
+
+    # Timestep-binned metrics (to see which t regions dominate the ELBO):
+    # Low timesteps (t < 333): low noise, high SNR, fine details matter
+    "elbo_L_simple_low_t",      # Mean L_simple for t < 333
+    "elbo_L_weighted_low_t",    # Mean L_t_weighted for t < 333
+    "elbo_snr_low_t",           # Mean SNR for t < 333
+
+    # Mid timesteps (333 <= t < 666): medium noise, balanced
+    "elbo_L_simple_mid_t",      # Mean L_simple for 333 <= t < 666
+    "elbo_L_weighted_mid_t",    # Mean L_t_weighted for 333 <= t < 666
+    "elbo_snr_mid_t",           # Mean SNR for 333 <= t < 666
+
+    # High timesteps (t >= 666): high noise, low SNR, coarse structure
+    "elbo_L_simple_high_t",     # Mean L_simple for t >= 666
+    "elbo_L_weighted_high_t",   # Mean L_t_weighted for t >= 666
+    "elbo_snr_high_t",          # Mean SNR for t >= 666
+
+    # Min-SNR analysis: ratio of weighted to simple loss shows weighting effect
+    "elbo_weight_ratio_low_t",  # L_weighted/L_simple for low t (should be ~1 if balanced)
+    "elbo_weight_ratio_mid_t",  # L_weighted/L_simple for mid t
+    "elbo_weight_ratio_high_t", # L_weighted/L_simple for high t
+
+    # Legacy field names (for backwards compatibility)
+    "input_output_correlation", # Deprecated: use noise_pred_corr instead
+    "reconstruction_mse_t100",  # Deprecated: use recon_mse_t100 instead
+    "reconstruction_mse_t500",  # Deprecated: use recon_mse_t500 instead
+    "reconstruction_psnr_t500", # Deprecated: use recon_psnr_t500 instead
+    "prediction_std",           # Deprecated: use pred_std instead
 ]
 
 @dataclass

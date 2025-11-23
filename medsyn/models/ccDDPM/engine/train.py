@@ -22,7 +22,7 @@ from medsyn.models.ccDDPM.config import ProjectCfg, load_cfg
 from medsyn.models.ccDDPM.dataloaders.json import build_json_loader
 from medsyn.models.ccDDPM.dataloaders.npz import build_npz_loader
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
-from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
+from medsyn.models.ccDDPM.loss import DDPMNoiseMSE, estimate_elbo_terms
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
 from medsyn.models.ccDDPM.engine.ddp_utils import (
@@ -173,7 +173,7 @@ def log_training_progress(rank: int, epoch: int, step: int, total_steps: int,
 
 def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
                      val_metrics: Dict[str, float], test_metrics: Dict[str, float],
-                     epoch_time: float, best_val_loss: float, is_best: bool) -> None:
+                     epoch_time: float, best_val_score: float, is_best: bool) -> None:
     """
     Log end-of-epoch summary with training, validation, and test metrics.
 
@@ -184,8 +184,8 @@ def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
         val_metrics: Validation metrics dictionary
         test_metrics: Test metrics dictionary
         epoch_time: Total time for epoch (seconds)
-        best_val_loss: Best validation loss so far
-        is_best: Whether this epoch achieved best validation loss
+        best_val_score: Best validation score (PSNR + 50*SSIM) so far
+        is_best: Whether this epoch achieved best validation score
     """
     if rank == 0:
         logger.info("=" * 80)
@@ -201,11 +201,13 @@ def log_epoch_summary(rank: int, epoch: int, train_metrics: Dict[str, float],
                    f"psnr={test_metrics.get('psnr', 0):.2f}dB | "
                    f"ssim={test_metrics.get('ssim', 0):.4f}")
 
+        # Compute current val_score for display
+        curr_val_score = val_metrics.get('psnr', 0) + 50.0 * val_metrics.get('ssim', 0)
         if is_best:
-            logger.info(f"🌟 NEW BEST MODEL! Val loss: {val_metrics.get('loss', 0):.4f} "
-                       f"(previous: {best_val_loss:.4f})")
+            logger.info(f"🌟 NEW BEST MODEL! Val score: {curr_val_score:.2f} "
+                       f"(PSNR + 50*SSIM)")
         else:
-            logger.info(f"Best val loss: {best_val_loss:.4f}")
+            logger.info(f"Best val score: {best_val_score:.2f} (PSNR + 50*SSIM)")
 
         logger.info(f"Epoch time: {format_time(epoch_time)}")
         logger.info("=" * 80)
@@ -315,15 +317,36 @@ def compute_training_diagnostics(
     num_samples: int = 16,
 ) -> Dict[str, float]:
     """
-    Compute diagnostic metrics to detect training issues.
+    Compute comprehensive diagnostic metrics to detect training issues.
+
+    These diagnostics are logged to the CSV with split="diag" to enable
+    correlation of failure modes or instabilities with epoch and configuration.
 
     Returns:
-        Dictionary with:
-        - input_output_correlation: Correlation between noisy input and model prediction (should be LOW)
-        - reconstruction_mse_t100: MSE at early timestep (high noise)
-        - reconstruction_mse_t500: MSE at mid timestep
-        - reconstruction_psnr_t500: PSNR at mid timestep
-        - prediction_std: Std of model outputs (should be ~1.0 for normalized data)
+        Dictionary with diagnostic metrics:
+
+        Noise-Prediction Correlation (correctly interpreted):
+        - noise_pred_corr: Mean correlation between predicted and true noise
+        - noise_pred_corr_t100: Correlation at t=100 (high noise level)
+        - noise_pred_corr_t500: Correlation at t=500 (medium noise level)
+          * High correlation (>0.5) = model is learning noise pattern correctly
+          * Low/negative = potential training issues
+
+        Prediction Statistics:
+        - pred_std: Mean std of model predictions
+        - pred_std_t100: Std at t=100
+        - pred_std_t500: Std at t=500
+          * Should be ~0.8-1.2 for normalized data
+          * Much lower = model collapsed to constant
+          * Much higher = unstable predictions
+
+        Single-Step Reconstruction (x0 estimated from single denoising step):
+        - recon_mse_t100, recon_mse_t500: MSE of x0 reconstruction
+        - recon_psnr_t100, recon_psnr_t500: PSNR of x0 reconstruction
+        - recon_ssim_t100, recon_ssim_t500: SSIM of x0 reconstruction
+
+        Legacy fields (for backwards compatibility):
+        - input_output_correlation, reconstruction_mse_t100/t500, etc.
     """
     model.eval()
 
@@ -331,12 +354,8 @@ def compute_training_diagnostics(
     x0 = x0_batch[:num_samples]
     labels = labels_batch[:num_samples]
 
-    # Test at different timesteps
-    correlations = []
-    recon_mse_t100 = []
-    recon_mse_t500 = []
-    recon_psnr_t500 = []
-    pred_stds = []
+    # Per-timestep metrics storage
+    metrics_per_t: Dict[int, Dict[str, float]] = {}
 
     for t_val in [100, 500]:
         t = torch.full((len(x0),), t_val, device=device, dtype=torch.long)
@@ -346,50 +365,105 @@ def compute_training_diagnostics(
         # Model prediction
         eps_pred = model(x_t, t, labels)
 
-        # Correlate ε̂ with true ε, not with x_t (avoids false "echoing" alarms)
+        # ================================================================
+        # Noise-Prediction Correlation (correctly interpreted)
+        # ================================================================
+        # We correlate predicted noise (eps_pred) with true noise (eps_true).
+        # A well-trained model should have HIGH positive correlation here,
+        # indicating it correctly predicts the noise that was added.
         eps_true = noise
-        x_vec = eps_pred.flatten()
-        y_vec = eps_true.flatten()
-        x_std = x_vec.std(); y_std = y_vec.std()
-        if x_std > 1e-8 and y_std > 1e-8:
-            corr = torch.corrcoef(torch.stack([x_vec, y_vec]))[0,1].item()
+        eps_pred_flat = eps_pred.flatten()
+        eps_true_flat = eps_true.flatten()
+        eps_pred_std = eps_pred_flat.std()
+        eps_true_std = eps_true_flat.std()
+
+        if eps_pred_std > 1e-8 and eps_true_std > 1e-8:
+            corr = torch.corrcoef(torch.stack([eps_pred_flat, eps_true_flat]))[0, 1].item()
         else:
             corr = 0.0
-        correlations.append(corr)
 
-        # Prediction std
-        pred_stds.append(eps_pred.std().item())
+        # ================================================================
+        # Prediction Statistics
+        # ================================================================
+        pred_std = eps_pred.std().item()
+        pred_mean = eps_pred.mean().item()
 
-        # Reconstruct x0
+        # ================================================================
+        # Single-Step x0 Reconstruction
+        # ================================================================
+        # Use the DDPM posterior mean formula to estimate x0 from x_t and eps_pred
         sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t].sqrt().view(-1, 1, 1, 1)
         sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t]).sqrt().view(-1, 1, 1, 1)
         x0_pred = (x_t - sqrt_one_minus_alpha_prod * eps_pred) / sqrt_alpha_prod
         x0_pred = torch.clamp(x0_pred, -1.0, 1.0)
 
-        # Reconstruction metrics
+        # MSE
         mse = F.mse_loss(x0_pred, x0).item()
+
+        # PSNR
         psnr = compute_psnr(x0_pred, x0)
 
-        if t_val == 100:
-            recon_mse_t100.append(mse)
-        else:
-            recon_mse_t500.append(mse)
-            recon_psnr_t500.append(psnr)
+        # SSIM (convert from [-1, 1] to [0, 1] range for SSIM computation)
+        x0_pred_01 = (x0_pred + 1.0) / 2.0
+        x0_01 = (x0 + 1.0) / 2.0
+        ssim = compute_ssim(x0_pred_01, x0_01, max_val=1.0)
+
+        # Store metrics for this timestep
+        metrics_per_t[t_val] = {
+            "corr": corr,
+            "pred_std": pred_std,
+            "pred_mean": pred_mean,
+            "mse": mse,
+            "psnr": psnr,
+            "ssim": ssim,
+        }
 
     model.train()
 
-    return {
-        "input_output_correlation": float(np.mean(correlations)),  # Should be << 0.5, ideally negative
-        "reconstruction_mse_t100": float(np.mean(recon_mse_t100)),
-        "reconstruction_mse_t500": float(np.mean(recon_mse_t500)),
-        "reconstruction_psnr_t500": float(np.mean(recon_psnr_t500)),
-        "prediction_std": float(np.mean(pred_stds)),  # Should be ~0.8-1.2 for normalized data
+    # ================================================================
+    # Build output dictionary with all diagnostic fields
+    # ================================================================
+    t100 = metrics_per_t[100]
+    t500 = metrics_per_t[500]
+
+    # Average correlation across timesteps
+    mean_corr = (t100["corr"] + t500["corr"]) / 2.0
+    mean_pred_std = (t100["pred_std"] + t500["pred_std"]) / 2.0
+
+    result = {
+        # ---- New diagnostic field names ----
+        # Noise-prediction correlation (correctly interpreted: high = good)
+        "noise_pred_corr": float(mean_corr),
+        "noise_pred_corr_t100": float(t100["corr"]),
+        "noise_pred_corr_t500": float(t500["corr"]),
+
+        # Prediction statistics
+        "pred_std": float(mean_pred_std),
+        "pred_std_t100": float(t100["pred_std"]),
+        "pred_std_t500": float(t500["pred_std"]),
+
+        # Single-step reconstruction metrics
+        "recon_mse_t100": float(t100["mse"]),
+        "recon_mse_t500": float(t500["mse"]),
+        "recon_psnr_t100": float(t100["psnr"]),
+        "recon_psnr_t500": float(t500["psnr"]),
+        "recon_ssim_t100": float(t100["ssim"]),
+        "recon_ssim_t500": float(t500["ssim"]),
+
+        # ---- Legacy field names (for backwards compatibility) ----
+        "input_output_correlation": float(mean_corr),
+        "reconstruction_mse_t100": float(t100["mse"]),
+        "reconstruction_mse_t500": float(t500["mse"]),
+        "reconstruction_psnr_t500": float(t500["psnr"]),
+        "prediction_std": float(mean_pred_std),
     }
 
+    return result
+
 @torch.no_grad()
-def full_chain_reconstruction_psnr(model, scheduler, x0, y, device):
+def full_chain_reconstruction_metrics(model, scheduler, x0, y, device) -> Dict[str, float]:
     """
-    Full-chain reconstruction test: add noise at random t, sample back to t=0, compute PSNR.
+    Full-chain reconstruction test: add noise at random t, sample back to t=0, compute metrics.
     This catches multi-step drift that single-step x̂₀ formulas miss.
 
     Args:
@@ -400,28 +474,223 @@ def full_chain_reconstruction_psnr(model, scheduler, x0, y, device):
         device: Device
 
     Returns:
-        PSNR of reconstructed image
+        Dictionary with:
+        - psnr: PSNR of reconstructed image
+        - ssim: SSIM of reconstructed image
     """
     model.eval()
-    x0 = x0[:1].to(device); y = y[:1].to(device)
+    x0 = x0[:1].to(device)
+    y = y[:1].to(device)
     T = scheduler.config.num_train_timesteps
-    t = torch.randint(T//4, 3*T//4, (1,), device=device, dtype=torch.long)
+    t = torch.randint(T // 4, 3 * T // 4, (1,), device=device, dtype=torch.long)
     noise = torch.randn_like(x0)
     x_t = scheduler.add_noise(x0, noise, t)
-    # run reverse from current t to 0
+
+    # Run reverse from current t to 0
     scheduler.set_timesteps(T)
-    # find index of closest scheduler timestep to t
+    # Find index of closest scheduler timestep to t
     start_idx = int((scheduler.timesteps - t.cpu()).abs().argmin().item())
     # Move scheduler timesteps to device to avoid device mismatch in scheduler.step()
     scheduler.timesteps = scheduler.timesteps.to(device)
+
     x = x_t
     for i in range(start_idx, len(scheduler.timesteps)):
         tt = scheduler.timesteps[i].unsqueeze(0)
         eps = model(x, tt, y)
         x = scheduler.step(eps, tt, x).prev_sample
+
     x_rec = torch.clamp(x, -1, 1)
-    psnr = compute_psnr((x_rec+1)/2, (x0+1)/2, max_val=1.0)
-    return float(psnr)
+
+    # Convert to [0, 1] range for metrics
+    x_rec_01 = (x_rec + 1) / 2
+    x0_01 = (x0 + 1) / 2
+
+    psnr = compute_psnr(x_rec_01, x0_01, max_val=1.0)
+    ssim = compute_ssim(x_rec_01, x0_01, max_val=1.0)
+
+    return {
+        "psnr": float(psnr),
+        "ssim": float(ssim),
+    }
+
+
+# Legacy function for backwards compatibility
+@torch.no_grad()
+def full_chain_reconstruction_psnr(model, scheduler, x0, y, device) -> float:
+    """
+    Legacy function that returns only PSNR.
+    Use full_chain_reconstruction_metrics() for both PSNR and SSIM.
+    """
+    metrics = full_chain_reconstruction_metrics(model, scheduler, x0, y, device)
+    return metrics["psnr"]
+
+
+@torch.no_grad()
+def compute_elbo_diagnostics(
+    model: nn.Module,
+    x0_batch: torch.Tensor,
+    labels_batch: torch.Tensor,
+    noise_scheduler: DDPMScheduler,
+    device: torch.device,
+    num_samples: int = 32,
+    num_timesteps_per_sample: int = 8,
+) -> Dict[str, float]:
+    """
+    Compute ELBO-related diagnostic metrics using estimate_elbo_terms.
+
+    This function samples random timesteps across the batch and computes:
+    - L_simple: Unweighted ε-MSE (standard training loss before any weighting)
+    - L_t_weighted: KL-like term from ELBO (Ho et al. 2020, Eq. 12)
+    - SNR: Signal-to-noise ratio at each timestep
+
+    These metrics help analyze whether Min-SNR weighting is aligned with the
+    parts of the ELBO that matter. By binning results by timestep range, you
+    can see which regions dominate the approximate bound.
+
+    Args:
+        model: DDPM model
+        x0_batch: Clean images [B, C, H, W]
+        labels_batch: Class labels [B]
+        noise_scheduler: DDPM scheduler with alphas_cumprod and betas
+        device: Compute device
+        num_samples: Number of samples from batch to use
+        num_timesteps_per_sample: Number of random timesteps to sample per image
+
+    Returns:
+        Dictionary with ELBO diagnostic metrics:
+        - elbo_L_simple_mean: Mean L_simple across all samples
+        - elbo_L_weighted_mean: Mean L_t_weighted across all samples
+        - elbo_snr_mean: Mean SNR across all samples
+        - elbo_L_simple_low_t, elbo_L_weighted_low_t, elbo_snr_low_t: Metrics for t < 333
+        - elbo_L_simple_mid_t, elbo_L_weighted_mid_t, elbo_snr_mid_t: Metrics for 333 <= t < 666
+        - elbo_L_simple_high_t, elbo_L_weighted_high_t, elbo_snr_high_t: Metrics for t >= 666
+        - elbo_weight_ratio_*: Ratio of L_weighted/L_simple per timestep bin
+    """
+    model.eval()
+
+    # Prepare scheduler config for estimate_elbo_terms
+    T = noise_scheduler.config.num_train_timesteps
+    scheduler_cfg = {
+        "alphas_cumprod": noise_scheduler.alphas_cumprod,
+        "betas": noise_scheduler.betas,
+    }
+
+    # Take subset of batch
+    x0 = x0_batch[:num_samples].to(device)
+    labels = labels_batch[:num_samples].to(device)
+    n = x0.size(0)
+
+    # Accumulators for overall and binned statistics
+    all_L_simple = []
+    all_L_weighted = []
+    all_snr = []
+    all_t = []
+
+    # Sample multiple random timesteps per image to get coverage across t
+    for _ in range(num_timesteps_per_sample):
+        # Random timesteps uniformly from [0, T-1]
+        t = torch.randint(0, T, (n,), device=device, dtype=torch.long)
+
+        # Add noise
+        noise = torch.randn_like(x0)
+        x_t = noise_scheduler.add_noise(x0, noise, t)
+
+        # Model prediction
+        eps_pred = model(x_t, t, labels)
+
+        # Compute ELBO terms (no gradient needed)
+        elbo_result = estimate_elbo_terms(
+            x0=x0,
+            x_t=x_t,
+            t=t,
+            eps_pred=eps_pred,
+            scheduler_cfg=scheduler_cfg,
+        )
+
+        # Accumulate results
+        all_L_simple.append(elbo_result["L_simple"])
+        all_L_weighted.append(elbo_result["L_t_weighted"])
+        all_snr.append(elbo_result["snr"])
+        all_t.append(elbo_result["t"])
+
+    # Concatenate all results
+    all_L_simple = torch.cat(all_L_simple, dim=0)
+    all_L_weighted = torch.cat(all_L_weighted, dim=0)
+    all_snr = torch.cat(all_snr, dim=0)
+    all_t = torch.cat(all_t, dim=0)
+
+    # Overall means
+    elbo_L_simple_mean = all_L_simple.mean().item()
+    elbo_L_weighted_mean = all_L_weighted.mean().item()
+    elbo_snr_mean = all_snr.mean().item()
+
+    # Bin by timestep: low (t < T/3), mid (T/3 <= t < 2T/3), high (t >= 2T/3)
+    t_low_threshold = T // 3      # 333 for T=1000
+    t_high_threshold = 2 * T // 3  # 666 for T=1000
+
+    mask_low = all_t < t_low_threshold
+    mask_mid = (all_t >= t_low_threshold) & (all_t < t_high_threshold)
+    mask_high = all_t >= t_high_threshold
+
+    def safe_mean(tensor, mask):
+        """Compute mean only over masked elements, return NaN if no elements."""
+        if mask.sum() == 0:
+            return float("nan")
+        return tensor[mask].mean().item()
+
+    def safe_ratio(num, denom):
+        """Compute ratio, avoiding division by zero."""
+        if abs(denom) < 1e-10:
+            return float("nan")
+        return num / denom
+
+    # Compute binned statistics
+    L_simple_low = safe_mean(all_L_simple, mask_low)
+    L_simple_mid = safe_mean(all_L_simple, mask_mid)
+    L_simple_high = safe_mean(all_L_simple, mask_high)
+
+    L_weighted_low = safe_mean(all_L_weighted, mask_low)
+    L_weighted_mid = safe_mean(all_L_weighted, mask_mid)
+    L_weighted_high = safe_mean(all_L_weighted, mask_high)
+
+    snr_low = safe_mean(all_snr, mask_low)
+    snr_mid = safe_mean(all_snr, mask_mid)
+    snr_high = safe_mean(all_snr, mask_high)
+
+    # Weight ratios show how much the KL weighting affects each region
+    weight_ratio_low = safe_ratio(L_weighted_low, L_simple_low)
+    weight_ratio_mid = safe_ratio(L_weighted_mid, L_simple_mid)
+    weight_ratio_high = safe_ratio(L_weighted_high, L_simple_high)
+
+    model.train()
+
+    return {
+        # Overall means
+        "elbo_L_simple_mean": float(elbo_L_simple_mean),
+        "elbo_L_weighted_mean": float(elbo_L_weighted_mean),
+        "elbo_snr_mean": float(elbo_snr_mean),
+
+        # Low timesteps (t < T/3): low noise, high SNR
+        "elbo_L_simple_low_t": float(L_simple_low),
+        "elbo_L_weighted_low_t": float(L_weighted_low),
+        "elbo_snr_low_t": float(snr_low),
+
+        # Mid timesteps (T/3 <= t < 2T/3)
+        "elbo_L_simple_mid_t": float(L_simple_mid),
+        "elbo_L_weighted_mid_t": float(L_weighted_mid),
+        "elbo_snr_mid_t": float(snr_mid),
+
+        # High timesteps (t >= 2T/3): high noise, low SNR
+        "elbo_L_simple_high_t": float(L_simple_high),
+        "elbo_L_weighted_high_t": float(L_weighted_high),
+        "elbo_snr_high_t": float(snr_high),
+
+        # Weight ratios
+        "elbo_weight_ratio_low_t": float(weight_ratio_low),
+        "elbo_weight_ratio_mid_t": float(weight_ratio_mid),
+        "elbo_weight_ratio_high_t": float(weight_ratio_high),
+    }
+
 
 @torch.no_grad()
 def visualize_noising_process(
@@ -792,8 +1061,8 @@ def evaluate_split(
     if use_progress_bar:
         pbar.close()
 
-    # Get per-class losses (local to this GPU)
-    per_class_losses = split_loss_fn.per_class()
+    # Get per-class losses (local to this GPU) - use weighted losses by default
+    per_class_losses = split_loss_fn.per_class(weighted=True)
     metrics = split_avg.means()
     for c, loss_c in per_class_losses.items():
         metrics[f"loss_c{c}"] = loss_c
@@ -908,6 +1177,8 @@ def train(yaml_path: str, split: str = "train") -> None:
     train_sampler = None
     val_sampler = None
     test_sampler = None
+    # Optional per-class loss weights (computed from training set if enabled)
+    class_weights = None
 
     if dl_cfg.type.lower() == "npz":
         if is_main_process():
@@ -929,6 +1200,52 @@ def train(yaml_path: str, split: str = "train") -> None:
             dl_cfg.npz_path, "test", tcfg.image_size, normalize=True,
             augmentation_pipeline=None
         )
+
+        # Optional: compute per-class loss weights from training-set imbalance.
+        # Enabled by setting cfg.ccddpm.train.per_class_loss_weighting = True.
+        if getattr(tcfg, "per_class_loss_weighting", False):
+            import numpy as np  
+
+            if not hasattr(train_dataset, "labels"):
+                raise AttributeError(
+                    "per_class_loss_weighting=True but train_dataset has no 'labels' attribute."
+                )
+
+            labels_np = np.asarray(train_dataset.labels, dtype=np.int64)
+            if labels_np.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D labels array in train_dataset, got shape {labels_np.shape}."
+                )
+
+            # Ignore any unconditional label -1 when computing frequencies
+            if labels_np.min() < 0:
+                labels_for_weights = labels_np[labels_np >= 0]
+            else:
+                labels_for_weights = labels_np
+
+            if labels_for_weights.size == 0:
+                raise ValueError("No valid labels available to compute class weights.")
+
+            num_classes = int(tcfg.num_classes)
+            counts = np.bincount(labels_for_weights, minlength=num_classes)
+            if (counts == 0).any() and is_main_process():
+                logger.warning(
+                    "Some classes have zero samples in the training set when "
+                    "computing class weights: %s",
+                    np.where(counts == 0)[0].tolist(),
+                )
+
+            freq = counts.astype("float64") / float(counts.sum())
+            inv_freq = 1.0 / np.maximum(freq, 1e-8)
+            inv_freq /= inv_freq.mean()  # normalize around 1.0 to keep gradients stable
+
+            # Stored on CPU; DDPMNoiseMSE will move to the correct device internally
+            class_weights = torch.from_numpy(inv_freq.astype("float32"))
+
+            if is_main_process():
+                logger.info("Class weights computed from training set (inverse frequency):")
+                for c in range(num_classes):
+                    logger.info(f"  Class {c}: count={counts[c]}, weight={class_weights[c]:.4f}")
 
         if use_ddp:
             # DDP: Create DistributedSamplers (shuffle via sampler, not DataLoader)
@@ -1155,8 +1472,8 @@ def train(yaml_path: str, split: str = "train") -> None:
     if use_ddp:
         barrier()
 
-    # Track best validation loss for best.pt and early stopping
-    best_val_loss = float("inf")
+    # Track best validation score (based on PSNR + SSIM) for best.pt and early stopping
+    best_val_score = float("-inf")
     best_epoch = 0
     epochs_without_improvement = 0
     
@@ -1175,6 +1492,9 @@ def train(yaml_path: str, split: str = "train") -> None:
         epoch_start_time = time.time()
         running_loss = 0.0
         train_avg = EpochAverager()
+
+        # Reset per-class loss statistics at the start of each epoch
+        loss_fn.reset()
 
         # Collect augmentation statistics for this epoch
         epoch_augmentation_transforms = []
@@ -1228,7 +1548,8 @@ def train(yaml_path: str, split: str = "train") -> None:
                 loss = loss_fn(
                     pred, noise, labels,
                     timesteps=t,
-                    alphas_cumprod=noise_scheduler.alphas_cumprod
+                    alphas_cumprod=noise_scheduler.alphas_cumprod,
+                    class_weights=class_weights,
                 )
             # Guard: check for non-finite loss
             skip_step = False
@@ -1382,8 +1703,8 @@ def train(yaml_path: str, split: str = "train") -> None:
         if use_progress_bar:
             pbar.close()
 
-        # Get per-class losses from loss_fn (local to this GPU)
-        per_class_losses = loss_fn.per_class()
+        # Get per-class losses from loss_fn (local to this GPU) - use weighted losses
+        per_class_losses = loss_fn.per_class(weighted=True)
         train_metrics = train_avg.means()
         for c, loss_c in per_class_losses.items():
             train_metrics[f"loss_c{c}"] = loss_c
@@ -1438,8 +1759,20 @@ def train(yaml_path: str, split: str = "train") -> None:
         )
         val_time = time.time() - val_start_time
 
-        # Extract the globally synchronized validation loss for early stopping
-        val_loss = val_metrics.get("loss", float("inf"))
+        # Extract a composite validation score (higher is better) for early stopping
+        try:
+            val_psnr = float(val_metrics["psnr"])
+            val_ssim = float(val_metrics["ssim"])
+        except KeyError as exc:
+            raise KeyError(
+                "Validation metrics must contain 'psnr' and 'ssim' "
+                "to compute the early-stopping score."
+            ) from exc
+
+        # Simple composite score: PSNR (dB) + 50 * SSIM to keep both terms
+        # on comparable scales. You may tune this weighting if needed.
+        val_score = val_psnr + 50.0 * val_ssim
+        val_loss = val_metrics.get("loss", float("inf"))  # Still log loss for reference
 
         # ---- Test Evaluation ----
         if IS_SUPERCOMPUTER and is_main_process():
@@ -1479,15 +1812,30 @@ def train(yaml_path: str, split: str = "train") -> None:
             num_samples=min(16, len(x0_diag))
         )
 
-        # Full-chain reconstruction test
-        full_chain_psnr = full_chain_reconstruction_psnr(
+        # Full-chain reconstruction test (includes both PSNR and SSIM)
+        full_chain_metrics = full_chain_reconstruction_metrics(
             model=model,
             scheduler=noise_scheduler,
             x0=x0_diag,
             y=labels_diag,
             device=device
         )
-        diagnostics["full_chain_psnr"] = full_chain_psnr
+        diagnostics["full_chain_psnr"] = full_chain_metrics["psnr"]
+        diagnostics["full_chain_ssim"] = full_chain_metrics["ssim"]
+
+        # ---- ELBO Diagnostics ----
+        # Compute approximate ELBO decomposition to analyze Min-SNR weighting alignment.
+        # This helps identify which timestep regions dominate the variational bound.
+        elbo_diagnostics = compute_elbo_diagnostics(
+            model=model,
+            x0_batch=x0_diag,
+            labels_batch=labels_diag,
+            noise_scheduler=noise_scheduler,
+            device=device,
+            num_samples=min(32, len(x0_diag)),
+            num_timesteps_per_sample=8,
+        )
+        diagnostics.update(elbo_diagnostics)
 
         # ---- Save class embedding trajectory (rank-0 only) ----
         if is_main_process() and hasattr(tcfg, 'snapshot_class_embedding_every'):
@@ -1571,10 +1919,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         # Note: val_loss is already synchronized across GPUs above
 
         # Determine if this is the best model (on rank-0, then broadcast)
+        # Early stopping now based on the composite validation score (higher is better)
         if is_main_process():
-            is_best = val_loss < best_val_loss
+            is_best = val_score > best_val_score
             if is_best:
-                best_val_loss = val_loss
+                best_val_score = val_score
                 best_epoch = epoch
                 epochs_without_improvement = 0
             else:
@@ -1612,12 +1961,12 @@ def train(yaml_path: str, split: str = "train") -> None:
             # Always save last.pt
             torch.save(checkpoint_data, out_dir / "ckpts" / "last.pt")
 
-            # Save best.pt if this is the best validation loss so far
+            # Save best.pt if this is the best validation score so far
             if is_best:
                 torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
-                logger.info(f"✓ New best model at epoch {epoch} with val_loss={val_loss:.4f}")
+                logger.info(f"✓ New best model at epoch {epoch} with val_score={val_score:.2f}")
             else:
-                logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
+                logger.info(f"No improvement for {epochs_without_improvement}/{tcfg.patience} epochs (best: {best_val_score:.2f} at epoch {best_epoch})")
 
             # Save periodic checkpoint every X epochs
             if (epoch % tcfg.ckpt_every_epochs) == 0:
@@ -1637,7 +1986,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 val_metrics=val_metrics,
                 test_metrics=test_metrics,
                 epoch_time=total_epoch_time,
-                best_val_loss=best_val_loss,
+                best_val_score=best_val_score,
                 is_best=is_best
             )
 
@@ -1648,15 +1997,15 @@ def train(yaml_path: str, split: str = "train") -> None:
                     logger.info("=" * 80)
                     logger.warning(f"EARLY STOPPING at Epoch {epoch}")
                     logger.info("=" * 80)
-                    logger.warning(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
-                    logger.info(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                    logger.warning(f"No improvement in validation score for {tcfg.patience} consecutive epochs.")
+                    logger.info(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.2f}")
                     logger.info("=" * 80)
                 else:
                     print(f"\n{'='*80}")
                     print(f"⚠ Early Stopping at Epoch {epoch}")
                     print(f"{'='*80}")
-                    print(f"No improvement in validation loss for {tcfg.patience} consecutive epochs.")
-                    print(f"Best model saved at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+                    print(f"No improvement in validation score for {tcfg.patience} consecutive epochs.")
+                    print(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.2f}")
                     print(f"{'='*80}\n")
             break
         
@@ -1802,20 +2151,20 @@ def train(yaml_path: str, split: str = "train") -> None:
     # Print summary (rank-0 only)
     if is_main_process():
         print(f"\n{'='*80}")
-        print("🎉 Training Completed!")
+        print("Training Completed!")
         print("="*80)
-        print("Best Validation Loss: {:.4f} (Epoch {})".format(best_val_loss, best_epoch))
+        print("Best Validation Score: {:.2f} (Epoch {})".format(best_val_score, best_epoch))
         print("Completed Epochs: {}/{}".format(epoch, tcfg.epochs))
         if epochs_without_improvement >= tcfg.patience:
             print("Stopped early: No improvement for {} epochs".format(tcfg.patience))
         print("\nCheckpoints saved in: {}".format(out_dir / 'ckpts'))
-        print("  - best.pt: Best model (epoch {}, val_loss={:.4f})".format(best_epoch, best_val_loss))
+        print("  - best.pt: Best model (epoch {}, val_score={:.2f})".format(best_epoch, best_val_score))
         print("  - last.pt: Final epoch model (epoch {})".format(epoch))
         print("  - epoch_XXXX.pt: Periodic checkpoints every {} epochs".format(tcfg.ckpt_every_epochs))
         print("\nVisualizations saved in: {}".format(out_dir / 'samples'))
         print("Metrics logged in: {}".format(out_dir / 'training_metrics.csv'))
         print("="*80 + "\n")
-        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_loss={best_val_loss:.4f}")
+        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_score={best_val_score:.2f}")
 
     # ========================================================================
     # CLEANUP
