@@ -141,11 +141,22 @@ GRADIENT_CHECKPOINTING=$(grep "gradient_checkpointing:" "$CONFIG_FILE" | grep -v
 # Handle null cache_dir
 if [ "$CACHE_DIR" = "null" ] || [ -z "$CACHE_DIR" ]; then
     CACHE_DIR_ARG=""
+    LOCAL_FILES_ONLY_FLAG=""
     echo "Cache dir: Using default HuggingFace cache"
 else
     CACHE_DIR_ARG="--cache_dir ${CACHE_DIR}"
+    # Enable offline mode when using a custom cache directory (HPC without internet)
+    LOCAL_FILES_ONLY_FLAG="--local_files_only"
     echo "Cache dir: ${CACHE_DIR}"
+    echo "Offline mode: ENABLED (--local_files_only)"
 fi
+
+# Set environment variables for offline mode (affects all HuggingFace/Transformers libraries)
+# These ensure no network requests are made even if local_files_only is not set
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "Environment: HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, HF_DATASETS_OFFLINE=1"
 
 # Handle gradient checkpointing flag
 if [ "$GRADIENT_CHECKPOINTING" = "true" ]; then
@@ -394,6 +405,7 @@ for split in $(seq 0 $((NUM_GPUS - 1))); do
         --output_dir "${SYNTH_DATA_DIR}/split_${split}" \
         --pretrained_model_name_or_path "${PRETRAINED_MODEL}" \
         ${CACHE_DIR_ARG} \
+        ${LOCAL_FILES_ONLY_FLAG} \
         ${GRAD_CKPT_FLAG} \
         --K "${K_PROTOTYPES}" \
         --train_batch_size 1 \

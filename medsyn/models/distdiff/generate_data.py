@@ -137,11 +137,27 @@ def linfball_proj(center, radius, t, in_place=True):
     return tensor_clamp(t, min=center - radius, max=center + radius, in_place=in_place)
 
 
-def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
+def import_model_class_from_model_name_or_path(
+    pretrained_model_name_or_path: str,
+    revision: str,
+    cache_dir: str = None,
+    local_files_only: bool = False
+):
+    """
+    Import the text encoder class from a pretrained model.
+
+    Args:
+        pretrained_model_name_or_path: HuggingFace model ID or local path
+        revision: Model revision
+        cache_dir: Directory where models are cached (for offline use)
+        local_files_only: If True, only look for files locally (no network requests)
+    """
     text_encoder_config = PretrainedConfig.from_pretrained(
         pretrained_model_name_or_path,
         subfolder="text_encoder",
         revision=revision,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
     )
     model_class = text_encoder_config.architectures[0]
 
@@ -268,6 +284,13 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help="The directory where the downloaded models and datasets will be stored.",
+    )
+    parser.add_argument(
+        "--local_files_only",
+        action="store_true",
+        default=False,
+        help="If set, only look for model files locally (no network requests). "
+             "Use this for offline execution on HPC clusters without internet access.",
     )
     parser.add_argument(
         "--train_data_dir",
@@ -894,8 +917,12 @@ def main(args):
     if args.seed is not None:
         set_seed(args.seed)
 
-    noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",
-                                                    cache_dir=args.cache_dir)
+    noise_scheduler = DDIMScheduler.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="scheduler",
+        cache_dir=args.cache_dir,
+        local_files_only=args.local_files_only,
+    )
 
     # torch_dtype = torch.float32
     torch_dtype = torch.float16
@@ -905,7 +932,8 @@ def main(args):
         safety_checker=None,
         revision=args.revision,
         cache_dir=args.cache_dir,
-        variant=args.variant
+        variant=args.variant,
+        local_files_only=args.local_files_only,
     ).to(accelerator.device)
     image_processor = copy.deepcopy(pipeline.image_processor)
     del pipeline
@@ -923,7 +951,12 @@ def main(args):
 
     # Load the tokenizer
     if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, revision=args.revision, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_name,
+            revision=args.revision,
+            use_fast=False,
+            local_files_only=args.local_files_only,
+        )
     elif args.pretrained_model_name_or_path:
         tokenizer = AutoTokenizer.from_pretrained(
             args.pretrained_model_name_or_path,
@@ -931,19 +964,27 @@ def main(args):
             revision=args.revision,
             use_fast=False,
             cache_dir=args.cache_dir,
+            local_files_only=args.local_files_only,
         )
 
     # import correct text encoder class
-    text_encoder_cls = import_model_class_from_model_name_or_path(args.pretrained_model_name_or_path, args.revision)
+    text_encoder_cls = import_model_class_from_model_name_or_path(
+        args.pretrained_model_name_or_path,
+        args.revision,
+        cache_dir=args.cache_dir,
+        local_files_only=args.local_files_only,
+    )
     text_encoder = text_encoder_cls.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder",
-        revision=args.revision, variant=args.variant, cache_dir=args.cache_dir
+        revision=args.revision, variant=args.variant, cache_dir=args.cache_dir,
+        local_files_only=args.local_files_only,
     )
 
     try:
         vae = AutoencoderKL.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="vae",
             revision=args.revision, variant=args.variant, cache_dir=args.cache_dir,
+            local_files_only=args.local_files_only,
         )
     except OSError:
         # IF does not have a VAE so let's just set it to None
@@ -953,6 +994,7 @@ def main(args):
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet",
         revision=args.revision, variant=args.variant, cache_dir=args.cache_dir,
+        local_files_only=args.local_files_only,
     )
 
     def unwrap_model(model):
