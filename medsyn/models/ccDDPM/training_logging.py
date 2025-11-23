@@ -8,7 +8,11 @@ import csv
 import math
 import time
 
-DEFAULT_FIELDS: List[str] = [
+# ============================================================================
+# TRAINING METRICS (split="train", "val", "test")
+# ============================================================================
+# These fields are logged to training_metrics.csv for standard train/val/test splits.
+TRAINING_FIELDS: List[str] = [
     # Basic training info
     "epoch", "split", "time_s", "lr",
 
@@ -32,13 +36,17 @@ DEFAULT_FIELDS: List[str] = [
 
     # Total samples processed
     "total_count",
+]
 
-    # ========================================================================
-    # DIAGNOSTIC METRICS (split="diag")
-    # ========================================================================
-    # These fields are populated for split="diag" to track training health.
-    # For train/val/test splits, these will be empty or NaN.
-    #
+# ============================================================================
+# DIAGNOSTIC METRICS (split="diag")
+# ============================================================================
+# These fields are logged to diagnostics_metrics.csv for detailed training health analysis.
+# Kept separate from training_metrics.csv for cleaner debugging.
+DIAGNOSTIC_FIELDS: List[str] = [
+    # Basic info (repeated for standalone CSV)
+    "epoch", "split", "time_s", "lr",
+
     # Noise-prediction correlation: measures how well the model predicts noise
     # A high correlation (>0.5) indicates the model is learning the noise pattern.
     # A value close to 0 or negative may indicate training issues.
@@ -64,7 +72,7 @@ DEFAULT_FIELDS: List[str] = [
     "full_chain_ssim",          # SSIM after full denoising chain
 
     # ========================================================================
-    # ELBO DIAGNOSTICS (split="diag")
+    # ELBO DIAGNOSTICS
     # ========================================================================
     # These fields track the approximate ELBO decomposition from estimate_elbo_terms.
     # Used to analyze whether Min-SNR weighting is aligned with important timesteps.
@@ -105,6 +113,11 @@ DEFAULT_FIELDS: List[str] = [
     "reconstruction_mse_t500",  # Deprecated: use recon_mse_t500 instead
     "reconstruction_psnr_t500", # Deprecated: use recon_psnr_t500 instead
     "prediction_std",           # Deprecated: use pred_std instead
+]
+
+# Combined fields for backwards compatibility (deprecated - use separate loggers)
+DEFAULT_FIELDS: List[str] = TRAINING_FIELDS + [
+    f for f in DIAGNOSTIC_FIELDS if f not in TRAINING_FIELDS
 ]
 
 @dataclass

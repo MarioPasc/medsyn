@@ -690,7 +690,7 @@ def extract_prototype(args, train_loader, model):
         original_inputs, targets = original_inputs.cuda(), targets.cuda()
 
         original_feature = model.encode_image(original_inputs).float().detach()
-        original_feature = original_feature / original_feature.norm(dim=-1, keepdim=True)
+        original_feature = original_feature / (original_feature.norm(dim=-1, keepdim=True) + 1e-8)
         original_feature = original_feature.cpu().numpy()
 
         for idx in range(len(original_inputs)):

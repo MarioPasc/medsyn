@@ -24,11 +24,14 @@ from medsyn.models.ccDDPM.dataloaders.npz import build_npz_loader
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE, estimate_elbo_terms
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
-from medsyn.models.ccDDPM.training_logging import CSVTrainingLogger, EpochAverager
+from medsyn.models.ccDDPM.training_logging import (
+    CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS
+)
 from medsyn.models.ccDDPM.engine.ddp_utils import (
     ddp_is_enabled, ddp_init, is_main_process,
     barrier, cleanup, all_reduce_mean, broadcast_bool, get_state_dict_for_save
 )
+from medsyn.utils.visualize_training_evolution import generate_training_visualizations
 import numpy as np
 
 logger = logging.getLogger("medsyn.ccddpm.train")
@@ -1451,16 +1454,26 @@ def train(yaml_path: str, split: str = "train") -> None:
 
     # Only rank-0 creates directories and loggers
     csv_logger = None
+    diag_logger = None
     if is_main_process():
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "samples").mkdir(parents=True, exist_ok=True)
         (out_dir / "ckpts").mkdir(parents=True, exist_ok=True)
 
-        # Initialize CSV logger with per-class metrics
+        # Initialize CSV logger for train/val/test metrics (with per-class fields)
         extra_fields = []
         for k in range(tcfg.num_classes):
             extra_fields.append(f"loss_c{k}")
-        csv_logger = CSVTrainingLogger(str(out_dir / "training_metrics.csv"), extra_fields=extra_fields)
+        csv_logger = CSVTrainingLogger(
+            str(out_dir / "training_metrics.csv"),
+            fieldnames=list(TRAINING_FIELDS) + extra_fields
+        )
+
+        # Initialize separate CSV logger for diagnostic metrics
+        diag_logger = CSVTrainingLogger(
+            str(out_dir / "diagnostics_metrics.csv"),
+            fieldnames=list(DIAGNOSTIC_FIELDS)
+        )
 
         # Keep old simple CSV for backward compatibility
         csv_path = out_dir / "train_log.csv"
@@ -1852,9 +1865,9 @@ def train(yaml_path: str, split: str = "train") -> None:
         if csv_logger is not None:
             csv_logger.log_epoch(epoch=epoch, split="test", lr=curr_lr, metrics=test_metrics)
 
-        # Log diagnostics separately (only rank-0)
-        if csv_logger is not None:
-            csv_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
+        # Log diagnostics to separate CSV file (only rank-0)
+        if diag_logger is not None:
+            diag_logger.log_epoch(epoch=epoch, split="diag", lr=curr_lr, metrics=diagnostics)
 
         # Validation summary logging (only rank-0)
         if is_main_process():
@@ -2165,6 +2178,16 @@ def train(yaml_path: str, split: str = "train") -> None:
         print("Metrics logged in: {}".format(out_dir / 'training_metrics.csv'))
         print("="*80 + "\n")
         logger.info(f"Training completed! Best model at epoch {best_epoch} with val_score={best_val_score:.2f}")
+
+        # Generate training evolution visualizations (only rank-0)
+        try:
+            logger.info("Generating training evolution visualizations...")
+            vis_dir = generate_training_visualizations(out_dir, use_latex=False, dpi=300)
+            logger.info(f"Training visualizations saved to: {vis_dir}")
+            print(f"\nTraining evolution plots saved to: {vis_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to generate training visualizations: {e}")
+            print(f"\nWarning: Could not generate training visualizations: {e}")
 
     # ========================================================================
     # CLEANUP

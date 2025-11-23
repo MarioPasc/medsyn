@@ -364,13 +364,22 @@ if [ "${SKIP_STAGE1}" = false ]; then
     echo ""
 fi
 
-# Verify guide model checkpoint exists
+# Verify guide model checkpoint exists and is valid
 GUIDE_MODEL_PATH="${CHECKPOINT_DIR}/model_best.pth.tar"
 if [ ! -f "${GUIDE_MODEL_PATH}" ]; then
     echo "❌ Error: Guide model checkpoint not found at ${GUIDE_MODEL_PATH}"
     exit 1
 fi
-echo "✓ Guide model checkpoint verified: ${GUIDE_MODEL_PATH}"
+
+# Verify checkpoint is not empty/corrupted (should be at least 1MB for a valid model)
+CKPT_SIZE=$(stat -c%s "${GUIDE_MODEL_PATH}" 2>/dev/null || echo "0")
+if [ "${CKPT_SIZE}" -lt 1000000 ]; then
+    echo "❌ Error: Guide model checkpoint appears corrupted (size: ${CKPT_SIZE} bytes)"
+    echo "   Expected at least 1MB for a valid model checkpoint"
+    exit 1
+fi
+CKPT_SIZE_MB=$(echo "scale=2; ${CKPT_SIZE} / 1048576" | bc)
+echo "✓ Guide model checkpoint verified: ${GUIDE_MODEL_PATH} (${CKPT_SIZE_MB} MB)"
 echo ""
 
 # ========================================================================
