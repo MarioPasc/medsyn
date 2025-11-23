@@ -39,14 +39,53 @@ def generate(yaml_path: str, checkpoint: Path, class_id: int, k: int) -> List[Pa
     Load model and generate k images for class `class_id`. Returns list of file paths.
     """
     cfg: ProjectCfg = load_cfg(yaml_path, split="train")
-    tcfg, scfg, icfg = cfg.ccddpm.train, cfg.ccddpm.sched, cfg.ccddpm.infer
+    tcfg, scfg, icfg, ucfg = cfg.ccddpm.train, cfg.ccddpm.sched, cfg.ccddpm.infer, cfg.ccddpm.unet
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # model
-    mcfg = CCDDPMInit(in_channels=tcfg.in_channels, class_embed_dim=tcfg.class_embed_dim, num_classes=tcfg.num_classes)
+    # Build model with full UNet configuration from YAML
+    mcfg = CCDDPMInit(
+        # Input/Output (from train config)
+        in_channels=tcfg.in_channels,
+        class_embed_dim=tcfg.class_embed_dim,
+        num_classes=tcfg.num_classes,
+        # Core UNet architecture (from unet config)
+        model_channels=ucfg.model_channels,
+        channel_mult=ucfg.channel_mult,
+        layers_per_block=ucfg.layers_per_block,
+        down_block_types=ucfg.down_block_types,
+        up_block_types=ucfg.up_block_types,
+        # Attention
+        add_attention=ucfg.add_attention,
+        attention_head_dim=ucfg.attention_head_dim,
+        # Normalization
+        norm_num_groups=ucfg.norm_num_groups,
+        attn_norm_num_groups=ucfg.attn_norm_num_groups,
+        norm_eps=ucfg.norm_eps,
+        # Dropout
+        dropout=ucfg.dropout,
+        # Time embedding
+        time_embedding_type=ucfg.time_embedding_type,
+        freq_shift=ucfg.freq_shift,
+        flip_sin_to_cos=ucfg.flip_sin_to_cos,
+        resnet_time_scale_shift=ucfg.resnet_time_scale_shift,
+        # Sampling
+        center_input_sample=ucfg.center_input_sample,
+        mid_block_scale_factor=ucfg.mid_block_scale_factor,
+        # Down/Up sampling
+        downsample_padding=ucfg.downsample_padding,
+        downsample_type=ucfg.downsample_type,
+        upsample_type=ucfg.upsample_type,
+        # Activation
+        act_fn=ucfg.act_fn,
+        # Class embedding
+        class_embed_type=ucfg.class_embed_type,
+        num_class_embeds=ucfg.num_class_embeds,
+        num_train_timesteps=ucfg.num_train_timesteps,
+    )
     model = CCDDPM(mcfg).to(device).eval()
     state = torch.load(checkpoint, map_location=device)
     model.load_state_dict(state["model"])
+    logger.info("Loaded model with UNet config: block_out_channels=%s", mcfg.get_block_out_channels())
 
     # scheduler
     scheduler = DDPMScheduler(

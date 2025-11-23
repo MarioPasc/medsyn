@@ -1032,13 +1032,61 @@ def train(yaml_path: str, split: str = "train") -> None:
     # ========================================================================
     # MODEL, SCHEDULER, OPTIMIZER, EMA
     # ========================================================================
-    # Build model
+    # Build model with full UNet configuration
+    ucfg = cfg.ccddpm.unet  # UNet architecture config from YAML
     mcfg = CCDDPMInit(
+        # Input/Output (from train config)
         in_channels=tcfg.in_channels,
         class_embed_dim=tcfg.class_embed_dim,
         num_classes=tcfg.num_classes,
+        # Core UNet architecture (from unet config)
+        model_channels=ucfg.model_channels,
+        channel_mult=ucfg.channel_mult,
+        layers_per_block=ucfg.layers_per_block,
+        down_block_types=ucfg.down_block_types,
+        up_block_types=ucfg.up_block_types,
+        # Attention
+        add_attention=ucfg.add_attention,
+        attention_head_dim=ucfg.attention_head_dim,
+        # Normalization
+        norm_num_groups=ucfg.norm_num_groups,
+        attn_norm_num_groups=ucfg.attn_norm_num_groups,
+        norm_eps=ucfg.norm_eps,
+        # Dropout
+        dropout=ucfg.dropout,
+        # Time embedding
+        time_embedding_type=ucfg.time_embedding_type,
+        freq_shift=ucfg.freq_shift,
+        flip_sin_to_cos=ucfg.flip_sin_to_cos,
+        resnet_time_scale_shift=ucfg.resnet_time_scale_shift,
+        # Sampling
+        center_input_sample=ucfg.center_input_sample,
+        mid_block_scale_factor=ucfg.mid_block_scale_factor,
+        # Down/Up sampling
+        downsample_padding=ucfg.downsample_padding,
+        downsample_type=ucfg.downsample_type,
+        upsample_type=ucfg.upsample_type,
+        # Activation
+        act_fn=ucfg.act_fn,
+        # Class embedding
+        class_embed_type=ucfg.class_embed_type,
+        num_class_embeds=ucfg.num_class_embeds,
+        num_train_timesteps=ucfg.num_train_timesteps,
     )
     model = CCDDPM(mcfg).to(device)
+
+    # Log model architecture summary
+    if is_main_process():
+        logger.info("=" * 80)
+        logger.info("MODEL ARCHITECTURE")
+        logger.info("=" * 80)
+        logger.info(f"UNet block_out_channels: {mcfg.get_block_out_channels()}")
+        logger.info(f"UNet down_block_types: {mcfg.down_block_types}")
+        logger.info(f"UNet up_block_types: {mcfg.up_block_types}")
+        logger.info(f"UNet layers_per_block: {mcfg.layers_per_block}")
+        logger.info(f"Total parameters: {model.get_num_params():,}")
+        logger.info(f"Trainable parameters: {model.get_num_trainable_params():,}")
+        logger.info("=" * 80)
 
     # Build scheduler
     noise_scheduler = DDPMScheduler(

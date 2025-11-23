@@ -67,6 +67,74 @@ ccddpm:
       output_path: augmentation_stats.csv  # Relative to output_dir or absolute path
       save_every_n_epochs: 1  # 0 = save only at end, 1 = every epoch, etc.
 
+  # ========================================================================
+  # DENOISING UNET ARCHITECTURE
+  # ========================================================================
+  # Full configuration for the UNet2DModel backbone.
+  # All parameters directly map to diffusers.UNet2DModel constructor arguments.
+  # See: https://huggingface.co/docs/diffusers/api/models/unet2d
+  #
+  # IMPORTANT: Validation rules:
+  #   - len(channel_mult) == len(down_block_types) == len(up_block_types)
+  #   - model_channels must be divisible by norm_num_groups
+  #   - All block_out_channels (model_channels * channel_mult[i]) must be divisible by norm_num_groups
+  # ========================================================================
+  denoising_unet:
+    # Core architecture
+    model_channels: 160           # Base channel count (multiplied by channel_mult)
+    channel_mult: [1, 2, 2, 4]    # Channel multipliers per level -> block_out_channels: [160, 320, 320, 640]
+    layers_per_block: 2           # Number of ResNet blocks per level
+
+    # Block types - MUST match length of channel_mult (4 levels in this case)
+    # Available down blocks: DownBlock2D, AttnDownBlock2D, CrossAttnDownBlock2D, DownEncoderBlock2D
+    # Available up blocks: UpBlock2D, AttnUpBlock2D, CrossAttnUpBlock2D, UpDecoderBlock2D
+    down_block_types:
+      - DownBlock2D               # Level 0: 64->32 (no attention)
+      - DownBlock2D               # Level 1: 32->16 (no attention)
+      - DownBlock2D               # Level 2: 16->8  (no attention)
+      - AttnDownBlock2D           # Level 3: 8->4   (with attention)
+    up_block_types:
+      - AttnUpBlock2D             # Level 3: 4->8   (with attention)
+      - UpBlock2D                 # Level 2: 8->16  (no attention)
+      - UpBlock2D                 # Level 1: 16->32 (no attention)
+      - UpBlock2D                 # Level 0: 32->64 (no attention)
+
+    # Attention configuration
+    add_attention: true           # Enable attention blocks (required for AttnDownBlock2D/AttnUpBlock2D)
+    attention_head_dim: 8         # Dimension of attention heads (null for default)
+
+    # Normalization
+    norm_num_groups: 32           # Groups for GroupNorm (model_channels must be divisible by this)
+    attn_norm_num_groups: null    # Groups for attention norm (null = use norm_num_groups)
+    norm_eps: 1.0e-5              # Epsilon for normalization
+
+    # Dropout and regularization
+    dropout: 0.0                  # Dropout rate (0.0 = no dropout)
+
+    # Time embedding
+    time_embedding_type: positional  # "positional" or "fourier"
+    freq_shift: 0                    # Frequency shift for time embedding
+    flip_sin_to_cos: true            # Whether to flip sin to cos in time embedding
+    resnet_time_scale_shift: default # "default", "scale_shift", or "ada_group"
+
+    # Sampling configuration
+    center_input_sample: false    # Center input sample (for specific preprocessing)
+    mid_block_scale_factor: 1.0   # Scale factor for middle block
+
+    # Downsampling/Upsampling
+    downsample_padding: 1         # Padding for downsampling convolutions
+    downsample_type: conv         # "conv" or "resnet"
+    upsample_type: conv           # "conv" or "resnet"
+
+    # Activation function
+    act_fn: silu                  # "silu", "mish", "gelu", "relu", "swish"
+
+    # Class embedding (handled externally via ClassEmbedder, but available for UNet's internal use)
+    class_embed_type: null        # null, "timestep", or "identity"
+    num_class_embeds: null        # Number of class embeddings (null = use num_classes from train config)
+    num_train_timesteps: null     # Number of train timesteps (null = use from scheduler config)
+
+
   train:
     image_size: 64
     in_channels: 3
@@ -90,9 +158,11 @@ ccddpm:
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     skip_nonfinite_grads: true  # # Skip batches with non-finite gradients instead of  aborting
     output_dir: ${OUTPUT_DIR}
+    
   optim:
     lr: 5.0e-5  # STABILITY FIX: Reduced from 2.0e-4 to 1.0e-4 to prevent gradient explosion
     wd: 0.0
+
   sched:
     num_train_timesteps: 1000
     beta_start: 1.0e-4
