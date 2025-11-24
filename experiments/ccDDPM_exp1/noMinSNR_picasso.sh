@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -J noMinSNR_ccddpm_parallel
+#SBATCH -J log_noMinSNR_ccddpm_parallel
 #SBATCH --time=20:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -14,10 +14,6 @@ set -euo pipefail
 # ========================================================================
 # DISTRIBUTED TRAINING CONFIGURATION
 # ========================================================================
-
-echo "================================================================================"
-echo "🚀 Multi-GPU Distributed Training with $NUM_GPUS GPUs"
-echo "================================================================================"
 
 # ---------- Inputs ----------
 EXPERIMENT_NAME="noMinSNR_ccDDPM_parallel"
@@ -39,6 +35,11 @@ NUM_GPUS=2
 MEDSYN_DEBUG_DATALOADER=1
 export CUDA_VISIBLE_DEVICES=0,1  # Assuming 2 GPUs allocated by SLURM
 export NCCL_DEBUG=INFO  # For debugging distributed training (optional)
+
+echo "================================================================================"
+echo "🚀 Multi-GPU Distributed Training with $NUM_GPUS GPUs"
+echo "================================================================================"
+
 
 # ---------- LocalScratch layout ----------
 MYLOCALSCRATCH="${LOCALSCRATCH%/}/${USER}/${SLURM_JOB_ID}"
