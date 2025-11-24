@@ -693,6 +693,20 @@ def extract_prototype(args, train_loader, model):
         original_feature = original_feature / (original_feature.norm(dim=-1, keepdim=True) + 1e-8)
         original_feature = original_feature.cpu().numpy()
 
+        # Early NaN detection with helpful error message
+        if np.isnan(original_feature).any():
+            nan_count = np.isnan(original_feature).sum()
+            raise ValueError(
+                f"NaN values detected in extracted features at batch {batch_idx}!\n"
+                f"  - NaN count: {nan_count} / {original_feature.size}\n"
+                f"  - This typically indicates:\n"
+                f"    1. Corrupted model weights (check if guide model training converged)\n"
+                f"    2. Learning rate too high during training (ViT models need lr ~1e-4, not 0.1)\n"
+                f"    3. Model checkpoint mismatch (architecture vs saved weights)\n"
+                f"  - Guide model accuracy should be >>11% for a 9-class problem\n"
+                f"  - Please retrain the guide model with appropriate learning rate."
+            )
+
         for idx in range(len(original_inputs)):
             feature_list.append(original_feature[idx])
         label_list.extend(targets.tolist())
@@ -705,6 +719,19 @@ def extract_prototype(args, train_loader, model):
         bar.next()
     bar.finish()
     torch.cuda.empty_cache()
+
+    # Summary check for extracted features
+    all_features = np.stack(feature_list)
+    print(f"[Prototype Extraction] Collected {len(feature_list)} features, shape: {all_features.shape}")
+    if np.isnan(all_features).any():
+        nan_percentage = 100 * np.isnan(all_features).sum() / all_features.size
+        raise ValueError(
+            f"NaN values detected in {nan_percentage:.2f}% of extracted features!\n"
+            f"Guide model is producing invalid outputs. Please check:\n"
+            f"  1. Guide model training accuracy (should be >>11% for 9-class)\n"
+            f"  2. Learning rate (ViT needs ~1e-4, not 0.1)\n"
+            f"  3. Model checkpoint integrity"
+        )
 
     num_classes = len(set(label_list))
     # class-wise gathering

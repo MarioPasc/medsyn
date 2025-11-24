@@ -42,7 +42,9 @@ training:
   val_batch_size: 64
 
   # Optimization
-  lr: 0.1
+  # NOTE: For ViT/Transformer models (open_clip_vit_b32), use lr=1e-4 to 1e-5
+  # lr=0.1 is only suitable for ResNet-like CNNs with SGD
+  lr: 0.0001  # 1e-4, appropriate for ViT fine-tuning
   momentum: 0.9
   weight_decay: 0.0005  # 5e-4
 

@@ -165,6 +165,15 @@ else
     GRAD_CKPT_FLAG=""
 fi
 
+# Handle pretrained flag for guide model
+if [ "$MODEL_PRETRAINED" = "true" ]; then
+    PRETRAINED_FLAG="--pretrained"
+    echo "Pretrained weights: ENABLED (using LAION2B weights for ViT)"
+else
+    PRETRAINED_FLAG=""
+    echo "Pretrained weights: DISABLED (random initialization)"
+fi
+
 # Set default values for any missing parameters
 SEED=${SEED:-23102003}
 TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-64}
@@ -351,7 +360,8 @@ if [ "${SKIP_STAGE1}" = false ]; then
         --train-batch-size "${TRAIN_BATCH_SIZE}" \
         --val-batch-size "${VAL_BATCH_SIZE}" \
         --lr "${LEARNING_RATE}" \
-        --epochs "${EPOCHS}"
+        --epochs "${EPOCHS}" \
+        ${PRETRAINED_FLAG}
 
     STAGE1_EXIT_CODE=$?
 

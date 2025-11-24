@@ -73,10 +73,11 @@ def create_model(model_name, num_classes=1000, pretrained=False,
         model = add_encoder_image_method(model)
     elif model_name == "open_clip_vit_b32":
         text_descriptions = [CUSTOM_TEMPLATES[dataset_name].format(label) for label in class_names]
-        pretrained_version = None
+        # Use LAION pretrained weights when pretrained=True
+        # 'laion2b_s34b_b79k' is the standard pretrained version for ViT-B-32
+        pretrained_version = 'laion2b_s34b_b79k' if pretrained else None
+        print(f"=> OpenCLIP ViT-B-32: pretrained={pretrained}, using weights: {pretrained_version or 'random init'}")
         model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained=pretrained_version, cache_dir=cache_dir)
-        if pretrained:
-            model.load_state_dict(torch.load("save/open_clip_vit_b32_laion2b_s34b_b79k_pretrained.pth"))
 
         tokenizer = open_clip.get_tokenizer('ViT-B-32')
         text_tokens = tokenizer(text_descriptions)
