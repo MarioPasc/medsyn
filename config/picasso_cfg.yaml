@@ -31,7 +31,7 @@ ccddpm:
     num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
-    grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
+    grad_accum_steps: 4  # Gradient accumulation steps (1 = no accumulation)
     seed_offset: 0  # Offset for per-rank seed decorrelation
 
   dataloader:
@@ -81,18 +81,18 @@ ccddpm:
   # ========================================================================
   denoising_unet:
     # Core architecture
-    model_channels: 160           # Base channel count (multiplied by channel_mult)
-    channel_mult: [1, 2, 2, 4]    # Channel multipliers per level -> block_out_channels: [160, 320, 320, 640]
+    model_channels: 128           # Base channel count (multiplied by channel_mult)
+    channel_mult: [1, 2, 2, 4]    # Channel multipliers per level -> block_out_channels: [128, 256, 256, 512]
     layers_per_block: 2           # Number of ResNet blocks per level
 
     # Block types - MUST match length of channel_mult (4 levels in this case)
     # Available down blocks: DownBlock2D, AttnDownBlock2D, CrossAttnDownBlock2D, DownEncoderBlock2D
     # Available up blocks: UpBlock2D, AttnUpBlock2D, CrossAttnUpBlock2D, UpDecoderBlock2D
     down_block_types:
-      - DownBlock2D               # Level 0: 64->32 (no attention)
-      - DownBlock2D               # Level 1: 32->16 (no attention)
-      - DownBlock2D               # Level 2: 16->8  (no attention)
-      - AttnDownBlock2D           # Level 3: 8->4   (with attention)
+      - DownBlock2D                   # Level 0: 64->32 (no attention)
+      - AttnDownBlock2D               # Level 1: 32->16 (with attention)
+      - AttnDownBlock2D               # Level 2: 16->8  (with attention)
+      - AttnDownBlock2D               # Level 3: 8->4   (with attention)
     up_block_types:
       - AttnUpBlock2D             # Level 3: 4->8   (with attention)
       - UpBlock2D                 # Level 2: 8->16  (no attention)
@@ -109,7 +109,7 @@ ccddpm:
     norm_eps: 1.0e-5              # Epsilon for normalization
 
     # Dropout and regularization
-    dropout: 0.0                  # Dropout rate (0.0 = no dropout)
+    dropout: 0.05                  # Dropout rate (0.0 = no dropout)
 
     # Time embedding
     time_embedding_type: positional  # "positional" or "fourier"
@@ -156,7 +156,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 5              # Stop if no improvement for this many epochs
+      patience: 15              # Stop if no improvement for this many epochs
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -166,11 +166,11 @@ ccddpm:
 
     mixed_precision: true
 
-    grad_clip_norm: 5.0        # STABILITY FIX: Reduced from 10.0 to 5.0 to prevent gradient explosion
+    grad_clip_norm: 1.0        
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
 
     ema_use: true
-    ema_decay: 0.9995
+    ema_decay: 0.9999
 
     use_min_snr: false          # Min-SNR weighting
     min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
@@ -187,7 +187,7 @@ ccddpm:
     # ========================================================================
     # Supports: "onecycle", "cosine", "cosine_warmup", "constant", "step"
     lr_scheduler:
-      type: "cosine"           # LR scheduler type
+      type: "cosine_warmup"           # LR scheduler type
       # OneCycle parameters (used when type="onecycle")
       max_lr: 1.0e-4             # Peak learning rate (default: 2x base lr)
       pct_start: 0.3             # Fraction of training spent ramping up LR
@@ -200,6 +200,25 @@ ccddpm:
       # Step parameters (used when type="step")
       step_size: 30              # Decay LR every step_size epochs
       gamma: 0.1                 # Multiplicative factor of LR decay
+
+  # ========================================================================
+  # OPTIMIZER CONFIGURATION
+  # ========================================================================
+  # Supported types: adamw (default), adam, sgd, rmsprop
+  optimizer:
+    type: "adamw"              # Optimizer type: adamw, adam, sgd, rmsprop
+    lr: 5.0e-5                 # Learning rate (if you see overflows, try 1.0e-4)
+    wd: 0.0                    # Weight decay (L2 regularization)
+    # Adam/AdamW specific
+    betas: [0.9, 0.999]        # Beta coefficients for Adam
+    eps: 1.0e-8                # Epsilon for numerical stability
+    amsgrad: false             # Whether to use AMSGrad variant
+    # SGD specific (only used when type="sgd")
+    momentum: 0.9              # Momentum factor
+    nesterov: false            # Whether to use Nesterov momentum
+    # RMSprop specific (only used when type="rmsprop")
+    alpha: 0.99                # Smoothing constant
+    centered: false            # Whether to compute centered RMSprop
 
   sched:
     num_train_timesteps: 1000

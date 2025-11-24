@@ -547,6 +547,231 @@ def _save_images_to_dir(images: torch.Tensor, out_dir: Path) -> None:
         save_image(img, out_dir / f"{i:06d}.png")
 
 
+# =============================================================================
+# TORCHMETRICS FID COMPUTATION (IN-MEMORY)
+# =============================================================================
+
+class TorchmetricsFIDComputer:
+    """
+    In-memory FID computation using torchmetrics.
+
+    Unlike torch-fidelity which requires saving images to disk, this uses
+    torchmetrics.image.fid.FrechetInceptionDistance for fully in-memory computation.
+
+    Usage:
+        fid_computer = TorchmetricsFIDComputer(num_classes=9, device="cuda")
+        for batch in dataloader:
+            fid_computer.add_real(real_images, labels)
+        for batch in generated:
+            fid_computer.add_fake(fake_images, labels)
+        fid_metrics = fid_computer.compute()
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        feature_dim: int = 2048,
+        device: str = "cuda",
+        normalize: bool = True,
+    ):
+        """
+        Initialize FID computer.
+
+        Args:
+            num_classes: Number of classes for per-class FID
+            feature_dim: InceptionV3 feature dimension (default 2048)
+            device: Device for computation
+            normalize: Whether to normalize images from [0,1] to ImageNet range
+        """
+        self.num_classes = num_classes
+        self.feature_dim = feature_dim
+        self.device = device
+        self.normalize = normalize
+
+        # Try to import torchmetrics FID
+        try:
+            from torchmetrics.image.fid import FrechetInceptionDistance
+            self._FID = FrechetInceptionDistance
+            self._available = True
+        except ImportError:
+            logger.warning(
+                "torchmetrics.image.fid not available. "
+                "Install with: pip install torchmetrics[image]"
+            )
+            self._FID = None
+            self._available = False
+
+        self.reset()
+
+    @property
+    def available(self) -> bool:
+        """Check if torchmetrics FID is available."""
+        return self._available
+
+    def reset(self) -> None:
+        """Reset all accumulators."""
+        if not self._available:
+            return
+
+        # Global FID metric
+        self._global_fid = self._FID(feature=self.feature_dim, normalize=self.normalize)
+        self._global_fid = self._global_fid.to(self.device)
+
+        # Per-class FID metrics
+        self._per_class_fid = {}
+        for k in range(self.num_classes):
+            fid = self._FID(feature=self.feature_dim, normalize=self.normalize)
+            self._per_class_fid[k] = fid.to(self.device)
+
+        # Track sample counts
+        self._real_counts = {k: 0 for k in range(self.num_classes)}
+        self._fake_counts = {k: 0 for k in range(self.num_classes)}
+        self._global_real_count = 0
+        self._global_fake_count = 0
+
+    def _preprocess_images(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Preprocess images for FID computation.
+
+        torchmetrics FID expects images in [0, 255] uint8 format.
+
+        Args:
+            images: Images in [0, 1] float format [B, C, H, W]
+
+        Returns:
+            Images in [0, 255] uint8 format
+        """
+        # Clamp to [0, 1]
+        images = torch.clamp(images, 0, 1)
+        # Convert to [0, 255] uint8
+        images = (images * 255).to(torch.uint8)
+        return images
+
+    def add_real(self, images: torch.Tensor, labels: torch.Tensor) -> None:
+        """
+        Add real images to FID computation.
+
+        Args:
+            images: Real images [B, C, H, W] in [0, 1] range
+            labels: Class labels [B]
+        """
+        if not self._available:
+            return
+
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+
+        # Preprocess for torchmetrics
+        images_uint8 = self._preprocess_images(images)
+
+        # Update global FID
+        self._global_fid.update(images_uint8, real=True)
+        self._global_real_count += images.size(0)
+
+        # Update per-class FID
+        for k in range(self.num_classes):
+            mask = labels == k
+            if mask.sum() > 0:
+                class_images = images_uint8[mask]
+                self._per_class_fid[k].update(class_images, real=True)
+                self._real_counts[k] += int(mask.sum().item())
+
+    def add_fake(self, images: torch.Tensor, labels: torch.Tensor) -> None:
+        """
+        Add generated/fake images to FID computation.
+
+        Args:
+            images: Generated images [B, C, H, W] in [0, 1] range
+            labels: Class labels [B]
+        """
+        if not self._available:
+            return
+
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+
+        # Preprocess for torchmetrics
+        images_uint8 = self._preprocess_images(images)
+
+        # Update global FID
+        self._global_fid.update(images_uint8, real=False)
+        self._global_fake_count += images.size(0)
+
+        # Update per-class FID
+        for k in range(self.num_classes):
+            mask = labels == k
+            if mask.sum() > 0:
+                class_images = images_uint8[mask]
+                self._per_class_fid[k].update(class_images, real=False)
+                self._fake_counts[k] += int(mask.sum().item())
+
+    def compute(self, min_samples_per_class: int = 50) -> Dict[str, float]:
+        """
+        Compute global and per-class FID.
+
+        Args:
+            min_samples_per_class: Minimum samples needed per class for valid FID
+
+        Returns:
+            Dictionary with 'fid_global' and 'fid_c0', 'fid_c1', etc.
+        """
+        result: Dict[str, float] = {}
+
+        if not self._available:
+            result["fid_global"] = float("nan")
+            for k in range(self.num_classes):
+                result[f"fid_c{k}"] = float("nan")
+            return result
+
+        # Compute global FID
+        try:
+            if self._global_real_count >= min_samples_per_class and self._global_fake_count >= min_samples_per_class:
+                result["fid_global"] = float(self._global_fid.compute().cpu().item())
+            else:
+                result["fid_global"] = float("nan")
+                logger.debug(
+                    f"Skipping global FID: real={self._global_real_count}, "
+                    f"fake={self._global_fake_count}, min={min_samples_per_class}"
+                )
+        except Exception as e:
+            logger.warning(f"Global FID computation failed: {e}")
+            result["fid_global"] = float("nan")
+
+        # Compute per-class FID
+        for k in range(self.num_classes):
+            try:
+                n_real = self._real_counts[k]
+                n_fake = self._fake_counts[k]
+
+                if n_real >= min_samples_per_class and n_fake >= min_samples_per_class:
+                    result[f"fid_c{k}"] = float(self._per_class_fid[k].compute().cpu().item())
+                else:
+                    result[f"fid_c{k}"] = float("nan")
+                    logger.debug(
+                        f"Skipping FID for class {k}: "
+                        f"real={n_real}, fake={n_fake}, min={min_samples_per_class}"
+                    )
+            except Exception as e:
+                logger.warning(f"FID computation for class {k} failed: {e}")
+                result[f"fid_c{k}"] = float("nan")
+
+        return result
+
+    @property
+    def real_count(self) -> int:
+        """Total number of real samples added."""
+        return self._global_real_count
+
+    @property
+    def fake_count(self) -> int:
+        """Total number of fake samples added."""
+        return self._global_fake_count
+
+    def get_class_counts(self) -> Tuple[Dict[int, int], Dict[int, int]]:
+        """Return per-class sample counts (real, fake)."""
+        return self._real_counts.copy(), self._fake_counts.copy()
+
+
 class FIDAccumulator:
     """
     Accumulates images for FID computation across batches.

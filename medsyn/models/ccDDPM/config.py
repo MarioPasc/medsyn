@@ -14,11 +14,33 @@ import logging
 logger = logging.getLogger(__name__)
 
 @dataclass
-class OptimCfg:
-    lr: float = 2e-4
-    wd: float = 0.0
+class OptimizerCfg:
+    """
+    Unified optimizer configuration with type selection.
+
+    Supported optimizer types:
+    - adamw: AdamW (default) - Adam with decoupled weight decay
+    - adam: Adam - standard Adam optimizer
+    - sgd: SGD - stochastic gradient descent with optional momentum
+    - rmsprop: RMSprop - adaptive learning rate method
+    """
+    type: str = "adamw"  # Optimizer type: adamw, adam, sgd, rmsprop
+    lr: float = 2e-4     # Learning rate
+    wd: float = 0.0      # Weight decay (L2 regularization)
+    # Adam/AdamW specific
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
+    amsgrad: bool = False  # Whether to use AMSGrad variant
+    # SGD specific
+    momentum: float = 0.9
+    nesterov: bool = False
+    # RMSprop specific
+    alpha: float = 0.99  # Smoothing constant
+    centered: bool = False  # Whether to compute centered RMSprop
+
+
+# Legacy alias for backward compatibility
+OptimCfg = OptimizerCfg
 
 @dataclass
 class SchedCfg:
@@ -46,7 +68,7 @@ class LRSchedulerCfg:
     """Configuration for learning rate scheduling."""
     type: str = "constant"  # Scheduler type: onecycle, cosine, cosine_warmup, step, constant
     # OneCycle parameters
-    max_lr: Optional[float] = None  # Peak LR (default: 2x base lr)
+    max_lr: Optional[float] = None  # Peak LR (default: 2x base lr from optimizer)
     pct_start: float = 0.3  # Fraction of training spent ramping up LR
     div_factor: float = 25.0  # Initial LR = max_lr / div_factor
     final_div_factor: float = 1000.0  # Final LR = max_lr / (div_factor * final_div_factor)
@@ -336,7 +358,7 @@ class DistCfg:
 @dataclass
 class CCDDPmCfg:
     train: TrainCfg = field(default_factory=TrainCfg)
-    optim: OptimCfg = field(default_factory=OptimCfg)
+    optimizer: OptimizerCfg = field(default_factory=OptimizerCfg)  # Renamed from optim
     sched: SchedCfg = field(default_factory=SchedCfg)
     infer: InferenceCfg = field(default_factory=InferenceCfg)
     dataloader: DataloaderCfg = field(default_factory=DataloaderCfg)
@@ -344,6 +366,11 @@ class CCDDPmCfg:
     data: DataCfg | None = None  # set after reading YAML
     augmentation: Any = None  # AugmentationConfig, set after reading YAML
     dist: DistCfg = field(default_factory=DistCfg)  # Distributed training config
+
+    @property
+    def optim(self) -> OptimizerCfg:
+        """Legacy alias for backward compatibility."""
+        return self.optimizer
 
 @dataclass
 class ProjectCfg:
@@ -429,7 +456,14 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     train_base["lr_scheduler"] = lr_scheduler_cfg
 
     train = TrainCfg(**train_base)
-    optim = OptimCfg(**{**OptimCfg().__dict__, **cc.get("optim", {})})
+
+    # Parse optimizer config (new unified section, with fallback to legacy "optim")
+    optimizer_dict = cc.get("optimizer", cc.get("optim", {}))
+    if optimizer_dict:
+        # Convert betas list to tuple if needed
+        if 'betas' in optimizer_dict and isinstance(optimizer_dict['betas'], list):
+            optimizer_dict['betas'] = tuple(optimizer_dict['betas'])
+    optimizer_cfg = OptimizerCfg(**{**OptimizerCfg().__dict__, **optimizer_dict})
     sched = SchedCfg(**{**SchedCfg().__dict__, **cc.get("sched", {})})
     infer = InferenceCfg(**{**InferenceCfg().__dict__, **cc.get("infer", {})})
     dist = DistCfg(**{**DistCfg().__dict__, **cc.get("dist", {})})
@@ -500,7 +534,7 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
         logger.warning("  Consider adding 'denoising_unet' section for explicit control over UNet architecture.")
 
     cc_cfg = CCDDPmCfg(
-        train=train, optim=optim, sched=sched, infer=infer,
+        train=train, optimizer=optimizer_cfg, sched=sched, infer=infer,
         dataloader=dataloader_cfg, unet=unet_cfg, data=data_cfg,
         augmentation=augmentation_cfg, dist=dist
     )

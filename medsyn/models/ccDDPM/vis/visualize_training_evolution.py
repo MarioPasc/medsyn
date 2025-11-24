@@ -108,9 +108,25 @@ def load_data(output_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return training_df, diag_df
 
 
-def detect_class_columns(df: pd.DataFrame) -> List[str]:
-    """Detect loss_c* columns."""
-    return sorted([c for c in df.columns if c.startswith("loss_c")])
+def detect_class_columns(df: pd.DataFrame, prefix: str = "loss_raw_c") -> List[str]:
+    """
+    Detect per-class columns with given prefix.
+
+    Args:
+        df: DataFrame to search
+        prefix: Column prefix to look for (e.g., 'loss_raw_c', 'loss_weighted_c', 'fid_c')
+
+    Returns:
+        Sorted list of matching column names
+    """
+    # Filter columns that match the prefix and have a digit after it
+    cols = []
+    for c in df.columns:
+        if c.startswith(prefix):
+            suffix = c[len(prefix):]
+            if suffix.isdigit():
+                cols.append(c)
+    return sorted(cols, key=lambda x: int(x[len(prefix):]))
 
 
 def get_class_names(n_classes: int) -> List[str]:
@@ -197,41 +213,266 @@ def plot_quality_metrics(training_df: pd.DataFrame, ax: plt.Axes) -> None:
     ax.legend(lines1 + lines2, labels1 + labels2, loc="lower right", framealpha=0.9, ncol=2)
 
 
-def plot_perclass_loss_lines(training_df: pd.DataFrame, ax: plt.Axes) -> None:
-    """Plot per-class loss evolution with individual lines."""
-    class_cols = detect_class_columns(training_df)
+def get_split_linestyles() -> Dict[str, str]:
+    """Get linestyles for train/val/test splits."""
+    return {
+        "train": "-",      # solid
+        "val": "--",       # dashed
+        "test": ":",       # dotted
+    }
+
+
+def plot_perclass_loss_by_type(
+    training_df: pd.DataFrame,
+    ax: plt.Axes,
+    loss_type: str = "raw",
+    title: Optional[str] = None
+) -> None:
+    """
+    Plot per-class loss evolution with one color per class, different linestyles per split.
+
+    Args:
+        training_df: DataFrame with training metrics
+        ax: Matplotlib axes to plot on
+        loss_type: 'raw' for loss_raw_c* or 'weighted' for loss_weighted_c*
+        title: Optional custom title
+    """
+    prefix = f"loss_{loss_type}_c"
+    class_cols = detect_class_columns(training_df, prefix=prefix)
+
     if not class_cols:
-        ax.text(0.5, 0.5, "No per-class data available", ha="center", va="center",
+        ax.text(0.5, 0.5, f"No {loss_type} per-class data available", ha="center", va="center",
                 transform=ax.transAxes)
         return
 
     n_classes = len(class_cols)
     class_names = get_class_names(n_classes)
     colors = get_viridis_colors(n_classes)
+    linestyles = get_split_linestyles()
 
-    # Use validation data for cleaner visualization
-    val_data = training_df[training_df["split"] == "val"].sort_values("epoch")
-    if val_data.empty:
-        val_data = training_df[training_df["split"] == "train"].sort_values("epoch")
+    # Plot for each split and class
+    for split in ["train", "val", "test"]:
+        split_data = training_df[training_df["split"] == split].sort_values("epoch")
+        if split_data.empty:
+            continue
 
-    epochs = val_data["epoch"].values
+        epochs = split_data["epoch"].values
 
-    for i, (col, name) in enumerate(zip(class_cols, class_names)):
-        if col in val_data.columns:
-            loss = val_data[col].values
-            ax.plot(epochs, loss, color=colors[i], label=name, linewidth=1.5)
+        for i, (col, name) in enumerate(zip(class_cols, class_names)):
+            if col in split_data.columns:
+                loss = split_data[col].values
+                # Only add label for first split to avoid duplicate legend entries
+                label = f"{name}" if split == "train" else None
+                ax.plot(epochs, loss, color=colors[i], linestyle=linestyles[split],
+                       linewidth=1.5, label=label, alpha=0.8)
 
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Loss")
-    ax.set_title("Per-Class Loss Evolution (Validation)", fontweight="bold")
-    ax.legend(loc="upper right", framealpha=0.9, fontsize=8, ncol=2)
+    default_title = f"Per-Class {loss_type.capitalize()} Loss Evolution"
+    ax.set_title(title if title else default_title, fontweight="bold")
+
+    # Create custom legend with both class colors and split linestyles
+    # First, add class legend
+    handles1 = [plt.Line2D([0], [0], color=colors[i], linewidth=2, label=name)
+                for i, name in enumerate(class_names)]
+
+    # Then add split legend
+    handles2 = [plt.Line2D([0], [0], color='gray', linestyle=ls, linewidth=2, label=split.capitalize())
+                for split, ls in linestyles.items()]
+
+    # Combine legends
+    all_handles = handles1 + handles2
+    ax.legend(handles=all_handles, loc='upper center', bbox_to_anchor=(0.5, -0.12),
+              ncol=min(6, len(all_handles)), fontsize=8, framealpha=0.9)
 
 
-def plot_perclass_heatmap(training_df: pd.DataFrame, ax: plt.Axes) -> None:
-    """Plot epochs x classes loss heatmap."""
-    class_cols = detect_class_columns(training_df)
+def plot_perclass_loss_comparative(training_df: pd.DataFrame, axes: List[plt.Axes]) -> None:
+    """
+    Plot comparative visualization: raw vs weighted loss.
+
+    Creates 3 subplots (train/val/test) with:
+    - Different colors for classes
+    - Different linestyles for raw vs weighted
+
+    Args:
+        training_df: DataFrame with training metrics
+        axes: List of 3 axes [train_ax, val_ax, test_ax]
+    """
+    raw_cols = detect_class_columns(training_df, prefix="loss_raw_c")
+    weighted_cols = detect_class_columns(training_df, prefix="loss_weighted_c")
+
+    if not raw_cols and not weighted_cols:
+        for ax in axes:
+            ax.text(0.5, 0.5, "No per-class loss data available", ha="center", va="center",
+                    transform=ax.transAxes)
+        return
+
+    n_classes = len(raw_cols) if raw_cols else len(weighted_cols)
+    class_names = get_class_names(n_classes)
+    colors = get_viridis_colors(n_classes)
+
+    split_names = ["train", "val", "test"]
+    loss_linestyles = {
+        "raw": "-",       # solid
+        "weighted": "--"  # dashed
+    }
+
+    for ax_idx, (ax, split) in enumerate(zip(axes, split_names)):
+        split_data = training_df[training_df["split"] == split].sort_values("epoch")
+
+        if split_data.empty:
+            ax.text(0.5, 0.5, f"No {split} data available", ha="center", va="center",
+                    transform=ax.transAxes)
+            continue
+
+        epochs = split_data["epoch"].values
+
+        # Plot raw loss
+        for i, (col, name) in enumerate(zip(raw_cols, class_names)):
+            if col in split_data.columns:
+                loss = split_data[col].dropna().values
+                if len(loss) > 0:
+                    ep = epochs[:len(loss)]
+                    ax.plot(ep, loss, color=colors[i], linestyle=loss_linestyles["raw"],
+                           linewidth=1.5, alpha=0.8)
+
+        # Plot weighted loss
+        for i, (col, name) in enumerate(zip(weighted_cols, class_names)):
+            if col in split_data.columns:
+                loss = split_data[col].dropna().values
+                if len(loss) > 0:
+                    ep = epochs[:len(loss)]
+                    ax.plot(ep, loss, color=colors[i], linestyle=loss_linestyles["weighted"],
+                           linewidth=1.5, alpha=0.8)
+
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title(f"{split.capitalize()} Split", fontweight="bold")
+
+    # Add legend to last subplot only
+    handles_class = [plt.Line2D([0], [0], color=colors[i], linewidth=2, label=name)
+                     for i, name in enumerate(class_names)]
+    handles_type = [plt.Line2D([0], [0], color='gray', linestyle=ls, linewidth=2, label=lt.capitalize())
+                    for lt, ls in loss_linestyles.items()]
+
+    axes[-1].legend(handles=handles_class + handles_type, loc='upper center',
+                    bbox_to_anchor=(0.5, -0.15), ncol=min(6, n_classes + 2),
+                    fontsize=7, framealpha=0.9)
+
+
+def plot_fid_evolution(training_df: pd.DataFrame, axes: List[plt.Axes]) -> None:
+    """
+    Plot FID evolution with heatmap + line.
+
+    Args:
+        training_df: DataFrame with training metrics
+        axes: List of 2 axes [line_ax, heatmap_ax]
+    """
+    line_ax, heatmap_ax = axes
+
+    fid_cols = detect_class_columns(training_df, prefix="fid_c")
+    has_fid_global = "fid_global" in training_df.columns
+
+    if not fid_cols and not has_fid_global:
+        for ax in axes:
+            ax.text(0.5, 0.5, "No FID data available", ha="center", va="center",
+                    transform=ax.transAxes)
+        return
+
+    split_colors = get_split_colors()
+    n_classes = len(fid_cols) if fid_cols else 0
+    class_names = get_class_names(n_classes) if n_classes > 0 else []
+
+    # Top panel: Global FID line plot for val and test
+    if has_fid_global:
+        for split in ["val", "test"]:
+            split_data = training_df[training_df["split"] == split].sort_values("epoch")
+            if split_data.empty:
+                continue
+
+            epochs = split_data["epoch"].values
+            fid_global = split_data["fid_global"].values
+
+            # Filter out NaN values
+            mask = ~np.isnan(fid_global)
+            if mask.sum() > 0:
+                line_ax.plot(epochs[mask], fid_global[mask], color=split_colors[split],
+                            label=f"{split.capitalize()} FID", linewidth=2, marker='o', markersize=4)
+
+        line_ax.set_xlabel("Epoch")
+        line_ax.set_ylabel("FID (lower is better)")
+        line_ax.set_title("Global FID Evolution", fontweight="bold")
+        line_ax.legend(loc="upper right", framealpha=0.9)
+        line_ax.grid(True, alpha=0.3)
+    else:
+        line_ax.text(0.5, 0.5, "No global FID data", ha="center", va="center",
+                    transform=line_ax.transAxes)
+
+    # Bottom panel: Per-class FID heatmap (using validation data)
+    if fid_cols:
+        val_data = training_df[training_df["split"] == "val"].sort_values("epoch")
+        if val_data.empty:
+            val_data = training_df[training_df["split"] == "test"].sort_values("epoch")
+
+        if not val_data.empty:
+            epochs = val_data["epoch"].values
+            heatmap_data = val_data[fid_cols].values.T  # Classes x Epochs
+
+            # Handle NaN values for visualization
+            heatmap_data_masked = np.ma.masked_invalid(heatmap_data)
+
+            im = heatmap_ax.imshow(heatmap_data_masked, aspect="auto", cmap="viridis_r",
+                                   origin="upper")
+
+            heatmap_ax.set_yticks(range(n_classes))
+            heatmap_ax.set_yticklabels(class_names, fontsize=8)
+
+            # Show every 5th epoch on x-axis
+            n_epochs = len(epochs)
+            tick_step = max(1, n_epochs // 10)
+            heatmap_ax.set_xticks(range(0, n_epochs, tick_step))
+            heatmap_ax.set_xticklabels(epochs[::tick_step])
+
+            heatmap_ax.set_xlabel("Epoch")
+            heatmap_ax.set_ylabel("Class")
+            heatmap_ax.set_title("Per-Class FID Heatmap (Validation)", fontweight="bold")
+
+            # Colorbar
+            cbar = plt.colorbar(im, ax=heatmap_ax, shrink=0.8)
+            cbar.set_label("FID (lower is better)")
+        else:
+            heatmap_ax.text(0.5, 0.5, "No per-class FID data", ha="center", va="center",
+                           transform=heatmap_ax.transAxes)
+    else:
+        heatmap_ax.text(0.5, 0.5, "No per-class FID data", ha="center", va="center",
+                       transform=heatmap_ax.transAxes)
+
+
+def plot_perclass_loss_lines(training_df: pd.DataFrame, ax: plt.Axes) -> None:
+    """Plot per-class loss evolution with individual lines (legacy function)."""
+    # Use the new function with raw loss
+    plot_perclass_loss_by_type(training_df, ax, loss_type="raw",
+                               title="Per-Class Raw Loss Evolution")
+
+
+def plot_perclass_heatmap(
+    training_df: pd.DataFrame,
+    ax: plt.Axes,
+    loss_type: str = "raw"
+) -> None:
+    """
+    Plot epochs x classes loss heatmap.
+
+    Args:
+        training_df: DataFrame with training metrics
+        ax: Matplotlib axes
+        loss_type: 'raw' or 'weighted'
+    """
+    prefix = f"loss_{loss_type}_c"
+    class_cols = detect_class_columns(training_df, prefix=prefix)
+
     if not class_cols:
-        ax.text(0.5, 0.5, "No per-class data available", ha="center", va="center",
+        ax.text(0.5, 0.5, f"No per-class {loss_type} data available", ha="center", va="center",
                 transform=ax.transAxes)
         return
 
@@ -243,10 +484,18 @@ def plot_perclass_heatmap(training_df: pd.DataFrame, ax: plt.Axes) -> None:
     if val_data.empty:
         val_data = training_df[training_df["split"] == "train"].sort_values("epoch")
 
+    if val_data.empty:
+        ax.text(0.5, 0.5, "No data available", ha="center", va="center",
+                transform=ax.transAxes)
+        return
+
     epochs = val_data["epoch"].values
     heatmap_data = val_data[class_cols].values.T  # Classes x Epochs
 
-    im = ax.imshow(heatmap_data, aspect="auto", cmap="viridis", origin="upper")
+    # Handle NaN values
+    heatmap_data_masked = np.ma.masked_invalid(heatmap_data)
+
+    im = ax.imshow(heatmap_data_masked, aspect="auto", cmap="viridis", origin="upper")
 
     ax.set_yticks(range(n_classes))
     ax.set_yticklabels(class_names, fontsize=8)
@@ -259,7 +508,7 @@ def plot_perclass_heatmap(training_df: pd.DataFrame, ax: plt.Axes) -> None:
 
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Class")
-    ax.set_title("Per-Class Loss Heatmap (Validation)", fontweight="bold")
+    ax.set_title(f"Per-Class {loss_type.capitalize()} Loss Heatmap (Validation)", fontweight="bold")
 
     # Colorbar
     cbar = plt.colorbar(im, ax=ax, shrink=0.8)
@@ -556,62 +805,102 @@ def generate_training_visualizations(
 
     # Generate figures
     figures = []
+    fig_num = 1
 
     # Figure 1: Loss Curves
     fig1, ax1 = plt.subplots(figsize=(10, 6))
     plot_loss_curves(training_df, ax1)
     fig1.tight_layout()
-    fig1.savefig(vis_dir / "01_loss_curves.png", dpi=dpi, bbox_inches="tight")
+    fig1.savefig(vis_dir / f"{fig_num:02d}_loss_curves.png", dpi=dpi, bbox_inches="tight")
     figures.append(("Loss Curves", fig1))
-    print(f"  Saved: 01_loss_curves.png")
+    print(f"  Saved: {fig_num:02d}_loss_curves.png")
+    fig_num += 1
 
     # Figure 2: Quality Metrics
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     plot_quality_metrics(training_df, ax2)
     fig2.tight_layout()
-    fig2.savefig(vis_dir / "02_quality_metrics.png", dpi=dpi, bbox_inches="tight")
+    fig2.savefig(vis_dir / f"{fig_num:02d}_quality_metrics.png", dpi=dpi, bbox_inches="tight")
     figures.append(("Quality Metrics", fig2))
-    print(f"  Saved: 02_quality_metrics.png")
+    print(f"  Saved: {fig_num:02d}_quality_metrics.png")
+    fig_num += 1
 
-    # Figure 3: Per-Class Loss Lines
-    fig3, ax3 = plt.subplots(figsize=(12, 6))
-    plot_perclass_loss_lines(training_df, ax3)
+    # Figure 3: Per-Class Raw Loss (NEW)
+    fig3, ax3 = plt.subplots(figsize=(14, 8))
+    plot_perclass_loss_by_type(training_df, ax3, loss_type="raw",
+                               title="Per-Class Raw Loss Evolution")
     fig3.tight_layout()
-    fig3.savefig(vis_dir / "03_perclass_loss_lines.png", dpi=dpi, bbox_inches="tight")
-    figures.append(("Per-Class Loss (Lines)", fig3))
-    print(f"  Saved: 03_perclass_loss_lines.png")
+    fig3.subplots_adjust(bottom=0.2)  # Make room for legend
+    fig3.savefig(vis_dir / f"{fig_num:02d}_perclass_raw_loss.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Per-Class Raw Loss", fig3))
+    print(f"  Saved: {fig_num:02d}_perclass_raw_loss.png")
+    fig_num += 1
 
-    # Figure 4: Per-Class Heatmap
-    fig4, ax4 = plt.subplots(figsize=(14, 6))
-    plot_perclass_heatmap(training_df, ax4)
+    # Figure 4: Per-Class Weighted Loss (NEW)
+    fig4, ax4 = plt.subplots(figsize=(14, 8))
+    plot_perclass_loss_by_type(training_df, ax4, loss_type="weighted",
+                               title="Per-Class Weighted Loss Evolution")
     fig4.tight_layout()
-    fig4.savefig(vis_dir / "04_perclass_loss_heatmap.png", dpi=dpi, bbox_inches="tight")
-    figures.append(("Per-Class Loss (Heatmap)", fig4))
-    print(f"  Saved: 04_perclass_loss_heatmap.png")
+    fig4.subplots_adjust(bottom=0.2)  # Make room for legend
+    fig4.savefig(vis_dir / f"{fig_num:02d}_perclass_weighted_loss.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Per-Class Weighted Loss", fig4))
+    print(f"  Saved: {fig_num:02d}_perclass_weighted_loss.png")
+    fig_num += 1
 
-    # Figure 5: ELBO Diagnostics (3 panels)
-    fig5, axes5 = plt.subplots(1, 3, figsize=(15, 5))
-    plot_elbo_diagnostics(diag_df, list(axes5))
+    # Figure 5: Comparative Plot - Raw vs Weighted Loss (NEW)
+    fig5, axes5 = plt.subplots(1, 3, figsize=(18, 6))
+    plot_perclass_loss_comparative(training_df, list(axes5))
+    fig5.suptitle("Per-Class Loss: Raw vs Weighted Comparison", fontweight="bold", y=1.02)
     fig5.tight_layout()
-    fig5.savefig(vis_dir / "05_elbo_diagnostics.png", dpi=dpi, bbox_inches="tight")
-    figures.append(("ELBO Diagnostics", fig5))
-    print(f"  Saved: 05_elbo_diagnostics.png")
+    fig5.subplots_adjust(bottom=0.18)  # Make room for legend
+    fig5.savefig(vis_dir / f"{fig_num:02d}_perclass_loss_comparative.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Per-Class Loss Comparison", fig5))
+    print(f"  Saved: {fig_num:02d}_perclass_loss_comparative.png")
+    fig_num += 1
 
-    # Figure 6: Reconstruction Quality
-    fig6, ax6 = plt.subplots(figsize=(10, 6))
-    plot_reconstruction_quality(diag_df, ax6)
+    # Figure 6: Per-Class Raw Loss Heatmap
+    fig6, ax6 = plt.subplots(figsize=(14, 6))
+    plot_perclass_heatmap(training_df, ax6, loss_type="raw")
     fig6.tight_layout()
-    fig6.savefig(vis_dir / "06_reconstruction_quality.png", dpi=dpi, bbox_inches="tight")
-    figures.append(("Reconstruction Quality", fig6))
-    print(f"  Saved: 06_reconstruction_quality.png")
+    fig6.savefig(vis_dir / f"{fig_num:02d}_perclass_loss_heatmap.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Per-Class Loss Heatmap", fig6))
+    print(f"  Saved: {fig_num:02d}_perclass_loss_heatmap.png")
+    fig_num += 1
 
-    # Figure 7: Noise Prediction Health
-    fig7, ax7 = plt.subplots(figsize=(10, 6))
-    plot_noise_prediction_health(diag_df, ax7)
+    # Figure 7: FID Evolution (NEW - heatmap + line)
+    fig7, axes7 = plt.subplots(2, 1, figsize=(12, 10))
+    plot_fid_evolution(training_df, list(axes7))
     fig7.tight_layout()
-    fig7.savefig(vis_dir / "07_noise_prediction_health.png", dpi=dpi, bbox_inches="tight")
-    figures.append(("Noise Prediction Health", fig7))
-    print(f"  Saved: 07_noise_prediction_health.png")
+    fig7.savefig(vis_dir / f"{fig_num:02d}_fid_evolution.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("FID Evolution", fig7))
+    print(f"  Saved: {fig_num:02d}_fid_evolution.png")
+    fig_num += 1
+
+    # Figure 8: ELBO Diagnostics (3 panels)
+    fig8, axes8 = plt.subplots(1, 3, figsize=(15, 5))
+    plot_elbo_diagnostics(diag_df, list(axes8))
+    fig8.tight_layout()
+    fig8.savefig(vis_dir / f"{fig_num:02d}_elbo_diagnostics.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("ELBO Diagnostics", fig8))
+    print(f"  Saved: {fig_num:02d}_elbo_diagnostics.png")
+    fig_num += 1
+
+    # Figure 9: Reconstruction Quality
+    fig9, ax9 = plt.subplots(figsize=(10, 6))
+    plot_reconstruction_quality(diag_df, ax9)
+    fig9.tight_layout()
+    fig9.savefig(vis_dir / f"{fig_num:02d}_reconstruction_quality.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Reconstruction Quality", fig9))
+    print(f"  Saved: {fig_num:02d}_reconstruction_quality.png")
+    fig_num += 1
+
+    # Figure 10: Noise Prediction Health
+    fig10, ax10 = plt.subplots(figsize=(10, 6))
+    plot_noise_prediction_health(diag_df, ax10)
+    fig10.tight_layout()
+    fig10.savefig(vis_dir / f"{fig_num:02d}_noise_prediction_health.png", dpi=dpi, bbox_inches="tight")
+    figures.append(("Noise Prediction Health", fig10))
+    print(f"  Saved: {fig_num:02d}_noise_prediction_health.png")
 
     # Generate multi-page PDF
     pdf_path = vis_dir / "training_dashboard.pdf"

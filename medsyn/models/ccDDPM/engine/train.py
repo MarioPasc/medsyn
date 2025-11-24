@@ -28,15 +28,17 @@ from medsyn.models.ccDDPM.metrics import (
     compute_per_class_metrics,
     PerClassMetricsAccumulator,
     compute_class_weight_correlation,
+    TorchmetricsFIDComputer,
 )
 from medsyn.models.ccDDPM.training_logging import (
-    CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES
+    CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES,
+    DEFAULT_FID_CONFIG,
 )
 from medsyn.models.ccDDPM.engine.ddp_utils import (
     ddp_is_enabled, ddp_init, is_main_process,
     barrier, cleanup, all_reduce_mean, broadcast_bool, get_state_dict_for_save
 )
-from medsyn.utils.visualize_training_evolution import generate_training_visualizations
+from medsyn.models.ccDDPM.vis.visualize_training_evolution import generate_training_visualizations
 import numpy as np
 
 logger = logging.getLogger("medsyn.ccddpm.train")
@@ -236,6 +238,77 @@ class EarlyStoppingTracker:
                 min_delta=0.0,
                 metric='psnr_ssim_composite',
             )
+
+
+# =============================================================================
+# OPTIMIZER FACTORY
+# =============================================================================
+
+def create_optimizer(
+    model_parameters,
+    optimizer_cfg: Any,
+) -> optim.Optimizer:
+    """
+    Create an optimizer based on configuration.
+
+    Args:
+        model_parameters: Model parameters to optimize
+        optimizer_cfg: Configuration object with optimizer parameters
+
+    Returns:
+        Configured optimizer instance
+
+    Supported optimizer types:
+        - adamw: AdamW (default) - Adam with decoupled weight decay
+        - adam: Adam - standard Adam optimizer
+        - sgd: SGD - stochastic gradient descent with optional momentum
+        - rmsprop: RMSprop - adaptive learning rate method
+    """
+    opt_type = getattr(optimizer_cfg, 'type', 'adamw').lower()
+    lr = optimizer_cfg.lr
+    wd = optimizer_cfg.wd
+
+    if opt_type == "adamw":
+        return optim.AdamW(
+            model_parameters,
+            lr=lr,
+            betas=optimizer_cfg.betas,
+            eps=optimizer_cfg.eps,
+            weight_decay=wd,
+            amsgrad=getattr(optimizer_cfg, 'amsgrad', False),
+        )
+    elif opt_type == "adam":
+        return optim.Adam(
+            model_parameters,
+            lr=lr,
+            betas=optimizer_cfg.betas,
+            eps=optimizer_cfg.eps,
+            weight_decay=wd,
+            amsgrad=getattr(optimizer_cfg, 'amsgrad', False),
+        )
+    elif opt_type == "sgd":
+        return optim.SGD(
+            model_parameters,
+            lr=lr,
+            momentum=getattr(optimizer_cfg, 'momentum', 0.9),
+            weight_decay=wd,
+            nesterov=getattr(optimizer_cfg, 'nesterov', False),
+        )
+    elif opt_type == "rmsprop":
+        return optim.RMSprop(
+            model_parameters,
+            lr=lr,
+            alpha=getattr(optimizer_cfg, 'alpha', 0.99),
+            eps=optimizer_cfg.eps,
+            weight_decay=wd,
+            momentum=getattr(optimizer_cfg, 'momentum', 0.0),
+            centered=getattr(optimizer_cfg, 'centered', False),
+        )
+    else:
+        raise ValueError(
+            f"Unknown optimizer type: '{opt_type}'. "
+            f"Supported types: adamw, adam, sgd, rmsprop"
+        )
 
 
 # =============================================================================
@@ -558,6 +631,414 @@ def should_log_step(step: int, total_steps: int, log_frequency: int = 10) -> boo
     # Log at regular intervals
     log_interval = max(1, total_steps // log_frequency)
     return step % log_interval == 0
+
+
+# =============================================================================
+# ENHANCED LOGGING FOR SUPERCOMPUTER ENVIRONMENT
+# =============================================================================
+
+def get_gpu_memory_info() -> Dict[str, float]:
+    """Get GPU memory usage information in GB."""
+    if not torch.cuda.is_available():
+        return {"allocated_gb": 0.0, "reserved_gb": 0.0, "max_allocated_gb": 0.0}
+
+    return {
+        "allocated_gb": torch.cuda.memory_allocated() / 1e9,
+        "reserved_gb": torch.cuda.memory_reserved() / 1e9,
+        "max_allocated_gb": torch.cuda.max_memory_allocated() / 1e9,
+    }
+
+
+def log_training_config(
+    tcfg: Any,
+    optimizer_cfg: Any,
+    scfg: Any,
+    dist_cfg: Any,
+    augmentation_cfg: Any,
+    num_train_samples: int,
+    num_val_samples: int,
+    num_test_samples: int,
+    steps_per_epoch: int,
+) -> None:
+    """
+    Log comprehensive training configuration at startup.
+
+    This provides a complete overview of all training parameters for reproducibility
+    and debugging in supercomputer batch job logs.
+    """
+    logger.info("=" * 80)
+    logger.info("TRAINING CONFIGURATION SUMMARY")
+    logger.info("=" * 80)
+
+    # Training parameters
+    logger.info("TRAINING PARAMETERS:")
+    logger.info(f"  Epochs: {tcfg.epochs}")
+    logger.info(f"  Batch size: {tcfg.batch_size}")
+    logger.info(f"  Image size: {tcfg.image_size}x{tcfg.image_size}")
+    logger.info(f"  Input channels: {tcfg.in_channels}")
+    logger.info(f"  Num classes: {tcfg.num_classes}")
+    logger.info(f"  Class embed dim: {tcfg.class_embed_dim}")
+    logger.info(f"  Mixed precision: {tcfg.mixed_precision}")
+    logger.info(f"  Gradient clip norm: {tcfg.grad_clip_norm}")
+    logger.info(f"  Skip non-finite grads: {tcfg.skip_nonfinite_grads}")
+
+    # Optimizer configuration
+    logger.info("")
+    logger.info("OPTIMIZER CONFIGURATION:")
+    logger.info(f"  Type: {optimizer_cfg.type}")
+    logger.info(f"  Learning rate: {optimizer_cfg.lr:.2e}")
+    logger.info(f"  Weight decay: {optimizer_cfg.wd:.2e}")
+    if optimizer_cfg.type.lower() in ["adam", "adamw"]:
+        logger.info(f"  Betas: {optimizer_cfg.betas}")
+        logger.info(f"  Epsilon: {optimizer_cfg.eps}")
+        logger.info(f"  AMSGrad: {getattr(optimizer_cfg, 'amsgrad', False)}")
+    elif optimizer_cfg.type.lower() == "sgd":
+        logger.info(f"  Momentum: {getattr(optimizer_cfg, 'momentum', 0.9)}")
+        logger.info(f"  Nesterov: {getattr(optimizer_cfg, 'nesterov', False)}")
+
+    # LR Scheduler configuration
+    if hasattr(tcfg, 'lr_scheduler') and tcfg.lr_scheduler is not None:
+        lr_cfg = tcfg.lr_scheduler
+        logger.info("")
+        logger.info("LR SCHEDULER CONFIGURATION:")
+        logger.info(f"  Type: {lr_cfg.type}")
+        if lr_cfg.type.lower() == "onecycle":
+            logger.info(f"  Max LR: {lr_cfg.max_lr}")
+            logger.info(f"  Pct start: {lr_cfg.pct_start}")
+            logger.info(f"  Div factor: {lr_cfg.div_factor}")
+        elif lr_cfg.type.lower() in ["cosine", "cosine_warmup"]:
+            logger.info(f"  Eta min: {lr_cfg.eta_min}")
+            logger.info(f"  Warmup epochs: {lr_cfg.warmup_epochs}")
+
+    # Diffusion scheduler configuration
+    logger.info("")
+    logger.info("DIFFUSION SCHEDULER:")
+    logger.info(f"  Train timesteps: {scfg.num_train_timesteps}")
+    logger.info(f"  Beta schedule: {scfg.beta_schedule}")
+    logger.info(f"  Beta range: [{scfg.beta_start:.2e}, {scfg.beta_end:.2e}]")
+    logger.info(f"  Prediction type: {scfg.prediction_type}")
+
+    # Loss configuration
+    logger.info("")
+    logger.info("LOSS CONFIGURATION:")
+    logger.info(f"  Min-SNR weighting: {tcfg.use_min_snr}")
+    if tcfg.use_min_snr:
+        logger.info(f"  Min-SNR gamma: {tcfg.min_snr_gamma}")
+    logger.info(f"  Per-class loss weighting: {tcfg.per_class_loss_weighting}")
+    logger.info(f"  Guidance p_uncond: {tcfg.guidance_p_uncond}")
+
+    # EMA configuration
+    logger.info("")
+    logger.info("EMA CONFIGURATION:")
+    logger.info(f"  Enabled: {tcfg.ema_use}")
+    if tcfg.ema_use:
+        logger.info(f"  Decay: {tcfg.ema_decay}")
+
+    # Early stopping configuration
+    if hasattr(tcfg, 'early_stopping') and tcfg.early_stopping is not None:
+        es_cfg = tcfg.early_stopping
+        logger.info("")
+        logger.info("EARLY STOPPING:")
+        logger.info(f"  Patience: {es_cfg.patience}")
+        logger.info(f"  Metric: {es_cfg.metric}")
+        logger.info(f"  PSNR weight: {es_cfg.psnr_weight}")
+        logger.info(f"  SSIM weight: {es_cfg.ssim_weight}")
+        logger.info(f"  EMA alpha: {es_cfg.ema_alpha}")
+        logger.info(f"  Use EMA for stopping: {es_cfg.use_ema_for_stopping}")
+        logger.info(f"  Min delta: {es_cfg.min_delta}")
+
+    # Distributed configuration
+    logger.info("")
+    logger.info("DISTRIBUTED TRAINING:")
+    logger.info(f"  Enabled: {dist_cfg.enabled}")
+    if dist_cfg.enabled:
+        logger.info(f"  Backend: {dist_cfg.backend}")
+        logger.info(f"  Num GPUs: {dist_cfg.num_gpus}")
+        logger.info(f"  Grad accum steps: {dist_cfg.grad_accum_steps}")
+
+    # Augmentation configuration
+    logger.info("")
+    logger.info("AUGMENTATION:")
+    if augmentation_cfg is not None and hasattr(augmentation_cfg, 'enabled'):
+        logger.info(f"  Enabled: {augmentation_cfg.enabled}")
+        if augmentation_cfg.enabled:
+            logger.info(f"  Probability: {augmentation_cfg.probability}")
+            logger.info(f"  Num transforms: {len(augmentation_cfg.transforms)}")
+    else:
+        logger.info("  Enabled: False")
+
+    # Dataset statistics
+    logger.info("")
+    logger.info("DATASET STATISTICS:")
+    logger.info(f"  Train samples: {num_train_samples:,}")
+    logger.info(f"  Val samples: {num_val_samples:,}")
+    logger.info(f"  Test samples: {num_test_samples:,}")
+    logger.info(f"  Steps per epoch: {steps_per_epoch:,}")
+    total_steps = steps_per_epoch * tcfg.epochs
+    logger.info(f"  Total training steps: {total_steps:,}")
+
+    # Estimated training time (rough estimate based on typical step time)
+    # This will be updated with actual timings after first epoch
+    logger.info("")
+    logger.info("=" * 80)
+
+
+def log_model_summary(model: nn.Module, ucfg: Any) -> None:
+    """Log model architecture summary with parameter counts."""
+    logger.info("")
+    logger.info("MODEL ARCHITECTURE:")
+    logger.info(f"  Model channels: {ucfg.model_channels}")
+    logger.info(f"  Channel multipliers: {ucfg.channel_mult}")
+    logger.info(f"  Block out channels: {ucfg.get_block_out_channels()}")
+    logger.info(f"  Layers per block: {ucfg.layers_per_block}")
+    logger.info(f"  Down blocks: {ucfg.down_block_types}")
+    logger.info(f"  Up blocks: {ucfg.up_block_types}")
+    logger.info(f"  Attention head dim: {ucfg.attention_head_dim}")
+    logger.info(f"  Dropout: {ucfg.dropout}")
+    logger.info(f"  Norm groups: {ucfg.norm_num_groups}")
+
+    # Parameter counts
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    logger.info("")
+    logger.info("PARAMETER COUNTS:")
+    logger.info(f"  Total parameters: {total_params:,} ({total_params / 1e6:.2f}M)")
+    logger.info(f"  Trainable parameters: {trainable_params:,} ({trainable_params / 1e6:.2f}M)")
+
+    # Memory estimate (rough)
+    param_memory_mb = total_params * 4 / 1e6  # 4 bytes per float32 param
+    logger.info(f"  Estimated param memory: {param_memory_mb:.1f} MB")
+
+
+def log_enhanced_epoch_summary(
+    epoch: int,
+    total_epochs: int,
+    train_metrics: Dict[str, float],
+    val_metrics: Dict[str, float],
+    test_metrics: Dict[str, float],
+    train_time: float,
+    val_time: float,
+    test_time: float,
+    fid_time: float,
+    lr: float,
+    early_stop_info: Dict[str, Any],
+    num_classes: int = 9,
+) -> None:
+    """
+    Log comprehensive epoch summary optimized for supercomputer batch logs.
+
+    Includes all metrics, per-class analysis, timing breakdown, and training health indicators.
+    """
+    total_time = train_time + val_time + test_time + fid_time
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"EPOCH {epoch}/{total_epochs} COMPLETE")
+    logger.info("=" * 80)
+
+    # Core metrics comparison table
+    logger.info("")
+    logger.info("CORE METRICS:")
+    logger.info(f"  {'Split':<10} | {'Loss':>10} | {'PSNR (dB)':>10} | {'SSIM':>10}")
+    logger.info(f"  {'-'*10} | {'-'*10} | {'-'*10} | {'-'*10}")
+    logger.info(f"  {'Train':<10} | {train_metrics.get('loss', 0):>10.4f} | "
+               f"{train_metrics.get('psnr', 0):>10.2f} | {train_metrics.get('ssim', 0):>10.4f}")
+    logger.info(f"  {'Val':<10} | {val_metrics.get('loss', 0):>10.4f} | "
+               f"{val_metrics.get('psnr', 0):>10.2f} | {val_metrics.get('ssim', 0):>10.4f}")
+    logger.info(f"  {'Test':<10} | {test_metrics.get('loss', 0):>10.4f} | "
+               f"{test_metrics.get('psnr', 0):>10.2f} | {test_metrics.get('ssim', 0):>10.4f}")
+
+    # FID metrics (if available)
+    fid_global_val = val_metrics.get('fid_global', float('nan'))
+    fid_global_test = test_metrics.get('fid_global', float('nan'))
+    if not (math.isnan(fid_global_val) and math.isnan(fid_global_test)):
+        logger.info("")
+        logger.info("FID METRICS (lower is better):")
+        if not math.isnan(fid_global_val):
+            logger.info(f"  Val FID: {fid_global_val:.2f}")
+        if not math.isnan(fid_global_test):
+            logger.info(f"  Test FID: {fid_global_test:.2f}")
+
+    # Per-class metrics summary (validation) - show best and worst
+    logger.info("")
+    log_per_class_summary(val_metrics, "Validation", num_classes)
+
+    # Early stopping status
+    logger.info("")
+    logger.info("EARLY STOPPING STATUS:")
+    val_score_raw = early_stop_info.get('val_score_raw', 0)
+    val_score_ema = early_stop_info.get('val_score_ema', 0)
+    best_score = early_stop_info.get('best_score', 0)
+    best_epoch = early_stop_info.get('best_epoch', 0)
+    epochs_without_improvement = early_stop_info.get('epochs_without_improvement', 0)
+    is_best = early_stop_info.get('is_best', False)
+
+    logger.info(f"  Current score (raw): {val_score_raw:.4f}")
+    logger.info(f"  Current score (EMA): {val_score_ema:.4f}")
+    logger.info(f"  Best score: {best_score:.4f} (epoch {best_epoch})")
+    logger.info(f"  Epochs without improvement: {epochs_without_improvement}")
+
+    if is_best:
+        logger.info("  >>> NEW BEST MODEL SAVED <<<")
+
+    # Timing breakdown
+    logger.info("")
+    logger.info("TIMING BREAKDOWN:")
+    logger.info(f"  Training: {format_time(train_time)} ({train_time/total_time*100:.1f}%)")
+    logger.info(f"  Validation: {format_time(val_time)} ({val_time/total_time*100:.1f}%)")
+    logger.info(f"  Test: {format_time(test_time)} ({test_time/total_time*100:.1f}%)")
+    if fid_time > 0:
+        logger.info(f"  FID computation: {format_time(fid_time)} ({fid_time/total_time*100:.1f}%)")
+    logger.info(f"  Total: {format_time(total_time)}")
+
+    # Training health indicators
+    logger.info("")
+    logger.info("TRAINING HEALTH:")
+    logger.info(f"  Learning rate: {lr:.2e}")
+    grad_norm = train_metrics.get('grad_norm', 0)
+    logger.info(f"  Avg gradient norm: {grad_norm:.4f}")
+
+    # GPU memory (if available)
+    mem_info = get_gpu_memory_info()
+    if mem_info['allocated_gb'] > 0:
+        logger.info(f"  GPU memory: {mem_info['allocated_gb']:.2f} GB allocated, "
+                   f"{mem_info['max_allocated_gb']:.2f} GB peak")
+
+    # ETA for training completion
+    epochs_remaining = total_epochs - epoch
+    if epochs_remaining > 0:
+        eta_seconds = epochs_remaining * total_time
+        logger.info("")
+        logger.info(f"ETA for training completion: {format_time(eta_seconds)} ({epochs_remaining} epochs remaining)")
+
+    logger.info("=" * 80)
+
+
+def log_per_class_summary(
+    metrics: Dict[str, float],
+    split_name: str,
+    num_classes: int = 9,
+) -> None:
+    """
+    Log per-class metrics summary showing best and worst performing classes.
+    """
+    # Collect per-class PSNR and SSIM
+    psnr_per_class = {}
+    ssim_per_class = {}
+    loss_per_class = {}
+
+    for k in range(num_classes):
+        psnr_key = f"psnr_c{k}"
+        ssim_key = f"ssim_c{k}"
+        loss_key = f"loss_raw_c{k}"
+
+        if psnr_key in metrics and not math.isnan(metrics[psnr_key]):
+            psnr_per_class[k] = metrics[psnr_key]
+        if ssim_key in metrics and not math.isnan(metrics[ssim_key]):
+            ssim_per_class[k] = metrics[ssim_key]
+        if loss_key in metrics and not math.isnan(metrics[loss_key]):
+            loss_per_class[k] = metrics[loss_key]
+
+    if not psnr_per_class:
+        logger.info(f"PER-CLASS {split_name.upper()} METRICS: Not available")
+        return
+
+    logger.info(f"PER-CLASS {split_name.upper()} METRICS:")
+
+    # Sort by PSNR to find best/worst
+    sorted_by_psnr = sorted(psnr_per_class.items(), key=lambda x: x[1], reverse=True)
+
+    # Show all classes in a compact format
+    psnr_str = " | ".join([f"c{k}:{v:.1f}" for k, v in sorted_by_psnr])
+    logger.info(f"  PSNR: {psnr_str}")
+
+    if ssim_per_class:
+        sorted_by_ssim = sorted(ssim_per_class.items(), key=lambda x: x[1], reverse=True)
+        ssim_str = " | ".join([f"c{k}:{v:.3f}" for k, v in sorted_by_ssim])
+        logger.info(f"  SSIM: {ssim_str}")
+
+    # Highlight best and worst
+    if len(sorted_by_psnr) >= 2:
+        best_class, best_psnr = sorted_by_psnr[0]
+        worst_class, worst_psnr = sorted_by_psnr[-1]
+        logger.info(f"  Best: class {best_class} (PSNR={best_psnr:.2f}dB) | "
+                   f"Worst: class {worst_class} (PSNR={worst_psnr:.2f}dB)")
+
+
+def log_epoch_start(epoch: int, total_epochs: int, lr: float) -> None:
+    """Log epoch start marker with current learning rate."""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"STARTING EPOCH {epoch}/{total_epochs} | LR: {lr:.2e}")
+    logger.info("=" * 80)
+
+
+def log_phase_start(phase_name: str, num_batches: int) -> None:
+    """Log the start of a training phase (train/val/test)."""
+    logger.info(f"[{phase_name.upper()}] Starting {num_batches} batches...")
+
+
+def log_phase_complete(
+    phase_name: str,
+    metrics: Dict[str, float],
+    elapsed_time: float,
+) -> None:
+    """Log the completion of a training phase with key metrics."""
+    loss = metrics.get('loss', 0)
+    psnr = metrics.get('psnr', 0)
+    ssim = metrics.get('ssim', 0)
+
+    logger.info(f"[{phase_name.upper()}] Complete | "
+               f"loss={loss:.4f} | psnr={psnr:.2f}dB | ssim={ssim:.4f} | "
+               f"time={format_time(elapsed_time)}")
+
+
+def log_checkpoint_saved(checkpoint_path: str, is_best: bool, epoch: int) -> None:
+    """Log checkpoint save event."""
+    if is_best:
+        logger.info(f"[CHECKPOINT] Saved BEST model: {checkpoint_path} (epoch {epoch})")
+    else:
+        logger.info(f"[CHECKPOINT] Saved: {checkpoint_path}")
+
+
+def log_early_stopping_triggered(
+    epoch: int,
+    patience: int,
+    best_epoch: int,
+    best_score: float,
+    ema_score: float,
+) -> None:
+    """Log early stopping trigger event."""
+    logger.warning("")
+    logger.warning("=" * 80)
+    logger.warning(f"EARLY STOPPING TRIGGERED at Epoch {epoch}")
+    logger.warning("=" * 80)
+    logger.warning(f"  No improvement for {patience} consecutive epochs")
+    logger.warning(f"  Best model: epoch {best_epoch} with score {best_score:.4f}")
+    logger.warning(f"  Final EMA score: {ema_score:.4f}")
+    logger.warning("=" * 80)
+
+
+def log_training_complete(
+    total_epochs_run: int,
+    total_time: float,
+    best_epoch: int,
+    best_val_metrics: Dict[str, float],
+    output_dir: str,
+) -> None:
+    """Log training completion summary."""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TRAINING COMPLETE")
+    logger.info("=" * 80)
+    logger.info(f"  Total epochs: {total_epochs_run}")
+    logger.info(f"  Total time: {format_time(total_time)}")
+    logger.info(f"  Best epoch: {best_epoch}")
+    logger.info(f"  Best val PSNR: {best_val_metrics.get('psnr', 0):.2f} dB")
+    logger.info(f"  Best val SSIM: {best_val_metrics.get('ssim', 0):.4f}")
+    logger.info(f"  Output directory: {output_dir}")
+    logger.info("=" * 80)
 
 
 class EMA:
@@ -1434,6 +1915,140 @@ def evaluate_split(
     return metrics
 
 
+@torch.no_grad()
+def compute_fid_on_split(
+    model: nn.Module,
+    dataloader: torch.utils.data.DataLoader,
+    noise_scheduler: DDPMScheduler,
+    device: torch.device,
+    tcfg: Any,
+    scfg: Any,
+    fid_config: Dict[str, Any],
+    rank: int,
+) -> Dict[str, float]:
+    """
+    Compute FID metrics for a given split (val or test).
+
+    Generates samples from the model and compares against real data from the dataloader.
+
+    Args:
+        model: The trained model
+        dataloader: DataLoader for the split (to get real images)
+        noise_scheduler: DDPM scheduler for generation
+        device: Device to run on
+        tcfg: Training config
+        scfg: Scheduler config
+        fid_config: FID computation configuration (samples_per_class, batch_size, min_samples)
+        rank: Process rank
+
+    Returns:
+        Dictionary with fid_global and fid_c0, fid_c1, ..., fid_c{num_classes-1}
+    """
+    num_classes = getattr(tcfg, 'num_classes', NUM_CLASSES)
+    samples_per_class = fid_config.get("samples_per_class", 100)
+    batch_size = fid_config.get("batch_size", 32)
+    min_samples = fid_config.get("min_samples", 50)
+
+    # Initialize FID computer
+    fid_computer = TorchmetricsFIDComputer(
+        num_classes=num_classes,
+        device=str(device),
+        normalize=True,
+    )
+
+    if not fid_computer.available:
+        logger.warning("FID computation not available (torchmetrics.image.fid not installed)")
+        result = {"fid_global": float("nan")}
+        result.update({f"fid_c{k}": float("nan") for k in range(num_classes)})
+        return result
+
+    # Get inference config for generation parameters
+    icfg = getattr(tcfg, 'infer', None)
+    num_inference_steps = getattr(icfg, 'num_inference_steps', 50) if icfg else 50
+    guidance_scale = getattr(icfg, 'guidance_scale', 1.0) if icfg else 1.0
+
+    model.eval()
+
+    # 1. Collect real images from dataloader
+    logger.info(f"[FID] Collecting real images from dataloader (target: {samples_per_class * num_classes} total)...")
+    max_real_samples = samples_per_class * num_classes
+    real_count = 0
+
+    for batch in dataloader:
+        if real_count >= max_real_samples:
+            break
+        x0 = batch["pixel_values"].to(device)
+        labels = batch["labels"].to(device)
+
+        # Rescale from [-1, 1] to [0, 1]
+        x0_01 = (x0 + 1.0) / 2.0
+
+        fid_computer.add_real(x0_01, labels)
+        real_count += x0.size(0)
+
+    logger.info(f"[FID] Collected {fid_computer.real_count} real images")
+
+    # 2. Generate fake samples (samples_per_class per class)
+    logger.info(f"[FID] Generating {samples_per_class} samples per class ({samples_per_class * num_classes} total)...")
+
+    # Create scheduler for generation
+    gen_scheduler = DDPMScheduler(
+        num_train_timesteps=scfg.num_train_timesteps,
+        beta_start=scfg.beta_start,
+        beta_end=scfg.beta_end,
+        beta_schedule=scfg.beta_schedule,
+        prediction_type=scfg.prediction_type,
+        clip_sample=True,
+        clip_sample_range=1.0,
+        thresholding=False,
+    )
+    gen_scheduler.set_timesteps(num_inference_steps, device=device)
+
+    for class_id in range(num_classes):
+        n_generated = 0
+        while n_generated < samples_per_class:
+            cur_batch = min(batch_size, samples_per_class - n_generated)
+
+            # Start from random noise
+            x = torch.randn(
+                (cur_batch, tcfg.in_channels, tcfg.image_size, tcfg.image_size),
+                device=device
+            )
+            labels = torch.full((cur_batch,), class_id, device=device, dtype=torch.long)
+
+            # Denoise using scheduler
+            for t in gen_scheduler.timesteps:
+                t_batch = t.expand(cur_batch).to(device)
+
+                # Forward pass with optional CFG
+                with torch.autocast(device_type=device.type, enabled=tcfg.mixed_precision):
+                    eps_cond = model(x, t_batch, labels)
+
+                if guidance_scale != 1.0:
+                    eps_uncond = model(x, t_batch, None)
+                    eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
+                else:
+                    eps = eps_cond
+
+                x = gen_scheduler.step(model_output=eps, timestep=t, sample=x).prev_sample
+
+            # Clamp and rescale to [0, 1]
+            fake_images = (x.clamp(-1, 1) + 1.0) / 2.0
+
+            fid_computer.add_fake(fake_images, labels)
+            n_generated += cur_batch
+
+    logger.info(f"[FID] Generated {fid_computer.fake_count} fake images")
+
+    # 3. Compute FID
+    logger.info("[FID] Computing FID scores...")
+    fid_metrics = fid_computer.compute(min_samples_per_class=min_samples)
+
+    logger.info(f"[FID] Global FID: {fid_metrics.get('fid_global', 'N/A'):.2f}")
+
+    return fid_metrics
+
+
 def train(yaml_path: str, split: str = "train") -> None:
     """
     Train ccDDPM using config at yaml_path. Saves checkpoints and CSV log.
@@ -1445,7 +2060,7 @@ def train(yaml_path: str, split: str = "train") -> None:
     cfg: ProjectCfg = load_cfg(yaml_path, split=split)
     tcfg = cfg.ccddpm.train
     scfg = cfg.ccddpm.sched
-    ocfg = cfg.ccddpm.optim
+    optimizer_cfg = cfg.ccddpm.optimizer  # Renamed from ocfg
 
     # ========================================================================
     # DDP/NCCL DEBUGGING: Set environment variables for better error reporting
@@ -1785,8 +2400,12 @@ def train(yaml_path: str, split: str = "train") -> None:
             logger.info("DDP: Model wrapped in DistributedDataParallel")
     # else: Legacy path uses model directly, no wrapper
 
-    # Build optimizer (works on DDP-wrapped model if use_ddp=True, unwrapped otherwise)
-    opt = optim.AdamW(model.parameters(), lr=ocfg.lr, betas=ocfg.betas, eps=ocfg.eps, weight_decay=ocfg.wd)
+    # Build optimizer using the factory function (supports multiple optimizer types)
+    if is_main_process():
+        logger.info(f"Optimizer config: type={optimizer_cfg.type}, lr={optimizer_cfg.lr:.2e}, "
+                   f"weight_decay={optimizer_cfg.wd:.2e}")
+
+    opt = create_optimizer(model.parameters(), optimizer_cfg)
     scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
 
     # Build EMA (CRITICAL: always tracks base_model, not DDP wrapper)
@@ -1808,13 +2427,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         (out_dir / "samples").mkdir(parents=True, exist_ok=True)
         (out_dir / "ckpts").mkdir(parents=True, exist_ok=True)
 
-        # Initialize CSV logger for train/val/test metrics (with per-class fields)
-        extra_fields = []
-        for k in range(tcfg.num_classes):
-            extra_fields.append(f"loss_c{k}")
+        # Initialize CSV logger for train/val/test metrics
+        # Note: loss_raw_c* and loss_weighted_c* are already in TRAINING_FIELDS
         csv_logger = CSVTrainingLogger(
             str(out_dir / "training_metrics.csv"),
-            fieldnames=list(TRAINING_FIELDS) + extra_fields
+            fieldnames=list(TRAINING_FIELDS)
         )
 
         # Initialize separate CSV logger for diagnostic metrics
@@ -1861,7 +2478,7 @@ def train(yaml_path: str, split: str = "train") -> None:
             scheduler_cfg=tcfg.lr_scheduler,
             steps_per_epoch=steps_per_epoch,
             total_epochs=tcfg.epochs,
-            base_lr=ocfg.lr,
+            base_lr=optimizer_cfg.lr,  # Use lr from optimizer config
         )
     else:
         if is_main_process():
@@ -1869,6 +2486,27 @@ def train(yaml_path: str, split: str = "train") -> None:
 
     global_step = 0
     model.train()
+
+    # ========================================================================
+    # COMPREHENSIVE STARTUP LOGGING (for supercomputer batch jobs)
+    # ========================================================================
+    if is_main_process():
+        log_training_config(
+            tcfg=tcfg,
+            optimizer_cfg=optimizer_cfg,
+            scfg=scfg,
+            dist_cfg=cfg.ccddpm.dist,
+            augmentation_cfg=cfg.ccddpm.augmentation,
+            num_train_samples=len(train_dataset),
+            num_val_samples=len(val_dataset),
+            num_test_samples=len(test_dataset),
+            steps_per_epoch=steps_per_epoch,
+        )
+        log_model_summary(base_model, ucfg)
+
+    # Track total training time for final summary
+    training_start_time = time.time()
+    best_val_metrics_snapshot = {}
 
     # ========================================================================
     # TRAINING LOOP
@@ -1883,6 +2521,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         running_loss = 0.0
         train_avg = EpochAverager()
 
+        # Per-class metrics accumulator for training (PSNR/SSIM per class)
+        num_classes = getattr(tcfg, 'num_classes', NUM_CLASSES)
+        train_per_class_acc = PerClassMetricsAccumulator(num_classes=num_classes)
+
         # Reset per-class loss statistics at the start of each epoch
         loss_fn.reset()
 
@@ -1893,13 +2535,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         total_train_steps = len(train_loader)
         use_progress_bar = tcfg.use_tqdm and is_main_process() and not IS_SUPERCOMPUTER
 
-        # Supercomputer mode: log epoch start
-        if IS_SUPERCOMPUTER and is_main_process():
-            logger.info("=" * 80)
-            logger.info(f"STARTING EPOCH {epoch}/{tcfg.epochs}")
-            logger.info(f"Total batches: {total_train_steps} | Batch size: {tcfg.batch_size} | "
-                       f"LR: {opt.param_groups[0]['lr']:.2e}")
-            logger.info("=" * 80)
+        # Epoch start logging (enhanced for supercomputer)
+        if is_main_process():
+            log_epoch_start(epoch, tcfg.epochs, opt.param_groups[0]['lr'])
+            if IS_SUPERCOMPUTER:
+                log_phase_start("training", total_train_steps)
 
         # Progress bar for the training epoch (only on rank-0 if using tqdm AND not supercomputer)
         train_iter = enumerate(train_loader, 1)
@@ -2048,6 +2688,17 @@ def train(yaml_path: str, split: str = "train") -> None:
                 # Update epoch averager
                 train_avg.update(batch_metrics, batch_size=bsz)
 
+                # Accumulate per-class PSNR/SSIM metrics for training
+                # Rescale x0 and x0_pred from [-1, 1] to [0, 1] for metrics computation
+                x0_01 = (x0 + 1.0) / 2.0
+                x0_pred_01 = (x0_pred.clamp(-1, 1) + 1.0) / 2.0
+                train_per_class_acc.update(
+                    x_hat=x0_pred_01,
+                    x=x0_01,
+                    labels=labels,
+                    max_val=1.0,
+                )
+
             # Update running loss
             # Accumulate only finite losses
             li = float(loss.detach().cpu())
@@ -2097,11 +2748,24 @@ def train(yaml_path: str, split: str = "train") -> None:
         if use_progress_bar:
             pbar.close()
 
-        # Get per-class losses from loss_fn (local to this GPU) - use weighted losses
-        per_class_losses = loss_fn.per_class(weighted=True)
+        # Get per-class losses from loss_fn (local to this GPU)
+        per_class_losses_weighted = loss_fn.per_class(weighted=True)
+        per_class_losses_raw = loss_fn.per_class(weighted=False)
         train_metrics = train_avg.means()
-        for c, loss_c in per_class_losses.items():
-            train_metrics[f"loss_c{c}"] = loss_c
+
+        # Add per-class losses (use same naming as val/test: loss_raw_c* and loss_weighted_c*)
+        for c, loss_c in per_class_losses_weighted.items():
+            train_metrics[f"loss_weighted_c{c}"] = loss_c
+        for c, loss_c in per_class_losses_raw.items():
+            train_metrics[f"loss_raw_c{c}"] = loss_c
+
+        # Add per-class PSNR/SSIM metrics from the accumulator
+        train_per_class_metrics = train_per_class_acc.compute()
+        for key, value in train_per_class_metrics.items():
+            # Skip global psnr/ssim since they're already in train_metrics
+            if key in ("psnr", "ssim"):
+                continue
+            train_metrics[key] = value
 
         # CRITICAL: Synchronize training metrics across all GPUs
         train_metrics = sync_metrics_dict(train_metrics, device, use_ddp)
@@ -2117,7 +2781,10 @@ def train(yaml_path: str, split: str = "train") -> None:
         # Log training summary (only rank-0)
         if is_main_process():
             avg_loss = running_loss / len(train_loader)
-            if not IS_SUPERCOMPUTER:
+            if IS_SUPERCOMPUTER:
+                # Supercomputer mode: structured phase logging
+                log_phase_complete("training", train_metrics, train_time)
+            else:
                 # Interactive mode: use print for cleaner output
                 print("\n" + "="*80)
                 print(f"Epoch {epoch}/{tcfg.epochs} Training Summary:")
@@ -2128,16 +2795,10 @@ def train(yaml_path: str, split: str = "train") -> None:
                 print(f"  Noise MSE: {train_metrics.get('noise_mse', 0.0):.4f}")
                 print(f"  Learning Rate: {curr_lr:.6f}")
                 print(f"  Time: {format_time(train_time)}")
-            else:
-                # Supercomputer mode: use logger
-                logger.info(f"Training complete | loss={avg_loss:.4f} | "
-                           f"psnr={train_metrics.get('psnr', 0.0):.2f}dB | "
-                           f"ssim={train_metrics.get('ssim', 0.0):.4f} | "
-                           f"time={format_time(train_time)}")
 
         # ---- Validation ----
         if IS_SUPERCOMPUTER and is_main_process():
-            logger.info(f"Starting validation on {len(val_loader)} batches...")
+            log_phase_start("validation", len(val_loader))
 
         val_start_time = time.time()
         val_metrics = evaluate_split(
@@ -2152,6 +2813,10 @@ def train(yaml_path: str, split: str = "train") -> None:
             rank=rank
         )
         val_time = time.time() - val_start_time
+
+        # Log validation phase completion
+        if IS_SUPERCOMPUTER and is_main_process():
+            log_phase_complete("validation", val_metrics, val_time)
 
         # Extract loss for reference logging
         val_loss = val_metrics.get("loss", float("inf"))
@@ -2176,7 +2841,7 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         # ---- Test Evaluation ----
         if IS_SUPERCOMPUTER and is_main_process():
-            logger.info(f"Starting test evaluation on {len(test_loader)} batches...")
+            log_phase_start("test", len(test_loader))
 
         test_start_time = time.time()
         test_metrics = evaluate_split(
@@ -2192,8 +2857,56 @@ def train(yaml_path: str, split: str = "train") -> None:
         )
         test_time = time.time() - test_start_time
 
+        # Log test phase completion
+        if IS_SUPERCOMPUTER and is_main_process():
+            log_phase_complete("test", test_metrics, test_time)
+
         # Extract test loss for logging
         test_loss = test_metrics.get("loss", float("inf"))
+
+        # ---- FID Computation (val and test) ----
+        # Compute FID on validation and test sets (only on main process)
+        fid_config = getattr(tcfg, 'fid', DEFAULT_FID_CONFIG)
+        if isinstance(fid_config, bool):
+            # If fid is just True/False in config, use defaults
+            fid_config = DEFAULT_FID_CONFIG if fid_config else None
+
+        fid_time = 0.0
+        if fid_config is not None and is_main_process():
+            fid_start_time = time.time()
+            if IS_SUPERCOMPUTER:
+                log_phase_start("FID (validation)", 0)
+
+            val_fid_metrics = compute_fid_on_split(
+                model=model,
+                dataloader=val_loader,
+                noise_scheduler=noise_scheduler,
+                device=device,
+                tcfg=tcfg,
+                scfg=scfg,
+                fid_config=fid_config,
+                rank=rank,
+            )
+            # Merge FID metrics into val_metrics
+            val_metrics.update(val_fid_metrics)
+
+            if IS_SUPERCOMPUTER:
+                log_phase_start("FID (test)", 0)
+
+            test_fid_metrics = compute_fid_on_split(
+                model=model,
+                dataloader=test_loader,
+                noise_scheduler=noise_scheduler,
+                device=device,
+                tcfg=tcfg,
+                scfg=scfg,
+                fid_config=fid_config,
+                rank=rank,
+            )
+            # Merge FID metrics into test_metrics
+            test_metrics.update(test_fid_metrics)
+
+            fid_time = time.time() - fid_start_time
 
         # ---- CRITICAL: Compute Training Diagnostics ----
         # These metrics detect common training failures
@@ -2386,53 +3099,59 @@ def train(yaml_path: str, split: str = "train") -> None:
             # Save best.pt if this is the best validation score so far
             if is_best:
                 torch.save(checkpoint_data, out_dir / "ckpts" / "best.pt")
-                logger.info(f"✓ New best model at epoch {epoch} with val_score={val_score:.4f} "
-                           f"(EMA: {early_stop_info['val_score_ema']:.4f})")
+                log_checkpoint_saved(str(out_dir / "ckpts" / "best.pt"), is_best=True, epoch=epoch)
+                # Save snapshot of best metrics for final summary
+                best_val_metrics_snapshot = dict(val_metrics)
             else:
-                logger.info(f"No improvement for {epochs_without_improvement}/{early_stop_tracker.patience} epochs "
-                           f"(best: {best_val_score:.4f} at epoch {best_epoch})")
+                if not IS_SUPERCOMPUTER:
+                    logger.info(f"No improvement for {epochs_without_improvement}/{early_stop_tracker.patience} epochs "
+                               f"(best: {best_val_score:.4f} at epoch {best_epoch})")
 
             # Save periodic checkpoint every X epochs
             if (epoch % tcfg.ckpt_every_epochs) == 0:
                 ck = out_dir / "ckpts" / f"epoch_{epoch:04d}.pt"
                 torch.save(checkpoint_data, ck)
-                logger.info(f"Saved periodic checkpoint: {ck.name}")
+                log_checkpoint_saved(str(ck), is_best=False, epoch=epoch)
 
         # Calculate total epoch time
         total_epoch_time = train_time + val_time + test_time
 
-        # Epoch summary logging (supercomputer mode)
-        if IS_SUPERCOMPUTER and is_main_process():
-            log_epoch_summary(
-                rank=rank,
+        # Epoch summary logging (enhanced for supercomputer)
+        if is_main_process():
+            log_enhanced_epoch_summary(
                 epoch=epoch,
+                total_epochs=tcfg.epochs,
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
                 test_metrics=test_metrics,
-                epoch_time=total_epoch_time,
-                best_val_score=best_val_score,
-                is_best=is_best
+                train_time=train_time,
+                val_time=val_time,
+                test_time=test_time,
+                fid_time=fid_time,
+                lr=curr_lr,
+                early_stop_info=early_stop_info,
+                num_classes=tcfg.num_classes,
             )
 
         # Early stopping check (synchronized across all GPUs)
         if should_stop:
             if is_main_process():
-                if IS_SUPERCOMPUTER:
-                    logger.info("=" * 80)
-                    logger.warning(f"EARLY STOPPING at Epoch {epoch}")
-                    logger.info("=" * 80)
-                    logger.warning(f"No improvement in validation score for {early_stop_tracker.patience} consecutive epochs.")
-                    logger.info(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.4f}")
-                    logger.info(f"Final EMA score: {early_stop_info['val_score_ema']:.4f}")
-                    logger.info("=" * 80)
-                else:
-                    print(f"\n{'='*80}")
-                    print(f"⚠ Early Stopping at Epoch {epoch}")
-                    print(f"{'='*80}")
-                    print(f"No improvement in validation score for {early_stop_tracker.patience} consecutive epochs.")
-                    print(f"Best model saved at epoch {best_epoch} with val_score={best_val_score:.4f}")
-                    print(f"Final EMA score: {early_stop_info['val_score_ema']:.4f}")
-                    print(f"{'='*80}\n")
+                log_early_stopping_triggered(
+                    epoch=epoch,
+                    patience=early_stop_tracker.patience,
+                    best_epoch=best_epoch,
+                    best_score=best_val_score,
+                    ema_score=early_stop_info['val_score_ema'],
+                )
+                # Log training completion
+                total_training_time = time.time() - training_start_time
+                log_training_complete(
+                    total_epochs_run=epoch,
+                    total_time=total_training_time,
+                    best_epoch=best_epoch,
+                    best_val_metrics=best_val_metrics_snapshot,
+                    output_dir=str(out_dir),
+                )
             break
         
         # ---- Visualizations (only rank-0) ----
@@ -2568,6 +3287,9 @@ def train(yaml_path: str, split: str = "train") -> None:
     # ========================================================================
     # TRAINING COMPLETE
     # ========================================================================
+    # Calculate total training time
+    total_training_time = time.time() - training_start_time
+
     # Save final augmentation statistics (rank-0 only)
     if augmentation_stats is not None:
         augmentation_stats.save_csv(final=True)
@@ -2576,23 +3298,24 @@ def train(yaml_path: str, split: str = "train") -> None:
 
     # Print summary (rank-0 only)
     if is_main_process():
-        print(f"\n{'='*80}")
-        print("Training Completed!")
-        print("="*80)
-        print("Best Validation Score: {:.4f} (Epoch {})".format(best_val_score, best_epoch))
-        print("Final EMA Score: {:.4f}".format(early_stop_info.get("val_score_ema", best_val_score)))
-        print("Completed Epochs: {}/{}".format(epoch, tcfg.epochs))
-        if epochs_without_improvement >= early_stop_tracker.patience:
-            print("Stopped early: No improvement for {} epochs".format(early_stop_tracker.patience))
-        print("\nCheckpoints saved in: {}".format(out_dir / 'ckpts'))
-        print("  - best.pt: Best model (epoch {}, val_score={:.4f})".format(best_epoch, best_val_score))
-        print("  - last.pt: Final epoch model (epoch {})".format(epoch))
-        print("  - epoch_XXXX.pt: Periodic checkpoints every {} epochs".format(tcfg.ckpt_every_epochs))
-        print("\nVisualizations saved in: {}".format(out_dir / 'samples'))
-        print("Metrics logged in: {}".format(out_dir / 'training_metrics.csv'))
-        print("Early stopping diagnostics in: val_score_raw, val_score_ema columns")
-        print("="*80 + "\n")
-        logger.info(f"Training completed! Best model at epoch {best_epoch} with val_score={best_val_score:.4f}")
+        # Use enhanced logging for training completion
+        log_training_complete(
+            total_epochs_run=epoch,
+            total_time=total_training_time,
+            best_epoch=best_epoch,
+            best_val_metrics=best_val_metrics_snapshot,
+            output_dir=str(out_dir),
+        )
+
+        # Additional details (non-supercomputer mode)
+        if not IS_SUPERCOMPUTER:
+            print(f"\nCheckpoints saved in: {out_dir / 'ckpts'}")
+            print(f"  - best.pt: Best model (epoch {best_epoch}, val_score={best_val_score:.4f})")
+            print(f"  - last.pt: Final epoch model (epoch {epoch})")
+            print(f"  - epoch_XXXX.pt: Periodic checkpoints every {tcfg.ckpt_every_epochs} epochs")
+            print(f"\nVisualizations saved in: {out_dir / 'samples'}")
+            print(f"Metrics logged in: {out_dir / 'training_metrics.csv'}")
+            print("="*80 + "\n")
 
         # Generate training evolution visualizations (only rank-0)
         try:

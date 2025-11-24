@@ -195,6 +195,17 @@ DEFAULT_FIELDS: List[str] = TRAINING_FIELDS + [
     f for f in DIAGNOSTIC_FIELDS if f not in TRAINING_FIELDS
 ]
 
+
+# ============================================================================
+# FID CONFIGURATION
+# ============================================================================
+# Default FID computation settings (can be overridden in config)
+DEFAULT_FID_CONFIG = {
+    "samples_per_class": 100,  # Number of samples to generate per class
+    "batch_size": 32,          # Batch size for generation/feature extraction
+    "min_samples": 50,         # Minimum samples needed per class for FID
+}
+
 @dataclass
 class CSVTrainingLogger:
     """
