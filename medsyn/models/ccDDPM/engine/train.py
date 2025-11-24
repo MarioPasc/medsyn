@@ -29,6 +29,7 @@ from medsyn.models.ccDDPM.metrics import (
     PerClassMetricsAccumulator,
     compute_class_weight_correlation,
     TorchmetricsFIDComputer,
+    setup_fid_weights_cache,
 )
 from medsyn.models.ccDDPM.training_logging import (
     CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES,
@@ -2874,6 +2875,11 @@ def train(yaml_path: str, split: str = "train") -> None:
         fid_time = 0.0
         if fid_config is not None and is_main_process():
             fid_start_time = time.time()
+
+            # Setup FID weights cache for offline HPC usage
+            fid_weights_path = fid_config.get("weights_path") if isinstance(fid_config, dict) else None
+            setup_fid_weights_cache(fid_weights_path)
+
             if IS_SUPERCOMPUTER:
                 log_phase_start("FID (validation)", 0)
 

@@ -211,3 +211,5 @@ PathMNIST/
 
 distdiff_models/
 .claude/
+# FID weights cache (pre-downloaded for offline HPC)
+.cache/

@@ -551,6 +551,58 @@ def _save_images_to_dir(images: torch.Tensor, out_dir: Path) -> None:
 # TORCHMETRICS FID COMPUTATION (IN-MEMORY)
 # =============================================================================
 
+def setup_fid_weights_cache(weights_path: Optional[str] = None) -> None:
+    """
+    Configure PyTorch cache directory for FID weights (for offline HPC usage).
+
+    This function should be called before initializing TorchmetricsFIDComputer
+    to ensure weights are found in the correct location.
+
+    Args:
+        weights_path: Explicit path to FID weights file, or None to use env vars.
+                     If provided, extracts the cache directory and sets TORCH_HOME.
+
+    Environment variables checked (in order):
+        1. weights_path argument (if provided)
+        2. FID_WEIGHTS_PATH: Full path to weights file
+        3. TORCH_HOME: PyTorch cache directory (should contain hub/checkpoints/)
+
+    Usage:
+        # Option 1: Set via config
+        setup_fid_weights_cache("/path/to/cache/hub/checkpoints/weights-inception-...pth")
+
+        # Option 2: Set TORCH_HOME env var before running
+        export TORCH_HOME=/path/to/cache
+    """
+    import os
+
+    # Check explicit path first
+    path_to_use = weights_path or os.environ.get("FID_WEIGHTS_PATH")
+
+    if path_to_use:
+        path_to_use = Path(path_to_use)
+        if path_to_use.exists():
+            # Extract cache directory (go up from hub/checkpoints/file.pth)
+            # Expected structure: {cache_dir}/hub/checkpoints/{weights_file}
+            if "hub" in path_to_use.parts and "checkpoints" in path_to_use.parts:
+                hub_idx = path_to_use.parts.index("hub")
+                cache_dir = Path(*path_to_use.parts[:hub_idx])
+                os.environ["TORCH_HOME"] = str(cache_dir)
+                logger.info(f"Set TORCH_HOME={cache_dir} for FID weights")
+            else:
+                logger.warning(
+                    f"FID weights path {path_to_use} doesn't match expected structure "
+                    "(should be .../hub/checkpoints/weights-*.pth)"
+                )
+        else:
+            logger.warning(f"FID weights path does not exist: {path_to_use}")
+
+    # Log current TORCH_HOME if set
+    torch_home = os.environ.get("TORCH_HOME")
+    if torch_home:
+        logger.debug(f"Using TORCH_HOME={torch_home} for FID weights")
+
+
 class TorchmetricsFIDComputer:
     """
     In-memory FID computation using torchmetrics.

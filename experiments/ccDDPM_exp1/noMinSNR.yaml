@@ -156,7 +156,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 15              # Stop if no improvement for this many epochs
+      patience: 5              # Stop if no improvement for this many epochs
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -173,7 +173,7 @@ ccddpm:
     ema_decay: 0.9999
 
     use_min_snr: false          # Min-SNR weighting
-    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
@@ -294,7 +294,7 @@ fid:
   # Offline weights path (for HPC clusters without internet)
   # Leave null to use automatic download via TORCH_HOME
   # Example: /scratch/models/torch_cache/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
-  weights_path: null
+  weights_path: /mnt/home/users/tic_163_uma/mpascual/fscratch/pretrained_fid_weights/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
 
 bVAE:
   model:

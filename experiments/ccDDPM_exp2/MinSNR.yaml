@@ -156,7 +156,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 15              # Stop if no improvement for this many epochs
+      patience: 5              # Stop if no improvement for this many epochs
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -179,7 +179,7 @@ ccddpm:
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
-    skip_nonfinite_grads: true  # # Skip batches with non-finite gradients instead of  aborting
+    skip_nonfinite_grads: true  # Skip batches with non-finite gradients instead of  aborting
     output_dir: ${OUTPUT_DIR}
 
     # ========================================================================
@@ -274,6 +274,27 @@ yolo:
   batch: 128
   workers: 8
   training_images: PathMNIST   # one of: PathMNIST | PathMNIST_and_synth | synth
+
+# =============================================================================
+# FID COMPUTATION CONFIGURATION
+# =============================================================================
+# Configuration for Fréchet Inception Distance (FID) computation during
+# training validation. FID requires InceptionV3 weights which are typically
+# downloaded automatically. For HPC clusters without internet, pre-download
+# the weights using: python scripts/predownload_fid_weights.py --cache_dir /path/to/cache
+#
+# Then either:
+#   1. Set TORCH_HOME=/path/to/cache environment variable, OR
+#   2. Set weights_path below to the full path to the weights file
+fid:
+  enabled: true                    # Enable FID computation during validation
+  samples_per_class: 100           # Number of generated samples per class for FID
+  batch_size: 32                   # Batch size for FID feature extraction
+  min_samples: 50                  # Minimum samples needed per class for valid FID
+  # Offline weights path (for HPC clusters without internet)
+  # Leave null to use automatic download via TORCH_HOME
+  # Example: /scratch/models/torch_cache/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
+  weights_path: /mnt/home/users/tic_163_uma/mpascual/fscratch/pretrained_fid_weights/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
 
 bVAE:
   model:
