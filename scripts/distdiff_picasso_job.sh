@@ -143,20 +143,32 @@ if [ "$CACHE_DIR" = "null" ] || [ -z "$CACHE_DIR" ]; then
     CACHE_DIR_ARG=""
     LOCAL_FILES_ONLY_FLAG=""
     echo "Cache dir: Using default HuggingFace cache"
+    # Don't set offline mode if using default cache (may need internet)
+    export HF_HUB_OFFLINE=0
+    export TRANSFORMERS_OFFLINE=0
+    export HF_DATASETS_OFFLINE=0
 else
     CACHE_DIR_ARG="--cache_dir ${CACHE_DIR}"
     # Enable offline mode when using a custom cache directory (HPC without internet)
     LOCAL_FILES_ONLY_FLAG="--local_files_only"
     echo "Cache dir: ${CACHE_DIR}"
     echo "Offline mode: ENABLED (--local_files_only)"
+    
+    # Set environment variables for offline mode (affects all HuggingFace/Transformers libraries)
+    # These ensure no network requests are made even if local_files_only is not set
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export HF_DATASETS_OFFLINE=1
+    
+    # CRITICAL: Set HF_HOME to point to your cache directory
+    # This ensures all HuggingFace libraries look here first
+    export HF_HOME="${CACHE_DIR}"
+    export TRANSFORMERS_CACHE="${CACHE_DIR}"
+    export HF_DATASETS_CACHE="${CACHE_DIR}"
+    
+    echo "Environment: HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, HF_DATASETS_OFFLINE=1"
+    echo "Environment: HF_HOME=${HF_HOME}"
 fi
-
-# Set environment variables for offline mode (affects all HuggingFace/Transformers libraries)
-# These ensure no network requests are made even if local_files_only is not set
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-export HF_DATASETS_OFFLINE=1
-echo "Environment: HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, HF_DATASETS_OFFLINE=1"
 
 # Handle gradient checkpointing flag
 if [ "$GRADIENT_CHECKPOINTING" = "true" ]; then
@@ -296,6 +308,21 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3  # 4 GPUs
 export NCCL_DEBUG=INFO
 export IS_SUPERCOMPUTER=1
 
+# IMPORTANT: If using cache_dir, verify it exists and contains required models
+if [ "$CACHE_DIR" != "null" ] && [ -n "$CACHE_DIR" ]; then
+    if [ ! -d "${CACHE_DIR}" ]; then
+        echo "⚠️  WARNING: CACHE_DIR does not exist: ${CACHE_DIR}"
+        echo "   OpenCLIP and Stable Diffusion will fail to load!"
+        echo "   Please ensure pretrained models are downloaded to this path."
+        exit 1
+    fi
+    
+    echo "✓ Cache directory verified: ${CACHE_DIR}"
+    echo "  Contents:"
+    ls -la "${CACHE_DIR}" 2>/dev/null | head -10
+    echo ""
+fi
+
 # ========================================================================
 # STAGE 1: TRAIN GUIDE MODEL (or skip if already trained)
 # ========================================================================
@@ -361,6 +388,7 @@ if [ "${SKIP_STAGE1}" = false ]; then
         --val-batch-size "${VAL_BATCH_SIZE}" \
         --lr "${LEARNING_RATE}" \
         --epochs "${EPOCHS}" \
+        ${CACHE_DIR_ARG} \
         ${PRETRAINED_FLAG}
 
     STAGE1_EXIT_CODE=$?

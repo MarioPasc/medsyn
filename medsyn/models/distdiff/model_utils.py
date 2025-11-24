@@ -2,13 +2,17 @@
 Copyright (c) Haowei Zhu, 2024
 '''
 
+import os
 import os.path
+import logging
 
 import timm
 import open_clip
 from torch import nn
 import torch
 from dataloader import CUSTOM_TEMPLATES
+
+logger = logging.getLogger(__name__)
 
 
 def wrap_clip_forward(clip_model, text_feature):
@@ -77,13 +81,64 @@ def create_model(model_name, num_classes=1000, pretrained=False,
         # 'laion2b_s34b_b79k' is the standard pretrained version for ViT-B-32
         pretrained_version = 'laion2b_s34b_b79k' if pretrained else None
         print(f"=> OpenCLIP ViT-B-32: pretrained={pretrained}, using weights: {pretrained_version or 'random init'}")
-        model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained=pretrained_version, cache_dir=cache_dir)
-
-        tokenizer = open_clip.get_tokenizer('ViT-B-32')
-        text_tokens = tokenizer(text_descriptions)
-        text_features = model.encode_text(text_tokens).float()
-        text_features /= text_features.norm(dim=-1, keepdim=True)
-        model = wrap_clip_forward(model, text_features)
+        
+        # Handle offline mode with cache_dir
+        if cache_dir and pretrained:
+            # Set HuggingFace cache environment variables
+            os.environ['HF_HOME'] = cache_dir
+            os.environ['TRANSFORMERS_CACHE'] = cache_dir
+            
+            # Check if weights exist in cache
+            model_id = "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+            expected_cache_path = os.path.join(
+                cache_dir, 
+                f"models--{model_id.replace('/', '--')}",
+                "snapshots"
+            )
+            
+            if not os.path.exists(expected_cache_path):
+                logger.warning(
+                    f"Pretrained weights not found in cache: {expected_cache_path}\n"
+                    f"Please download weights using:\n"
+                    f"  python scripts/predownload_distdiff_models.py --cache_dir {cache_dir}"
+                )
+            else:
+                print(f"Using cached weights from: {expected_cache_path}")
+                
+                # Force offline mode for HuggingFace Hub
+                os.environ['HF_HUB_OFFLINE'] = '1'
+        
+        try:
+            # Create model with OpenCLIP
+            # open_clip.create_model_and_transforms handles HF_HOME automatically
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                'ViT-B-32', 
+                pretrained=pretrained_version, 
+                cache_dir=cache_dir
+            )
+            
+            tokenizer = open_clip.get_tokenizer('ViT-B-32')
+            text_tokens = tokenizer(text_descriptions)
+            text_features = model.encode_text(text_tokens).float()
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            model = wrap_clip_forward(model, text_features)
+            
+        except Exception as e:
+            logger.error(f"Failed to load OpenCLIP model: {e}")
+            if cache_dir and "offline mode" in str(e).lower():
+                logger.error(
+                    f"\n{'='*80}\n"
+                    f"OFFLINE MODE ERROR\n"
+                    f"{'='*80}\n"
+                    f"Cache directory: {cache_dir}\n"
+                    f"Model: {model_id}\n"
+                    f"\nThe model weights are not available in the cache.\n"
+                    f"To fix this, run on a machine with internet:\n"
+                    f"  python scripts/predownload_distdiff_models.py \\\n"
+                    f"    --cache_dir {cache_dir}\n"
+                    f"{'='*80}"
+                )
+            raise
     else:
         raise NotImplementedError
 

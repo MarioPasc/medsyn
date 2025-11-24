@@ -73,6 +73,8 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet50', help='mo
 parser.add_argument('--manualSeed', type=int, help='manual seed')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
+parser.add_argument('--cache_dir', type=str, default=None,
+                    help='Directory to cache pretrained weights (for offline HPC execution)')
 #Device options
 parser.add_argument('--accumulate',  type=int, default= 0)
 args = parser.parse_args()
@@ -141,7 +143,8 @@ def main():
     testloader = data.DataLoader(testset, batch_size=args.val_batch_size, shuffle=False, num_workers=args.workers)
 
     # Model
-    model = create_model(args.arch, num_classes, args.pretrained, class_names, dataset_name=args.dataset)
+    model = create_model(args.arch, num_classes, args.pretrained, class_names, 
+                        cache_dir=args.cache_dir, dataset_name=args.dataset)
     model = torch.nn.DataParallel(model).cuda()
 
     cudnn.benchmark = True
