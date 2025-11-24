@@ -2064,6 +2064,23 @@ def train(yaml_path: str, split: str = "train") -> None:
     optimizer_cfg = cfg.ccddpm.optimizer  # Renamed from ocfg
 
     # ========================================================================
+    # FID WEIGHTS SETUP (Before any FID computation)
+    # ========================================================================
+    # Configure FID weights cache for offline HPC usage
+    # This must happen before any torchmetrics FID initialization
+    if hasattr(cfg, 'fid') and cfg.fid.enabled:
+        weights_path = getattr(cfg.fid, 'weights_path', None)
+        if weights_path:
+            from medsyn.models.ccDDPM.metrics import setup_fid_weights_cache
+            setup_fid_weights_cache(weights_path)
+            logger.info(f"FID weights cache configured: {weights_path}")
+        else:
+            logger.warning(
+                "FID enabled but no weights_path specified. "
+                "Will attempt automatic download (requires internet)."
+            )
+
+    # ========================================================================
     # DDP/NCCL DEBUGGING: Set environment variables for better error reporting
     # ========================================================================
     # Enable detailed distributed debugging (helps identify collective operation failures)
