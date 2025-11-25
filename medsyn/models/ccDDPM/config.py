@@ -376,6 +376,7 @@ class CCDDPmCfg:
 class ProjectCfg:
     data_index_json: Path
     ccddpm: CCDDPmCfg
+    fid: Optional[Dict[str, Any]] = None  # FID computation config (optional)
 
 def _as_path(p: Optional[str]) -> Optional[Path]:
     return None if p is None else Path(p).expanduser().resolve()
@@ -539,9 +540,20 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
         augmentation=augmentation_cfg, dist=dist
     )
 
+    # Load FID configuration (optional, for FID computation during validation)
+    fid_config = raw.get("fid")
+    if fid_config:
+        # Expand environment variables in weights_path if present
+        if "weights_path" in fid_config and fid_config["weights_path"]:
+            fid_config["weights_path"] = str(_as_path(fid_config["weights_path"]))
+        logger.info("FID config loaded: enabled=%s, weights_path=%s",
+                   fid_config.get("enabled", False),
+                   fid_config.get("weights_path", "not specified"))
+
     proj = ProjectCfg(
         data_index_json=index_json_path if index_json_path else Path("./dummy.json"),
-        ccddpm=cc_cfg
+        ccddpm=cc_cfg,
+        fid=fid_config
     )
     logger.info("Loaded ccDDPM config. image_size=%d, classes=%d, timesteps=%d, dataloader=%s",
                 cc_cfg.train.image_size, cc_cfg.train.num_classes, cc_cfg.sched.num_train_timesteps, dataloader_type)

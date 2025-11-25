@@ -1949,12 +1949,14 @@ def compute_fid_on_split(
     samples_per_class = fid_config.get("samples_per_class", 100)
     batch_size = fid_config.get("batch_size", 32)
     min_samples = fid_config.get("min_samples", 50)
+    weights_path = fid_config.get("weights_path", None)
 
     # Initialize FID computer
     fid_computer = TorchmetricsFIDComputer(
         num_classes=num_classes,
         device=str(device),
         normalize=True,
+        feature_extractor_weights_path=weights_path,
     )
 
     if not fid_computer.available:
@@ -2883,10 +2885,14 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         # ---- FID Computation (val and test) ----
         # Compute FID on validation and test sets (only on main process)
-        fid_config = getattr(tcfg, 'fid', DEFAULT_FID_CONFIG)
+        # FID config is at the root level (cfg.fid), not in train section
+        fid_config = cfg.fid if hasattr(cfg, 'fid') and cfg.fid else DEFAULT_FID_CONFIG
         if isinstance(fid_config, bool):
             # If fid is just True/False in config, use defaults
             fid_config = DEFAULT_FID_CONFIG if fid_config else None
+        # Only proceed if FID is enabled
+        if fid_config and not fid_config.get("enabled", True):
+            fid_config = None
 
         fid_time = 0.0
         if fid_config is not None and is_main_process():

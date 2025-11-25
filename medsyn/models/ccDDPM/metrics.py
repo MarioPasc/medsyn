@@ -625,6 +625,7 @@ class TorchmetricsFIDComputer:
         feature_dim: int = 2048,
         device: str = "cuda",
         normalize: bool = True,
+        feature_extractor_weights_path: Optional[str] = None,
     ):
         """
         Initialize FID computer.
@@ -634,11 +635,14 @@ class TorchmetricsFIDComputer:
             feature_dim: InceptionV3 feature dimension (default 2048)
             device: Device for computation
             normalize: Whether to normalize images from [0,1] to ImageNet range
+            feature_extractor_weights_path: Path to pre-downloaded InceptionV3 weights
+                                           for offline HPC usage (optional)
         """
         self.num_classes = num_classes
         self.feature_dim = feature_dim
         self.device = device
         self.normalize = normalize
+        self.feature_extractor_weights_path = feature_extractor_weights_path
 
         # Try to import torchmetrics FID
         try:
@@ -666,13 +670,21 @@ class TorchmetricsFIDComputer:
             return
 
         # Global FID metric
-        self._global_fid = self._FID(feature=self.feature_dim, normalize=self.normalize)
+        self._global_fid = self._FID(
+            feature=self.feature_dim,
+            normalize=self.normalize,
+            feature_extractor_weights_path=self.feature_extractor_weights_path
+        )
         self._global_fid = self._global_fid.to(self.device)
 
         # Per-class FID metrics
         self._per_class_fid = {}
         for k in range(self.num_classes):
-            fid = self._FID(feature=self.feature_dim, normalize=self.normalize)
+            fid = self._FID(
+                feature=self.feature_dim,
+                normalize=self.normalize,
+                feature_extractor_weights_path=self.feature_extractor_weights_path
+            )
             self._per_class_fid[k] = fid.to(self.device)
 
         # Track sample counts
