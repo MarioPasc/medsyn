@@ -2070,8 +2070,8 @@ def train(yaml_path: str, split: str = "train") -> None:
     # ========================================================================
     # Configure FID weights cache for offline HPC usage
     # This must happen before any torchmetrics FID initialization
-    if hasattr(cfg, 'fid') and cfg.fid.enabled:
-        weights_path = getattr(cfg.fid, 'weights_path', None)
+    if hasattr(cfg, 'fid') and cfg.fid and cfg.fid.get("enabled"):
+        weights_path = cfg.fid.get('weights_path', None)
         if weights_path:
             setup_fid_weights_cache(weights_path)
             logger.info(f"FID weights cache configured: {weights_path}")
