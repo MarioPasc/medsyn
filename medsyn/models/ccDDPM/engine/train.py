@@ -2071,7 +2071,6 @@ def train(yaml_path: str, split: str = "train") -> None:
     if hasattr(cfg, 'fid') and cfg.fid.enabled:
         weights_path = getattr(cfg.fid, 'weights_path', None)
         if weights_path:
-            from medsyn.models.ccDDPM.metrics import setup_fid_weights_cache
             setup_fid_weights_cache(weights_path)
             logger.info(f"FID weights cache configured: {weights_path}")
         else:
