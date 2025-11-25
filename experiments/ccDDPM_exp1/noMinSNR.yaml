@@ -286,8 +286,9 @@ yolo:
 # Then either:
 #   1. Set TORCH_HOME=/path/to/cache environment variable, OR
 #   2. Set weights_path below to the full path to the weights file
+# """""""THIS FEATURE ONLY WORKS WHEN NOT USING THE NCCL BACKEND FOR DISTRIBUTED TRAINING"""""""
 fid:
-  enabled: true                    # Enable FID computation during validation
+  enabled: false                    # Enable FID computation during validation
   samples_per_class: 100           # Number of generated samples per class for FID
   batch_size: 32                   # Batch size for FID feature extraction
   min_samples: 50                  # Minimum samples needed per class for valid FID
