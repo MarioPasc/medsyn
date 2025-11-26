@@ -469,10 +469,26 @@ def train(yaml_path: str, split: str = "train") -> None:
 
     # Build optimizer using the factory function (supports multiple optimizer types)
     if is_main_process():
-        logger.info(f"Optimizer config: type={optimizer_cfg.type}, lr={optimizer_cfg.lr:.2e}, "
-                   f"weight_decay={optimizer_cfg.wd:.2e}")
+        lr_str = f"{optimizer_cfg.lr:.2e}" if optimizer_cfg.lr is not None else "N/A"
+        wd_str = f"{optimizer_cfg.wd:.2e}" if optimizer_cfg.wd is not None else "N/A"
+        logger.info(f"Optimizer config: type={optimizer_cfg.type}, lr={lr_str}, "
+                   f"weight_decay={wd_str}")
 
     opt = create_optimizer(model.parameters(), optimizer_cfg)
+
+    # Validate optimizer initialization (critical for third-party optimizers like Lion)
+    if not opt.param_groups:
+        raise RuntimeError("Optimizer has no param_groups. This indicates an optimizer initialization failure.")
+    if opt.param_groups[0].get('lr') is None:
+        raise RuntimeError(
+            f"Optimizer '{optimizer_cfg.type}' did not properly set 'lr' in param_groups[0]. "
+            f"Expected lr={optimizer_cfg.lr}, but got None. "
+            f"This is likely a bug in the {optimizer_cfg.type} optimizer implementation. "
+            f"Try switching to a PyTorch native optimizer (adamw, adam, sgd) or check the {optimizer_cfg.type} package version."
+        )
+    if is_main_process():
+        logger.info(f"Optimizer initialized successfully: lr={opt.param_groups[0]['lr']:.2e}")
+
     scaler = GradScaler(device='cuda', enabled=tcfg.mixed_precision)
 
     # Build EMA (CRITICAL: always tracks base_model, not DDP wrapper)

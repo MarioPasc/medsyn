@@ -32,9 +32,10 @@ def log_training_progress(rank: int, epoch: int, step: int, total_steps: int,
 
     # Main process gets detailed logs
     if rank == 0:
+        lr_str = f"{lr:.2e}" if lr is not None else "N/A"
         logger.info(
             f"Epoch {epoch} | Step {step}/{total_steps} ({progress_pct:.1f}%) | "
-            f"{metrics_str} | lr={lr:.2e} | "
+            f"{metrics_str} | lr={lr_str} | "
             f"Elapsed: {format_time(elapsed)} | ETA: {format_time(eta)}"
         )
     else:
@@ -186,8 +187,10 @@ def log_training_config(
     logger.info("")
     logger.info("OPTIMIZER CONFIGURATION:")
     logger.info(f"  Type: {optimizer_cfg.type}")
-    logger.info(f"  Learning rate: {optimizer_cfg.lr:.2e}")
-    logger.info(f"  Weight decay: {optimizer_cfg.wd:.2e}")
+    lr_str = f"{optimizer_cfg.lr:.2e}" if optimizer_cfg.lr is not None else "N/A"
+    wd_str = f"{optimizer_cfg.wd:.2e}" if optimizer_cfg.wd is not None else "N/A"
+    logger.info(f"  Learning rate: {lr_str}")
+    logger.info(f"  Weight decay: {wd_str}")
     if optimizer_cfg.type.lower() in ["adam", "adamw"]:
         logger.info(f"  Betas: {optimizer_cfg.betas}")
         logger.info(f"  Epsilon: {optimizer_cfg.eps}")
@@ -215,7 +218,9 @@ def log_training_config(
     logger.info("DIFFUSION SCHEDULER:")
     logger.info(f"  Train timesteps: {scfg.num_train_timesteps}")
     logger.info(f"  Beta schedule: {scfg.beta_schedule}")
-    logger.info(f"  Beta range: [{scfg.beta_start:.2e}, {scfg.beta_end:.2e}]")
+    beta_start_str = f"{scfg.beta_start:.2e}" if scfg.beta_start is not None else "N/A"
+    beta_end_str = f"{scfg.beta_end:.2e}" if scfg.beta_end is not None else "N/A"
+    logger.info(f"  Beta range: [{beta_start_str}, {beta_end_str}]")
     logger.info(f"  Prediction type: {scfg.prediction_type}")
 
     # Loss configuration
@@ -395,7 +400,8 @@ def log_enhanced_epoch_summary(
     # Training health indicators
     logger.info("")
     logger.info("TRAINING HEALTH:")
-    logger.info(f"  Learning rate: {lr:.2e}")
+    lr_str = f"{lr:.2e}" if lr is not None else "N/A"
+    logger.info(f"  Learning rate: {lr_str}")
     grad_norm = train_metrics.get('grad_norm', 0)
     logger.info(f"  Avg gradient norm: {grad_norm:.4f}")
 
@@ -470,7 +476,8 @@ def log_epoch_start(epoch: int, total_epochs: int, lr: float) -> None:
     """Log epoch start marker with current learning rate."""
     logger.info("")
     logger.info("=" * 80)
-    logger.info(f"STARTING EPOCH {epoch}/{total_epochs} | LR: {lr:.2e}")
+    lr_str = f"{lr:.2e}" if lr is not None else "N/A"
+    logger.info(f"STARTING EPOCH {epoch}/{total_epochs} | LR: {lr_str}")
     logger.info("=" * 80)
 
 

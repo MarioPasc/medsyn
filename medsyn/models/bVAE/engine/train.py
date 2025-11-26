@@ -133,7 +133,9 @@ def _build_scheduler(cfg, optimizer, steps_per_epoch: int):
     # Safety cap for OneCycleLR peak to avoid early KL blow-up
     safe_max = min(sc.max_lr, 3e-4)
     if safe_max < sc.max_lr:
-        logger.warning(f"OneCycleLR max_lr capped from {sc.max_lr:.2e} to {safe_max:.2e} for stability")
+        max_lr_str = f"{sc.max_lr:.2e}" if sc.max_lr is not None else "N/A"
+        safe_max_str = f"{safe_max:.2e}" if safe_max is not None else "N/A"
+        logger.warning(f"OneCycleLR max_lr capped from {max_lr_str} to {safe_max_str} for stability")
     return OneCycleLR(
         optimizer,
         max_lr=safe_max,
