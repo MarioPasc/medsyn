@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -J log_MinSNR_3Gamma_newconfig_ccddpm_parallel
+#SBATCH -J log_MinSNR_3Gamma_Lion_ccddpm_parallel
 #SBATCH --time=2-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -16,15 +16,15 @@ set -euo pipefail
 # ========================================================================
 
 # ---------- Inputs ----------
-EXPERIMENT_NAME="MinSNR_3Gamma_newconfig_ccDDPM_parallel"
+EXPERIMENT_NAME="MinSNR_3Gamma_Lion_ccDDPM_parallel"
 
 DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/PathMNIST.npz"
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/${EXPERIMENT_NAME}"
 
 # Relative to REPO_SRC
-CONFIG_FILE="experiments/ccDDPM_exp2/MinSNR.yaml"
-CONFIG_BACKUP="experiments/ccDDPM_exp2/MinSNR.yaml.backup"
+CONFIG_FILE="experiments/ccDDPM_exp2/MinSNR_Lion.yaml"
+CONFIG_BACKUP="experiments/ccDDPM_exp2/MinSNR_Lion.yaml.backup"
 
 # Supercomputer mode: Disable tqdm, use structured logging for .out/.err files
 export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs

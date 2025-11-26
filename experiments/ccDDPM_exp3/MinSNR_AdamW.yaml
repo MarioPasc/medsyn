@@ -94,14 +94,14 @@ ccddpm:
       - AttnDownBlock2D               # Level 2: 16->8  (with attention)
       - AttnDownBlock2D               # Level 3: 8->4   (with attention)
     up_block_types:
-      - AttnUpBlock2D             # Level 3: 4->8   (with attention)
-      - UpBlock2D                 # Level 2: 8->16  (no attention)
-      - UpBlock2D                 # Level 1: 16->32 (no attention)
-      - UpBlock2D                 # Level 0: 32->64 (no attention)
+      - AttnUpBlock2D                 # Level 3: 4->8   (with attention)
+      - AttnUpBlock2D                 # Level 2: 8->16  (with attention)
+      - AttnUpBlock2D                 # Level 1: 16->32 (with attention)
+      - UpBlock2D                     # Level 0: 32->64 (no attention)
 
     # Attention configuration
     add_attention: true           # Enable attention blocks (required for AttnDownBlock2D/AttnUpBlock2D)
-    attention_head_dim: 8         # Dimension of attention heads (null for default)
+    attention_head_dim: 64         # Dimension of attention heads (null for default)
 
     # Normalization
     norm_num_groups: 32           # Groups for GroupNorm (model_channels must be divisible by this)
@@ -112,10 +112,11 @@ ccddpm:
     dropout: 0.05                  # Dropout rate (0.0 = no dropout)
 
     # Time embedding
-    time_embedding_type: positional  # "positional" or "fourier"
-    freq_shift: 0                    # Frequency shift for time embedding
-    flip_sin_to_cos: true            # Whether to flip sin to cos in time embedding
-    resnet_time_scale_shift: default # "default", "scale_shift", or "ada_group"
+    time_embedding_type: positional      # "positional" or "fourier"
+    freq_shift: 0                        # Frequency shift for time embedding
+    flip_sin_to_cos: true                # Whether to flip sin to cos in time embedding
+    resnet_time_scale_shift: scale_shift # "default", "scale_shift", or "ada_group"
+    # https://huggingface.co/spaces/QinLei086/Curvilinear_Object_Generation_by_Text_and_Segmap/blob/main/model/blocks/ResnetBlock2D.py 
 
     # Sampling configuration
     center_input_sample: false    # Center input sample (for specific preprocessing)
@@ -134,14 +135,19 @@ ccddpm:
     num_class_embeds: null        # Number of class embeddings (null = use num_classes from train config)
     num_train_timesteps: null     # Number of train timesteps (null = use from scheduler config)
 
+    # Ho, J., Jain, A., & Abbeel, P. (2020). "Denoising Diffusion Probabilistic Models." NeurIPS.
+    # Nichol, A., & Dhariwal, P. (2021). "Improved Denoising Diffusion Probabilistic Models." ICML.
+    # Dhariwal, P., & Nichol, A. (2021). "Diffusion Models Beat GANs on Image Synthesis." NeurIPS.
+    # Karras, T., et al. (2022). "Elucidating the Design Space of Diffusion-Based Generative Models." NeurIPS.
+    # Vaswani, A., et al. (2017). "Attention Is All You Need." NeurIPS.
 
   train:
     image_size: 64
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 4
-    epochs: 1000
+    batch_size: 64
+    epochs: 100
 
     # ========================================================================
     # EARLY STOPPING CONFIGURATION
@@ -156,7 +162,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 5              # Stop if no improvement for this many epochs
+      patience: 8              # Stop if no improvement for this many epochs
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -175,6 +181,7 @@ ccddpm:
     use_min_snr: true          # Min-SNR weighting
     min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
+    per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
@@ -185,21 +192,32 @@ ccddpm:
     # ========================================================================
     # LEARNING RATE SCHEDULER CONFIGURATION
     # ========================================================================
-    # Supports: "onecycle", "cosine", "cosine_warmup", "constant", "step"
+    # Supports: "onecycle", "cosine", "linear_warmup_cosine_annealing_lr", "constant", "step"
     lr_scheduler:
-      type: "cosine_warmup"           # LR scheduler type
-      # OneCycle parameters (used when type="onecycle")
-      max_lr: 1.0e-4             # Peak learning rate (default: 2x base lr)
-      pct_start: 0.3             # Fraction of training spent ramping up LR
-      div_factor: 25.0           # Initial LR = max_lr / div_factor
-      final_div_factor: 1000.0   # Final LR = max_lr / (div_factor * final_div_factor)
-      # Cosine parameters (used when type="cosine" or "cosine_warmup")
-      T_max: null                # Number of iterations for cosine (null = total_steps)
-      eta_min: 1.0e-7            # Minimum learning rate
-      warmup_epochs: 5           # Warmup epochs (for cosine_warmup)
-      # Step parameters (used when type="step")
-      step_size: 30              # Decay LR every step_size epochs
-      gamma: 0.1                 # Multiplicative factor of LR decay
+      type: "linear_warmup_cosine_annealing_lr"
+
+      # OneCycle parameters (used when type == "onecycle")
+      max_lr: 1.0e-4
+      pct_start: 0.3
+      div_factor: 25.0
+      final_div_factor: 1000.0
+
+      # Cosine / warmup parameters
+      T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
+      eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
+
+      warmup_epochs: 10        # Number of *epochs* to warm up (converted to steps internally)
+
+      # New parameters for LinearWarmupCosineAnnealingLR-like schedule
+      warmup_start_lr: null   # Absolute LR at the very first step of warmup.
+                              # If null, computed as warmup_start_factor * base_lr.
+      warmup_start_factor: 0.01  # Relative factor: start LR = base_lr * warmup_start_factor
+                                # Only used when warmup_start_lr is null.
+
+      # Step parameters (used when type == "step")
+      step_size: 30
+      gamma: 0.1
+
 
   # ========================================================================
   # OPTIMIZER CONFIGURATION
@@ -207,9 +225,9 @@ ccddpm:
   # Supported types: adamw (default), adam, sgd, rmsprop
   optimizer:
     type: "adamw"              # Optimizer type: adamw, adam, sgd, rmsprop
-    lr: 5.0e-5                 # Learning rate (if you see overflows, try 1.0e-4)
-    wd: 0.0                    # Weight decay (L2 regularization)
-    # Adam/AdamW specific
+    lr: 1.0e-4                 # Learning rate (if you see overflows, try 1.0e-4)
+    wd: 0.01                    # Weight decay (L2 regularization)
+    # Adam/AdamW/Lion specific
     betas: [0.9, 0.999]        # Beta coefficients for Adam
     eps: 1.0e-8                # Epsilon for numerical stability
     amsgrad: false             # Whether to use AMSGrad variant

@@ -55,7 +55,12 @@ def create_lr_scheduler(
     # OneCycle
     # -------------------------------------------------------------------------
     if scheduler_type == "onecycle":
-        max_lr = getattr(scheduler_cfg, "max_lr", base_lr * 2.0)
+        max_lr = getattr(scheduler_cfg, "max_lr", None)
+        # If max_lr is None (or not specified), default to 2x base_lr
+        if max_lr is None:
+            max_lr = base_lr * 2.0
+            logger.debug(f"Computing max_lr from base_lr: 2.0 * {base_lr} = {max_lr}")
+
         pct_start = getattr(scheduler_cfg, "pct_start", 0.3)
         div_factor = getattr(scheduler_cfg, "div_factor", 25.0)
         final_div_factor = getattr(scheduler_cfg, "final_div_factor", 1000.0)
@@ -80,7 +85,10 @@ def create_lr_scheduler(
     # -------------------------------------------------------------------------
     elif scheduler_type == "cosine":
         T_max = getattr(scheduler_cfg, "T_max", None) or total_epochs
-        eta_min = getattr(scheduler_cfg, "eta_min", 1e-7)
+        eta_min = getattr(scheduler_cfg, "eta_min", None)
+        if eta_min is None:
+            eta_min = 1e-7
+            logger.debug(f"Using default eta_min: {eta_min}")
 
         scheduler = optim.lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
@@ -99,7 +107,10 @@ def create_lr_scheduler(
     elif scheduler_type in ("linear_warmup_cosine_annealing_lr", "cosine_warmup"):
         # User-facing: warmup_epochs is in "epochs"
         warmup_epochs = getattr(scheduler_cfg, "warmup_epochs", 5)
-        eta_min = getattr(scheduler_cfg, "eta_min", 1e-7)
+        eta_min = getattr(scheduler_cfg, "eta_min", None)
+        if eta_min is None:
+            eta_min = 1e-7
+            logger.debug(f"Using default eta_min: {eta_min}")
 
         # Convert to iterations (steps) — this matches the Flash implementation,
         # which interprets warmup_epochs and max_epochs as "max number of iterations". :contentReference[oaicite:1]{index=1}
@@ -110,11 +121,15 @@ def create_lr_scheduler(
         # 1) Absolute: warmup_start_lr (overrides everything)
         # 2) Relative: warmup_start_factor * base_lr (default: 1% of base_lr)
         warmup_start_factor = getattr(scheduler_cfg, "warmup_start_factor", 0.01)
-        warmup_start_lr = getattr(
-            scheduler_cfg,
-            "warmup_start_lr",
-            warmup_start_factor * base_lr,
-        )
+        warmup_start_lr = getattr(scheduler_cfg, "warmup_start_lr", None)
+
+        # If warmup_start_lr is None (or not specified), compute from warmup_start_factor
+        if warmup_start_lr is None:
+            warmup_start_lr = warmup_start_factor * base_lr
+            logger.debug(
+                f"Computing warmup_start_lr from warmup_start_factor: "
+                f"{warmup_start_factor} * {base_lr} = {warmup_start_lr}"
+            )
 
         if LinearWarmupCosineAnnealingLR is not None:
             # Use Flash scheduler if available
@@ -132,9 +147,11 @@ def create_lr_scheduler(
             )
         else:
             # Fallback: compose LinearLR + CosineAnnealingLR via SequentialLR
-            if base_lr <= 0.0:
+            # Compute start_factor for LinearLR
+            if base_lr <= 0.0 or warmup_start_lr is None:
                 logger.warning(
-                    "Base LR <= 0 detected when building warmup scheduler; "
+                    f"Base LR <= 0 (base_lr={base_lr}) or warmup_start_lr is None "
+                    f"(warmup_start_lr={warmup_start_lr}) detected when building warmup scheduler; "
                     "falling back to start_factor=0.01."
                 )
                 start_factor = 0.01
