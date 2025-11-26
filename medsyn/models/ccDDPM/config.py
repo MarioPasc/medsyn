@@ -66,7 +66,7 @@ class EarlyStoppingCfg:
 @dataclass
 class LRSchedulerCfg:
     """Configuration for learning rate scheduling."""
-    type: str = "constant"  # Scheduler type: onecycle, cosine, cosine_warmup, step, constant
+    type: str = "constant"  # Scheduler type: onecycle, cosine, cosine_warmup, linear_warmup_cosine_annealing_lr, step, constant
     # OneCycle parameters
     max_lr: Optional[float] = None  # Peak LR (default: 2x base lr from optimizer)
     pct_start: float = 0.3  # Fraction of training spent ramping up LR
@@ -76,6 +76,9 @@ class LRSchedulerCfg:
     T_max: Optional[int] = None  # Number of iterations for cosine (None = total_epochs)
     eta_min: float = 1e-7  # Minimum learning rate
     warmup_epochs: int = 5  # Warmup epochs (for cosine_warmup)
+    # LinearWarmupCosineAnnealingLR parameters
+    warmup_start_lr: Optional[float] = None  # Absolute LR at first warmup step (None = use warmup_start_factor)
+    warmup_start_factor: float = 0.01  # Relative factor: start LR = base_lr * warmup_start_factor (used when warmup_start_lr is None)
     # Step parameters
     step_size: int = 30  # Decay LR every step_size epochs
     gamma: float = 0.1  # Multiplicative factor of LR decay
