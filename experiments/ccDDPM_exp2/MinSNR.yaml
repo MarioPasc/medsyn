@@ -194,19 +194,30 @@ ccddpm:
     # ========================================================================
     # Supports: "onecycle", "cosine", "linear_warmup_cosine_annealing_lr", "constant", "step"
     lr_scheduler:
-      type: "linear_warmup_cosine_annealing_lr"           # LR scheduler type
-      # OneCycle parameters (used when type="onecycle")
-      max_lr: 1.0e-4             # Peak learning rate (default: 2x base lr)
-      pct_start: 0.3             # Fraction of training spent ramping up LR
-      div_factor: 25.0           # Initial LR = max_lr / div_factor
-      final_div_factor: 1000.0   # Final LR = max_lr / (div_factor * final_div_factor)
-      # Cosine parameters (used when type="cosine" or "cosine_warmup")
-      T_max: null                # Number of iterations for cosine (null = total_steps)
-      eta_min: 1.0e-7            # Minimum learning rate
-      warmup_epochs: 5           # Warmup epochs (for cosine_warmup)
-      # Step parameters (used when type="step")
-      step_size: 30              # Decay LR every step_size epochs
-      gamma: 0.1                 # Multiplicative factor of LR decay
+      type: "linear_warmup_cosine_annealing_lr"
+
+      # OneCycle parameters (used when type == "onecycle")
+      max_lr: 1.0e-4
+      pct_start: 0.3
+      div_factor: 25.0
+      final_div_factor: 1000.0
+
+      # Cosine / warmup parameters
+      T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
+      eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
+
+      warmup_epochs: 5        # Number of *epochs* to warm up (converted to steps internally)
+
+      # New parameters for LinearWarmupCosineAnnealingLR-like schedule
+      warmup_start_lr: null   # Absolute LR at the very first step of warmup.
+                              # If null, computed as warmup_start_factor * base_lr.
+      warmup_start_factor: 0.01  # Relative factor: start LR = base_lr * warmup_start_factor
+                                # Only used when warmup_start_lr is null.
+
+      # Step parameters (used when type == "step")
+      step_size: 30
+      gamma: 0.1
+
 
   # ========================================================================
   # OPTIMIZER CONFIGURATION

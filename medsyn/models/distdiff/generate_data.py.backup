@@ -938,17 +938,16 @@ def main(args):
     image_processor = copy.deepcopy(pipeline.image_processor)
     del pipeline
 
-    # Allow all parallel processes to create their own output directories
-    # (Fixed for parallel generation across multiple GPUs)
-    # # 获取当前时间
-    # now = datetime.now()
-    # # 格式化时间为字符串，例如：2023-03-29_14-13-52
-    # time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+    if accelerator.is_main_process:
+        # # 获取当前时间
+        # now = datetime.now()
+        # # 格式化时间为字符串，例如：2023-03-29_14-13-52
+        # time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
 
-    if args.output_dir is not None:
-        # args.output_dir = f"{args.output_dir}_scale_{args.guidance_scale}_{args.num_images_per_prompt}x/"
-        os.makedirs(args.output_dir, exist_ok=True)
-        os.makedirs(args.logging_dir, exist_ok=True)
+        if args.output_dir is not None:
+            # args.output_dir = f"{args.output_dir}_scale_{args.guidance_scale}_{args.num_images_per_prompt}x/"
+            os.makedirs(args.output_dir, exist_ok=True)
+            os.makedirs(args.logging_dir, exist_ok=True)
 
     # Load the tokenizer
     if args.tokenizer_name:
@@ -1147,11 +1146,11 @@ def main(args):
     # args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
     # We need to initialize the trackers we use, and also store our configuration.
-    # Allow each process to track independently (each split has its own tracker)
-    # (Fixed for parallel generation across multiple GPUs)
-    tracker_config = vars(copy.deepcopy(args))
-    tracker_config.pop("validation_images")
-    accelerator.init_trackers("dreambooth", config=tracker_config)
+    # The trackers initializes automatically on the main process.
+    if accelerator.is_main_process:
+        tracker_config = vars(copy.deepcopy(args))
+        tracker_config.pop("validation_images")
+        accelerator.init_trackers("dreambooth", config=tracker_config)
 
     # Train!
     # total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -1282,8 +1281,7 @@ def main(args):
                     args.seed)
                 latents = noisy_model_input.to(dtype=weight_dtype)
 
-                # Use is_local_main_process for logging to avoid excessive logs while allowing all processes to log
-                if accelerator.is_local_main_process: logging.info("Guidance timesteps: %s", ", ".join([str(x) for x in guide_timesteps]))
+                if accelerator.is_main_process: logging.info("Guidance timesteps: %s", ", ".join([str(x) for x in guide_timesteps]))
                 for i, t in tqdm_bar(enumerate(timesteps[start_index:]),
                                      total=len(timesteps[start_index:]), desc="Denoise steps",
                                      disable=not accelerator.is_local_main_process):
@@ -1293,13 +1291,13 @@ def main(args):
                                                      class_labels, vae, image_encoder, image_processor, weight_dtype,
                                                      generator, total_global_proto, total_local_proto)
                         latents, x_0 = denoise_one_step(latents, noise_scheduler, t, unet, prompt_embeds, class_labels)
-                        if accelerator.is_local_main_process: logging.info(
+                        if accelerator.is_main_process: logging.info(
                             f"transform guidance in {t} step for {args.guidance_period} steps period, score: {score.item():.4f}")
                     elif t in guide_timesteps and args.guidance_type == "direct_guidance":
                         latents, x_0, score = direct_guidance(latents, batch, t, noise_scheduler, unet,
                                                        prompt_embeds, class_labels, vae, image_encoder, image_processor,
                                                        weight_dtype, generator, total_global_proto, total_local_proto)
-                        if accelerator.is_local_main_process: logging.info(
+                        if accelerator.is_main_process: logging.info(
                             f"start direct guidance in {t}/[{args.guidance_step} - "
                             f"{args.guidance_step - args.guidance_period}] step, score: {score.item():.4f}")
                     else:
@@ -1310,27 +1308,26 @@ def main(args):
                     decoded_original_latent = \
                         vae.decode(latents / vae.config.scaling_factor, return_dict=False, generator=generator)[0]
 
-                    # Allow all parallel processes to save their split's images
-                    # (Fixed for parallel generation across multiple GPUs)
-                    image = decoded_original_latent
-                    image = image_processor.postprocess(image, output_type="pt",
-                                                        do_denormalize=[True] * image.shape[0])
+                    if accelerator.is_main_process:
+                        image = decoded_original_latent
+                        image = image_processor.postprocess(image, output_type="pt",
+                                                            do_denormalize=[True] * image.shape[0])
 
-                    for i in range(len(batch["image_paths"])):
-                        image_file_path = os.path.basename(batch["image_paths"][i]).split(".")[0]
-                        class_name = batch["class_names"][i]
-                        path = f'{args.output_dir}/{class_name}/{image_file_path}_expand_{image_i}.png'
+                        for i in range(len(batch["image_paths"])):
+                            image_file_path = os.path.basename(batch["image_paths"][i]).split(".")[0]
+                            class_name = batch["class_names"][i]
+                            path = f'{args.output_dir}/{class_name}/{image_file_path}_expand_{image_i}.png'
 
-                        try:
-                            os.makedirs(os.path.dirname(path), exist_ok=True)
-                            save_image([image[i]], path)
-                            generated_count += 1
+                            try:
+                                os.makedirs(os.path.dirname(path), exist_ok=True)
+                                save_image([image[i]], path)
+                                generated_count += 1
 
-                            if generated_count <= 5 or generated_count % 100 == 0:
-                                logger.info(f"Saved image {generated_count}: {path}")
-                        except Exception as e:
-                            logger.error(f"Failed to save image to {path}: {e}")
-                            raise
+                                if generated_count <= 5 or generated_count % 100 == 0:
+                                    logger.info(f"Saved image {generated_count}: {path}")
+                            except Exception as e:
+                                logger.error(f"Failed to save image to {path}: {e}")
+                                raise
 
                 torch.cuda.empty_cache()
 

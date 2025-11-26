@@ -95,7 +95,7 @@ def create_lr_scheduler(
             "Using CosineAnnealingLR scheduler: "
             f"T_max={T_max}, eta_min={eta_min}"
         )
-        return scheduler, False  # step per epoch
+        return scheduler, False  # dont step per epoch
 
     # -------------------------------------------------------------------------
     # Linear warmup + cosine decay
@@ -186,7 +186,7 @@ def create_lr_scheduler(
             "Using StepLR scheduler: "
             f"step_size={step_size}, gamma={gamma}"
         )
-        return scheduler, False  # step per epoch
+        return scheduler, False  # dont step per epoch
 
     # -------------------------------------------------------------------------
     # Constant LR / no scheduler
@@ -204,4 +204,3 @@ def create_lr_scheduler(
             scheduler_type,
         )
         return None, False
-from typing import Optional, Tuple
