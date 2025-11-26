@@ -94,14 +94,14 @@ ccddpm:
       - AttnDownBlock2D               # Level 2: 16->8  (with attention)
       - AttnDownBlock2D               # Level 3: 8->4   (with attention)
     up_block_types:
-      - AttnUpBlock2D             # Level 3: 4->8   (with attention)
-      - UpBlock2D                 # Level 2: 8->16  (no attention)
-      - UpBlock2D                 # Level 1: 16->32 (no attention)
-      - UpBlock2D                 # Level 0: 32->64 (no attention)
+      - AttnUpBlock2D                 # Level 3: 4->8   (with attention)
+      - AttnUpBlock2D                 # Level 2: 8->16  (with attention)
+      - AttnUpBlock2D                 # Level 1: 16->32 (with attention)
+      - UpBlock2D                     # Level 0: 32->64 (no attention)
 
     # Attention configuration
     add_attention: true           # Enable attention blocks (required for AttnDownBlock2D/AttnUpBlock2D)
-    attention_head_dim: 8         # Dimension of attention heads (null for default)
+    attention_head_dim: 64         # Dimension of attention heads (null for default)
 
     # Normalization
     norm_num_groups: 32           # Groups for GroupNorm (model_channels must be divisible by this)
@@ -112,10 +112,11 @@ ccddpm:
     dropout: 0.05                  # Dropout rate (0.0 = no dropout)
 
     # Time embedding
-    time_embedding_type: positional  # "positional" or "fourier"
-    freq_shift: 0                    # Frequency shift for time embedding
-    flip_sin_to_cos: true            # Whether to flip sin to cos in time embedding
-    resnet_time_scale_shift: default # "default", "scale_shift", or "ada_group"
+    time_embedding_type: positional      # "positional" or "fourier"
+    freq_shift: 0                        # Frequency shift for time embedding
+    flip_sin_to_cos: true                # Whether to flip sin to cos in time embedding
+    resnet_time_scale_shift: scale_shift # "default", "scale_shift", or "ada_group"
+    # https://huggingface.co/spaces/QinLei086/Curvilinear_Object_Generation_by_Text_and_Segmap/blob/main/model/blocks/ResnetBlock2D.py 
 
     # Sampling configuration
     center_input_sample: false    # Center input sample (for specific preprocessing)
@@ -134,13 +135,18 @@ ccddpm:
     num_class_embeds: null        # Number of class embeddings (null = use num_classes from train config)
     num_train_timesteps: null     # Number of train timesteps (null = use from scheduler config)
 
+    # Ho, J., Jain, A., & Abbeel, P. (2020). "Denoising Diffusion Probabilistic Models." NeurIPS.
+    # Nichol, A., & Dhariwal, P. (2021). "Improved Denoising Diffusion Probabilistic Models." ICML.
+    # Dhariwal, P., & Nichol, A. (2021). "Diffusion Models Beat GANs on Image Synthesis." NeurIPS.
+    # Karras, T., et al. (2022). "Elucidating the Design Space of Diffusion-Based Generative Models." NeurIPS.
+    # Vaswani, A., et al. (2017). "Attention Is All You Need." NeurIPS.
 
   train:
     image_size: 64
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 4
+    batch_size: 256
     epochs: 1000
 
     # ========================================================================
@@ -175,6 +181,7 @@ ccddpm:
     use_min_snr: true          # Min-SNR weighting
     min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
+    per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
@@ -185,9 +192,9 @@ ccddpm:
     # ========================================================================
     # LEARNING RATE SCHEDULER CONFIGURATION
     # ========================================================================
-    # Supports: "onecycle", "cosine", "cosine_warmup", "constant", "step"
+    # Supports: "onecycle", "cosine", "linear_warmup_cosine_annealing_lr", "constant", "step"
     lr_scheduler:
-      type: "cosine_warmup"           # LR scheduler type
+      type: "linear_warmup_cosine_annealing_lr"           # LR scheduler type
       # OneCycle parameters (used when type="onecycle")
       max_lr: 1.0e-4             # Peak learning rate (default: 2x base lr)
       pct_start: 0.3             # Fraction of training spent ramping up LR

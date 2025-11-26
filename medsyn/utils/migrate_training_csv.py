@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any
 
-from medsyn.models.ccDDPM.training_logging import TRAINING_FIELDS, DIAGNOSTIC_FIELDS
+from medsyn.models.ccDDPM.engine.logging.training_logging import TRAINING_FIELDS, DIAGNOSTIC_FIELDS
 
 
 def detect_per_class_columns(fieldnames: List[str]) -> List[str]:

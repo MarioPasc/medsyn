@@ -25,6 +25,33 @@ def ddp_is_enabled(cfg) -> bool:
     """
     return cfg.ccddpm.dist.enabled and torch.cuda.device_count() > 1
 
+def sync_metrics_dict(metrics_dict: Dict[str, float], device: torch.device, use_ddp: bool) -> Dict[str, float]:
+    """
+    Synchronize a dictionary of metrics across all DDP processes by averaging.
+
+    Args:
+        metrics_dict: Dictionary of metric name -> value
+        device: Device tensors are on
+        use_ddp: Whether DDP is enabled
+
+    Returns:
+        Dictionary with globally averaged metrics
+    """
+    if not use_ddp:
+        return metrics_dict
+
+    synced_metrics = {}
+    for key, value in metrics_dict.items():
+        if isinstance(value, (int, float)):
+            # Convert to tensor and synchronize
+            tensor = torch.tensor([float(value)], device=device, dtype=torch.float32)
+            synced_tensor = all_reduce_mean(tensor)
+            synced_metrics[key] = synced_tensor.item()
+        else:
+            # Non-numeric values (shouldn't happen for metrics, but just in case)
+            synced_metrics[key] = value
+
+    return synced_metrics
 
 def ddp_init(cfg) -> Dict[str, Any]:
     """

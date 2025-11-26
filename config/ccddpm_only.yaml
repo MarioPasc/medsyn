@@ -231,50 +231,6 @@ ccddpm:
     num_inference_steps: 1000
     out_dir: ${OUTPUT_DIR}/samples
 
-
-# Generation configuration 
-generate:
-  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py bVAE is DEPRECATED at this moment
-  checkpoint: ${OUTPUT_DIR}/ckpts/best.pt  # absolute path to checkpoint
-  npz_with_synth_images:
-    save_to: ${OUTPUT_DIR}/synth
-    train:
-      classes:
-        0: 3519
-        1: 3376
-        2: 2525
-        3: 2484
-        4: 4879
-        5: 703
-        6: 4999
-        7: 3484
-        8: 1
-    val:
-      classes:
-        0: 391
-        1: 375
-        2: 280
-        3: 276
-        4: 542
-        5: 78
-        6: 555
-        7: 387
-        8: 1
-
-yolo:
-  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
-  # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
-  # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
-  # is preferred as the main source.
-  model: /mnt/home/users/tic_163_uma/mpascual/execs/YOLO_PATHMNIST/yolov8n-cls.pt        # any Ultralytics classify model
-  project: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/yolo_classifier
-  name: picasso_yolo_parallel
-  imgsz: 64
-  epochs: 100
-  batch: 128
-  workers: 8
-  training_images: PathMNIST   # one of: PathMNIST | PathMNIST_and_synth | synth
-
 # =============================================================================
 # FID COMPUTATION CONFIGURATION
 # =============================================================================
@@ -287,7 +243,7 @@ yolo:
 #   1. Set TORCH_HOME=/path/to/cache environment variable, OR
 #   2. Set weights_path below to the full path to the weights file
 fid:
-  enabled: true                    # Enable FID computation during validation
+  enabled: false                    # Enable FID computation during validation
   samples_per_class: 100           # Number of generated samples per class for FID
   batch_size: 32                   # Batch size for FID feature extraction
   min_samples: 50                  # Minimum samples needed per class for valid FID
@@ -295,73 +251,4 @@ fid:
   # Leave null to use automatic download via TORCH_HOME
   # Example: /scratch/models/torch_cache/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
   weights_path: null
-
-bVAE:
-  model:
-    in_channels: 3
-    img_size: 64
-    latent_dim: 32
-    base_channels: 64
-    num_down: 4
-    decoder_sigmoid: true
-    num_classes: 9
-    conditioning: "film"           # keep FiLM in encoder
-    decoder_conditioning: false    # NEW: off in decoder until KL>0
-    class_embed_dim: 64
-    use_class_prior: false    # UPDATED: start vanilla; enable after recon stabilizes
-
-  train:
-    epochs: 100               # UPDATED: longer training for cyclical schedule (was 80)
-    batch_size: 16
-    num_workers: 4
-    device: "cuda"
-    mixed_precision: true
-    grad_clip_norm: 5.0            # UPDATED: less aggressive clipping (was 1.0)
-    seed: 17
-    output_dir: "/home/mpascual/research/datasets/medsyn/bVAE"
-    save_every_epoch: 10
-    # Lagging-inference mitigation: extra encoder updates in early training
-    encoder_extra_steps: 2    # UPDATED: mitigate lagging inference (was 1)
-    encoder_heavy_epochs: 5   # UPDATED: first epochs only (was 15)
-
-  optim:
-    optimizer: "adamw"
-    lr_init: 0.0001           # UPDATED: lower init LR for stability (was 0.0002)
-    weight_decay: 0.0001      # UPDATED: moderate regularization (was 0.001)
-    betas: [0.9, 0.999]
-    eps: 1.0e-8
-
-  sched:
-    use_onecycle: true
-    max_lr: 0.0001            # UPDATED: capped at 1e-4 for stability (was 2e-4)
-    pct_start: 0.5            # UPDATED: longer warm-up, later peak (was 0.4)
-    div_factor: 10.0          # UPDATED: smoother start (was 25.0)
-    final_div_factor: 1000.0  # UPDATED: gentler final decay (was 10000.0)
-
-  loss:
-    recon_type: "l1"          # UPDATED: SSIM later after stability (was l1_ssim)
-    l1_weight: 1.0            # para l1|l1_ssim
-    ssim_weight: 0.85         # para l1_ssim (1-SSIM)
-    beta: 1.0                 # valor techo; el scheduler lo modula
-    kld_weight: 1.0
-    recon_weight: 1.0
-    free_bits_nats: 0.5            # UPDATED: per-dim; stops tiny-KL from shrinking further (was 0.0)
-    beta_schedule:            # cyclical β to avoid vanishing KL
-      type: "cyclical"        # UPDATED: cyclical to prevent KL vanishing (was monotonic)
-      beta_min: 0.0
-      beta_max: 0.3           # UPDATED: gentler ceiling for 64×64 tiles (was 0.6)
-      cycles: 4               # UPDATED: 4 cycles for gradual KL recovery (was 3)
-      ratio_increase: 0.7     # UPDATED: longer warm-up phase (was 0.5)
-    capacity:
-      use: false              # UPDATED: start disabled to avoid early KL pinning (was true)
-      C_max: 1.0              # UPDATED: modest per-dim target (was 2.0)
-      steps_to_max: 70000     # UPDATED: ramp over ~70% of training (was 30000)
-      gamma: 50.0             # UPDATED: gentler pull when enabled (was 200.0)
-    prior_reg_w: 0.0001       # L2 regularization on class prior parameters
-    infovae_mmd:              # InfoVAE-MMD: regulariza q(z) hacia p(z|y)
-      use: false              # UPDATED: disable until KL stabilizes (was true)
-      weight: 0.5             # UPDATED: conservative weight (was 3.0)
-      kernel: "rbf"
-    per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
-    per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
 

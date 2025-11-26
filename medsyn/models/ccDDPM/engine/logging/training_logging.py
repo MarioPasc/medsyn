@@ -7,6 +7,11 @@ from typing import Dict, List, Optional
 import csv
 import math
 import time
+import logging
+import torch
+import torch.nn as nn
+
+logger = logging.getLogger("medsyn.ccddpm.train")
 
 # Number of classes in PathMNIST (used for generating per-class column names)
 NUM_CLASSES = 9
@@ -229,25 +234,20 @@ class CSVTrainingLogger:
                 w.writeheader()
 
     def log_epoch(self, epoch: int, split: str, lr: float, metrics: Dict[str, float]) -> None:
-        """
-        Log metrics for a single epoch. Updates CSV immediately.
+        """Log metrics for a single epoch. Updates CSV immediately."""
+        assert self.fieldnames is not None, "fieldnames must be initialized"
         
-        Args:
-            epoch: Current epoch number
-            split: 'train' or 'val' or 'test'
-            lr: Current learning rate
-            metrics: Dictionary of metric name -> value
-        """
         row = {k: "" for k in self.fieldnames}
         row.update({
-            "epoch": int(epoch),
+            "epoch": str(epoch),
             "split": split,
-            "lr": float(lr),
-            "time_s": float(time.time())
+            "lr": str(lr),
+            "time_s": str(time.time())
         })
         for k, v in metrics.items():
             if k in row:
-                row[k] = v
+                row[k] = str(v)  # Convert to string
+        
         with Path(self.csv_path).open("a", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=self.fieldnames)
             w.writerow(row)
@@ -367,3 +367,65 @@ class EpochAverager:
         self.counts.clear()
         self.per_class_counts.clear()
         self.total_samples = 0
+
+
+def save_class_embeddings_trajectory(
+    model: nn.Module,
+    epoch: int,
+    output_path: Path,
+) -> None:
+    """
+    Append current epoch's class-embedding matrix into a single .pt trajectory file.
+
+    The function expects `model` to have `class_embed.emb.weight`.
+    It accumulates snapshots over epochs in a single file with:
+      - "epochs": list of epoch numbers
+      - "embeddings": tensor [E, num_classes, emb_dim]
+      - "num_classes": int
+      - "emb_dim": int
+
+    Args:
+        model: The model containing class_embed.emb.weight
+        epoch: Current epoch number
+        output_path: Path to save the trajectory file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Current embedding matrix [num_classes, emb_dim]
+    emb_weight = model.class_embed.emb.weight.detach().cpu().clone() # type: ignore
+
+    if output_path.exists():
+        # Load existing trajectory and append
+        state = torch.load(output_path, map_location="cpu")
+        epochs = state.get("epochs", [])
+        prev_emb = state.get("embeddings", None)
+
+        # Ensure shapes are consistent
+        if prev_emb is not None:
+            if prev_emb.shape[1:] != emb_weight.shape:
+                raise RuntimeError(
+                    f"Embedding shape changed from {tuple(prev_emb.shape[1:])} "
+                    f"to {tuple(emb_weight.shape)}; cannot append trajectory."
+                )
+            embeddings = torch.cat([prev_emb, emb_weight.unsqueeze(0)], dim=0)
+        else:
+            embeddings = emb_weight.unsqueeze(0)
+        epochs.append(int(epoch))
+    else:
+        # First snapshot
+        epochs = [int(epoch)]
+        embeddings = emb_weight.unsqueeze(0)
+
+    state_out = {
+        "epochs": epochs,
+        "embeddings": embeddings,              # [E, num_classes, emb_dim]
+        "num_classes": embeddings.shape[1],
+        "emb_dim": embeddings.shape[2],
+    }
+
+    torch.save(state_out, output_path)
+    logger.info(
+        "Saved class embedding snapshot for epoch %d to %s "
+        "(total snapshots: %d)",
+        epoch, str(output_path), len(epochs)
+    )

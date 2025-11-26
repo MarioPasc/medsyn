@@ -1,0 +1,37 @@
+# Example YAML configuration snippet for per-class weight temperature
+
+ccddpm:
+  train:
+    # Enable per-class loss weighting based on training set class frequencies
+    per_class_loss_weighting: true
+    
+    # Temperature parameter for class weight distribution (default: 1.0)
+    # Controls the sharpness of the weight distribution:
+    #
+    # - temperature < 1.0: More uniform weights (less aggressive reweighting)
+    #   * Example: 0.5 = square root of inverse frequency
+    #   * Use when: Small imbalance or want gradual rebalancing
+    #
+    # - temperature = 1.0: Standard inverse frequency weighting (default)
+    #   * Linear inverse relationship with class frequency
+    #   * Use when: Default balanced training
+    #
+    # - temperature > 1.0: More extreme weights (aggressive reweighting)
+    #   * Example: 2.0 = square of inverse frequency
+    #   * Use when: Severe imbalance or minority classes very important
+    #   * Warning: Very high values (>2.0) may destabilize training
+    #
+    # Recommended ranges by imbalance ratio:
+    #   - Mild (2-5x):         temp ∈ [0.8, 1.2]
+    #   - Moderate (5-20x):    temp ∈ [1.0, 1.5]
+    #   - Severe (>20x):       temp ∈ [1.2, 2.0]
+    #
+    # Example results for [900, 90, 10] samples (90:9:1 ratio):
+    #   temp=0.5: weights = [0.22, 0.70, 2.08]  (9.5x boost for minority)
+    #   temp=1.0: weights = [0.03, 0.30, 2.67]  (90x boost for minority)
+    #   temp=2.0: weights = [0.00, 0.04, 2.96]  (8100x boost for minority)
+    per_class_weight_temperature: 1.0
+    
+    # Other training parameters...
+    epochs: 50
+    batch_size: 64

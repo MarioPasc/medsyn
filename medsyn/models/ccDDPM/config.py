@@ -318,6 +318,7 @@ class TrainCfg:
     use_tqdm: bool = True  # Enable/disable tqdm progress bars (useful for HPC logs)
     skip_nonfinite_grads: bool = False  # If True, skip batches with non-finite gradients; if False, raise error
     per_class_loss_weighting: bool = False  # Enable per-class loss weighting based on class frequencies
+    per_class_weight_temperature: float = 1.0  # Temperature for class weight distribution (>1: more extreme, <1: more uniform)
     output_dir: Path = Path("./outputs/ccddpm")
     # New: Early stopping configuration (replaces simple patience)
     early_stopping: Optional[EarlyStoppingCfg] = None
