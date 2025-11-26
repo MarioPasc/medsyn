@@ -146,7 +146,7 @@ ccddpm:
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 256
+    batch_size: 128
     epochs: 100
 
     # ========================================================================
@@ -163,7 +163,7 @@ ccddpm:
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
       patience: 8              # Stop if no improvement for this many epochs
-      metric: "loss"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
+      metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
       ema_alpha: 0.7           # EMA smoothing factor (0 = no smoothing, 0.9 = heavy smoothing)
