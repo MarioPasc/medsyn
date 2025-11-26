@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#SBATCH -J log_MinSNR_5Gamma_ccddpm_parallel
-#SBATCH --time=20:00:00
+#SBATCH -J log_MinSNR_3Gamma_newconfig_ccddpm_parallel
+#SBATCH --time=2-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --mem=128G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:2
 #SBATCH --output=%x.%j.out
@@ -16,7 +16,7 @@ set -euo pipefail
 # ========================================================================
 
 # ---------- Inputs ----------
-EXPERIMENT_NAME="MinSNR_5Gamma_ccDDPM_parallel"
+EXPERIMENT_NAME="MinSNR_3Gamma_newconfig_ccDDPM_parallel"
 
 DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/PathMNIST.npz"
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"

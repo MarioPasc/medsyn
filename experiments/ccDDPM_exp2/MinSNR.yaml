@@ -147,7 +147,7 @@ ccddpm:
     class_embed_dim: 32
     num_classes: 9
     batch_size: 256
-    epochs: 1000
+    epochs: 100
 
     # ========================================================================
     # EARLY STOPPING CONFIGURATION
@@ -162,8 +162,8 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 5              # Stop if no improvement for this many epochs
-      metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
+      patience: 8              # Stop if no improvement for this many epochs
+      metric: "loss"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
       ema_alpha: 0.7           # EMA smoothing factor (0 = no smoothing, 0.9 = heavy smoothing)
@@ -179,7 +179,7 @@ ccddpm:
     ema_decay: 0.9999
 
     use_min_snr: true          # Min-SNR weighting
-    min_snr_gamma: 5.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
     per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
 
@@ -206,7 +206,7 @@ ccddpm:
       T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
       eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
 
-      warmup_epochs: 5        # Number of *epochs* to warm up (converted to steps internally)
+      warmup_epochs: 10        # Number of *epochs* to warm up (converted to steps internally)
 
       # New parameters for LinearWarmupCosineAnnealingLR-like schedule
       warmup_start_lr: null   # Absolute LR at the very first step of warmup.
@@ -224,10 +224,10 @@ ccddpm:
   # ========================================================================
   # Supported types: adamw (default), adam, sgd, rmsprop
   optimizer:
-    type: "adamw"              # Optimizer type: adamw, adam, sgd, rmsprop
-    lr: 5.0e-5                 # Learning rate (if you see overflows, try 1.0e-4)
-    wd: 0.0                    # Weight decay (L2 regularization)
-    # Adam/AdamW specific
+    type: "lion"              # Optimizer type: adamw, adam, sgd, rmsprop
+    lr: 1.0e-4                 # Learning rate (if you see overflows, try 1.0e-4)
+    wd: 0.01                    # Weight decay (L2 regularization)
+    # Adam/AdamW/Lion specific
     betas: [0.9, 0.999]        # Beta coefficients for Adam
     eps: 1.0e-8                # Epsilon for numerical stability
     amsgrad: false             # Whether to use AMSGrad variant

@@ -6,13 +6,9 @@ from torch.optim.lr_scheduler import _LRScheduler
 
 import logging
 
-# Optional import of Flash scheduler
-try:
-    # Signature: (optimizer, warmup_epochs, max_epochs, warmup_start_lr=0.0, eta_min=0.0, last_epoch=-1)
-    # warmup_epochs / max_epochs are *iterations* (steps), not necessarily "epochs" as in your training loop. 
-    from flash.core.optimizers import LinearWarmupCosineAnnealingLR  # type: ignore[attr-defined]
-except Exception:  # flash not installed or misconfigured
-    LinearWarmupCosineAnnealingLR = None  # type: ignore[assignment]
+from medsyn.models.ccDDPM.engine.utils.linearwarmupcosineannealinglr import (
+    LinearWarmupCosineAnnealingLR,
+)
 
 
 logger = logging.getLogger("medsyn.ccddpm.train")
