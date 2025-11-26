@@ -8,7 +8,8 @@ from tqdm import tqdm
 from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import PerClassMetricsAccumulator
 from medsyn.models.ccDDPM.engine.logging.training_logging import EpochAverager, NUM_CLASSES
-from medsyn.models.ccDDPM.engine.utils.math import compute_batch_metrics, sync_metrics_dict
+from medsyn.models.ccDDPM.engine.utils.math import compute_batch_metrics
+from medsyn.models.ccDDPM.engine.utils.ddp_utils import sync_metrics_dict   
 from medsyn.models.ccDDPM.engine.utils.ddp_utils import is_main_process
 from medsyn.models.ccDDPM.engine.logging.logging import log_validation_progress, should_log_step
 
