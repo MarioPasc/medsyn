@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -J log_MinSNR_3Gamma_newconfig_ccddpm_parallel
+#SBATCH -J log_MinSNR_3Gamma_AdamW_ccddpm_parallel
 #SBATCH --time=2-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -23,8 +23,8 @@ REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/${EXPERIMENT_NAME}"
 
 # Relative to REPO_SRC
-CONFIG_FILE="experiments/ccDDPM_exp4/MinSNR_AdamW.yaml"
-CONFIG_BACKUP="experiments/ccDDPM_exp4/MinSNR_AdamW.yaml.backup"
+CONFIG_FILE="experiments/ccDDPM_exp3/MinSNR_AdamW.yaml"
+CONFIG_BACKUP="experiments/ccDDPM_exp3/MinSNR_AdamW.yaml.backup"
 
 # Supercomputer mode: Disable tqdm, use structured logging for .out/.err files
 export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs
