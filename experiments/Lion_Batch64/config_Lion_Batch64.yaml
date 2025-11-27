@@ -26,7 +26,7 @@ ccddpm:
   # To use multi-GPU training, launch with torchrun:
   # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM picasso_cfg.yaml
   dist:
-    enabled: true  # Set to true to enable multi-GPU distributed training
+    enabled: false  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
     num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
