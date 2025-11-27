@@ -146,7 +146,7 @@ ccddpm:
     in_channels: 3
     class_embed_dim: 32
     num_classes: 9
-    batch_size: 128
+    batch_size: 64
     epochs: 100
 
     # ========================================================================

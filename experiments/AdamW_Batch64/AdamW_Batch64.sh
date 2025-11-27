@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#SBATCH -J log_MinSNR_3Gamma_Lion_ccddpm_parallel
-#SBATCH --time=2-12:00:00
+#SBATCH -J log_AdamW_Batch64
+#SBATCH --time=1-12:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:2
 #SBATCH --output=%x.%j.out
@@ -16,15 +16,15 @@ set -euo pipefail
 # ========================================================================
 
 # ---------- Inputs ----------
-EXPERIMENT_NAME="MinSNR_3Gamma_Lion_ccDDPM_parallel"
+EXPERIMENT_NAME="AdamW_Batch64"
 
 DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/PathMNIST.npz"
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/${EXPERIMENT_NAME}"
 
 # Relative to REPO_SRC
-CONFIG_FILE="experiments/ccDDPM_exp2/MinSNR.yaml"
-CONFIG_BACKUP="experiments/ccDDPM_exp2/MinSNR.yaml.backup"
+CONFIG_FILE="experiments/AdamW_Batch64/config_AdamW_Batch64.yaml"
+CONFIG_BACKUP="experiments/AdamW_Batch64/config_AdamW_Batch64.yaml.backup"
 
 # Supercomputer mode: Disable tqdm, use structured logging for .out/.err files
 export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs

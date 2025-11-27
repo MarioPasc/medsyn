@@ -23,7 +23,8 @@ keywords = [
 ]
 authors = [
     {name = "M.Pascual-González", email = "mpascual@uma.es"},
-    {name = "Martina Cebolla Salas", email = "martinacesalas@gmail.com"}
+    {name = "Ezequiel López-Rubio", email = "ezqlr@uma.es"},
+    {name = "Rafael Luque Baena", email = "rmluque@uma.es"}
 ]
 
 classifiers = [

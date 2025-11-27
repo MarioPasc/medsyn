@@ -13,7 +13,7 @@ data:
     enabled: true
     npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz
   seed: 23102003
-  num_workers: 8
+  num_workers: 1
   reduction:
     strategy: fraction
     train: 1.00
@@ -24,26 +24,25 @@ data:
 ccddpm:
   # Distributed training configuration (multi-GPU with DDP)
   # To use multi-GPU training, launch with torchrun:
-  # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM medsyn_cfg.yaml
+  # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM picasso_cfg.yaml
   dist:
-    enabled: false  # Set to true to enable multi-GPU distributed training
+    enabled: true  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
-    num_gpus: auto  # 'auto' uses all available GPUs (set by torchrun)
+    num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
-    grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
+    grad_accum_steps: 4  # Gradient accumulation steps (1 = no accumulation)
     seed_offset: 0  # Offset for per-rank seed decorrelation
 
   dataloader:
     type: npz # Options are JSON, if we are using the index json file or NPZ.
-    npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz  # Auditing: use merged.npz 
 
   # Data augmentation configuration (optional)
   # Augmentation is applied only during training, not validation/testing
   # Requires: pip install albumentations
   augmentation:
     enabled: true  # Set to true to enable augmentation
-    probability: 0.6  # Overall probability of applying augmentation to an image (0.0-1.0)
+    probability: 0.5  # Overall probability of applying augmentation to an image (0.0-1.0)
     preserve_range: true  # Clamp outputs to [-1, 1] after augmentation
     normalize_after_augment: true  # Re-normalize after augmentation
 
@@ -59,103 +58,179 @@ ccddpm:
       # Intensity transforms (careful with medical imaging)
       - name: RandomBrightnessContrast
         p: 0.1
-        brightness_limit: 0.2
-        contrast_limit: 0.2
-
-      # Noise augmentation
-      - name: GaussNoise
-        p: 0.1
-        std_range: [0.01, 0.05]
-
+        brightness_limit: 0.13
+        contrast_limit: 0.13
 
     # Statistics tracking (CSV output)
     statistics:
       enabled: true  # Track which augmentations were applied
       output_path: augmentation_stats.csv  # Relative to output_dir or absolute path
-      save_every_n_epochs: 10  # 0 = save only at end, 1 = every epoch, etc.
+      save_every_n_epochs: 1  # 0 = save only at end, 1 = every epoch, etc.
 
-    # Preset configurations (uncomment to use):
-    # For light augmentation (safe for medical images):
-    # enabled: true
-    # probability: 0.5
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.3
-    #     limit: 10
+  # ========================================================================
+  # DENOISING UNET ARCHITECTURE
+  # ========================================================================
+  # Full configuration for the UNet2DModel backbone.
+  # All parameters directly map to diffusers.UNet2DModel constructor arguments.
+  # See: https://huggingface.co/docs/diffusers/api/models/unet2d
+  #
+  # IMPORTANT: Validation rules:
+  #   - len(channel_mult) == len(down_block_types) == len(up_block_types)
+  #   - model_channels must be divisible by norm_num_groups
+  #   - All block_out_channels (model_channels * channel_mult[i]) must be divisible by norm_num_groups
+  # ========================================================================
+  denoising_unet:
+    # Core architecture
+    model_channels: 128           # Base channel count (multiplied by channel_mult)
+    channel_mult: [1, 2, 2, 4]    # Channel multipliers per level -> block_out_channels: [128, 256, 256, 512]
+    layers_per_block: 2           # Number of ResNet blocks per level
 
-    # For moderate augmentation:
-    # enabled: true
-    # probability: 0.7
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.4
-    #     limit: 15
-    #   - name: RandomBrightnessContrast
-    #     p: 0.3
-    #     brightness_limit: 0.2
-    #     contrast_limit: 0.2
-    #   - name: GaussNoise
-    #     p: 0.2
-    #     var_limit: [10.0, 50.0]
+    # Block types - MUST match length of channel_mult (4 levels in this case)
+    # Available down blocks: DownBlock2D, AttnDownBlock2D, CrossAttnDownBlock2D, DownEncoderBlock2D
+    # Available up blocks: UpBlock2D, AttnUpBlock2D, CrossAttnUpBlock2D, UpDecoderBlock2D
+    down_block_types:
+      - DownBlock2D                   # Level 0: 64->32 (no attention)
+      - AttnDownBlock2D               # Level 1: 32->16 (with attention)
+      - AttnDownBlock2D               # Level 2: 16->8  (with attention)
+      - AttnDownBlock2D               # Level 3: 8->4   (with attention)
+    up_block_types:
+      - AttnUpBlock2D             # Level 3: 4->8   (with attention)
+      - UpBlock2D                 # Level 2: 8->16  (no attention)
+      - UpBlock2D                 # Level 1: 16->32 (no attention)
+      - UpBlock2D                 # Level 0: 32->64 (no attention)
 
-    # For aggressive augmentation (use with caution):
-    # enabled: true
-    # probability: 0.8
-    # transforms:
-    #   - name: HorizontalFlip
-    #     p: 0.5
-    #   - name: VerticalFlip
-    #     p: 0.5
-    #   - name: Rotate
-    #     p: 0.5
-    #     limit: 20
-    #   - name: ShiftScaleRotate
-    #     p: 0.3
-    #     shift_limit: 0.0625
-    #     scale_limit: 0.1
-    #     rotate_limit: 15
-    #   - name: RandomBrightnessContrast
-    #     p: 0.4
-    #     brightness_limit: 0.3
-    #     contrast_limit: 0.3
-    #   - name: GaussNoise
-    #     p: 0.3
-    #     var_limit: [10.0, 50.0]
-    #   - name: ElasticTransform
-    #     p: 0.2
-    #     alpha: 1
-    #     sigma: 50
-    #     alpha_affine: 50
+    # Attention configuration
+    add_attention: true           # Enable attention blocks (required for AttnDownBlock2D/AttnUpBlock2D)
+    attention_head_dim: 8         # Dimension of attention heads (null for default)
+
+    # Normalization
+    norm_num_groups: 32           # Groups for GroupNorm (model_channels must be divisible by this)
+    attn_norm_num_groups: null    # Groups for attention norm (null = use norm_num_groups)
+    norm_eps: 1.0e-5              # Epsilon for normalization
+
+    # Dropout and regularization
+    dropout: 0.05                  # Dropout rate (0.0 = no dropout)
+
+    # Time embedding
+    time_embedding_type: positional  # "positional" or "fourier"
+    freq_shift: 0                    # Frequency shift for time embedding
+    flip_sin_to_cos: true            # Whether to flip sin to cos in time embedding
+    resnet_time_scale_shift: default # "default", "scale_shift", or "ada_group"
+
+    # Sampling configuration
+    center_input_sample: false    # Center input sample (for specific preprocessing)
+    mid_block_scale_factor: 1.0   # Scale factor for middle block
+
+    # Downsampling/Upsampling
+    downsample_padding: 1         # Padding for downsampling convolutions
+    downsample_type: conv         # "conv" or "resnet"
+    upsample_type: conv           # "conv" or "resnet"
+
+    # Activation function
+    act_fn: silu                  # "silu", "mish", "gelu", "relu", "swish"
+
+    # Class embedding (handled externally via ClassEmbedder, but available for UNet's internal use)
+    class_embed_type: null        # null, "timestep", or "identity"
+    num_class_embeds: null        # Number of class embeddings (null = use num_classes from train config)
+    num_train_timesteps: null     # Number of train timesteps (null = use from scheduler config)
 
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 32  # MUST match checkpoint! Was trained with 32
+    class_embed_dim: 32
     num_classes: 9
-    batch_size: 4
-    epochs: 1000
+    batch_size: 64
+    epochs: 100
+
+    # ========================================================================
+    # EARLY STOPPING CONFIGURATION
+    # ========================================================================
+    # Early stopping is based on a composite validation score combining PSNR and SSIM.
+    # The score is smoothed with an exponential moving average (EMA) to reduce noise sensitivity.
+    #
+    # Composite score formula:
+    #   S = (psnr_weight * PSNR / 20) + (ssim_weight * SSIM)
+    # where PSNR is divided by 20 to put it on a similar scale to SSIM (both ~0-1).
+    #
+    # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
+    # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
+    early_stopping:
+      patience: 8              # Stop if no improvement for this many epochs
+      metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
+      psnr_weight: 1.0         # Weight for PSNR in composite score
+      ssim_weight: 1.0         # Weight for SSIM in composite score
+      ema_alpha: 0.7           # EMA smoothing factor (0 = no smoothing, 0.9 = heavy smoothing)
+      use_ema_for_stopping: true  # If true, use smoothed score for early stopping decisions
+      min_delta: 0.001         # Minimum improvement to count as "better"
+
     mixed_precision: true
-    grad_clip_norm: 10.0       # FIXED: Was 1.0 (too aggressive), now 10.0 to allow learning
+
+    grad_clip_norm: 1.0        
     guidance_p_uncond: 0.1     # Classifier-free guidance: 10% unconditional during training
+
     ema_use: true
-    ema_decay: 0.999
-    use_min_snr: true          # ENABLED: Min-SNR loss weighting stabilizes training
-    min_snr_gamma: 5.0         # Standard value for Min-SNR
+    ema_decay: 0.9999
+
+    use_min_snr: true          # Min-SNR weighting
+    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
+    per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
+
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
-    patience: 15               # Early stopping: stop if no improvement for 15 epochs
-    use_tqdm: true             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
-    output_dir: /home/mpascual/research/medsyn/ccddpm/outputs
-  optim:
-    lr: 2.0e-4  # If you see overflows, try 1.0e-4 or enable bfloat16 on Ampere+ GPUs
-    wd: 0.0
+    snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
+    use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
+    skip_nonfinite_grads: true  # Skip batches with non-finite gradients instead of  aborting
+    output_dir: /media/mpascual/PortableSSD/medsyn/MinSNR_3Gamma_ccDDPM_parallel
+
+    # ========================================================================
+    # LEARNING RATE SCHEDULER CONFIGURATION
+    # ========================================================================
+    # Supports: "onecycle", "cosine", "linear_warmup_cosine_annealing_lr", "constant", "step"
+    lr_scheduler:
+      type: "linear_warmup_cosine_annealing_lr"
+
+      # OneCycle parameters (used when type == "onecycle")
+      max_lr: 1.0e-4
+      pct_start: 0.3
+      div_factor: 25.0
+      final_div_factor: 1000.0
+
+      # Cosine / warmup parameters
+      T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
+      eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
+
+      warmup_epochs: 10        # Number of *epochs* to warm up (converted to steps internally)
+
+      # New parameters for LinearWarmupCosineAnnealingLR-like schedule
+      warmup_start_lr: null   # Absolute LR at the very first step of warmup.
+                              # If null, computed as warmup_start_factor * base_lr.
+      warmup_start_factor: 0.01  # Relative factor: start LR = base_lr * warmup_start_factor
+                                # Only used when warmup_start_lr is null.
+
+      # Step parameters (used when type == "step")
+      step_size: 30
+      gamma: 0.1
+
+
+  # ========================================================================
+  # OPTIMIZER CONFIGURATION
+  # ========================================================================
+  # Supported types: adamw (default), adam, sgd, rmsprop
+  optimizer:
+    type: "adamw"              # Optimizer type: adamw, adam, sgd, rmsprop
+    lr: 1.0e-4                 # Learning rate (if you see overflows, try 1.0e-4)
+    wd: 0.01                    # Weight decay (L2 regularization)
+    # Adam/AdamW/Lion specific
+    betas: [0.9, 0.999]        # Beta coefficients for Adam
+    eps: 1.0e-8                # Epsilon for numerical stability
+    amsgrad: false             # Whether to use AMSGrad variant
+    # SGD specific (only used when type="sgd")
+    momentum: 0.9              # Momentum factor
+    nesterov: false            # Whether to use Nesterov momentum
+    # RMSprop specific (only used when type="rmsprop")
+    alpha: 0.99                # Smoothing constant
+    centered: false            # Whether to compute centered RMSprop
+
   sched:
     num_train_timesteps: 1000
     beta_start: 1.0e-4
@@ -163,39 +238,74 @@ ccddpm:
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
-    guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
+    guidance_scale: 7.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     num_inference_steps: 1000
-    out_dir: /media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel/synth
+    out_dir: /media/mpascual/PortableSSD/medsyn/MinSNR_3Gamma_ccDDPM_parallel/samples
 
 
-# Generation configuration (outside bVAE section)
+# Generation configuration 
 generate:
-  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py
-  checkpoint: "/media/mpascual/PortableSSD/medsyn/PathMNIST_ccDDPM_parallel/ckpts/best.pt"  # absolute path to checkpoint
-  classes:
-    0: 3
-    1: 3
-    2: 3
-    3: 3
-    4: 3
-    5: 3
-    6: 3
-    7: 3
-    8: 3
+  model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py bVAE is DEPRECATED at this moment
+  checkpoint: /media/mpascual/PortableSSD/medsyn/MinSNR_3Gamma_ccDDPM_parallel/ckpts/best.pt  # absolute path to checkpoint
+  npz_with_synth_images:
+    save_to: /media/mpascual/PortableSSD/medsyn/MinSNR_3Gamma_ccDDPM_parallel/synth_guidance7.5
+    train:
+      classes:
+        0: 4
+        1: 4
+        2: 4
+        3: 4
+        4: 4
+        5: 4
+        6: 4
+        7: 4
+        8: 4
+    val:
+      classes:
+        0: 4
+        1: 4
+        2: 4
+        3: 4
+        4: 4
+        5: 4
+        6: 4
+        7: 4
+        8: 4  
 
 yolo:
-  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist,
+  # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
   # fallback to data/save_png/yolo_folder_dataset, which should contain the YOLO classification dataset structure, so we
   # would not longer be loading our custom dataloader, but use YOLO's built-in dataloader instead. However, the npz dataloader
   # is preferred as the main source.
-  model: yolo11n-cls.pt        # any Ultralytics classify model
-  project: /home/mpascual/research/medsyn/yolo_classifier/runs
-  name: pathmnist_npz
+  model: /mnt/home/users/tic_163_uma/mpascual/execs/YOLO_PATHMNIST/yolov8n-cls.pt        # any Ultralytics classify model
+  project: /mnt/home/users/tic_163_uma/mpascual/fscratch/results/yolo_classifier
+  name: picasso_yolo_parallel
   imgsz: 64
   epochs: 100
   batch: 128
   workers: 8
   training_images: PathMNIST   # one of: PathMNIST | PathMNIST_and_synth | synth
+
+# =============================================================================
+# FID COMPUTATION CONFIGURATION
+# =============================================================================
+# Configuration for Fréchet Inception Distance (FID) computation during
+# training validation. FID requires InceptionV3 weights which are typically
+# downloaded automatically. For HPC clusters without internet, pre-download
+# the weights using: python scripts/predownload_fid_weights.py --cache_dir /path/to/cache
+#
+# Then either:
+#   1. Set TORCH_HOME=/path/to/cache environment variable, OR
+#   2. Set weights_path below to the full path to the weights file
+fid:
+  enabled: false                    # Enable FID computation during validation
+  samples_per_class: 100           # Number of generated samples per class for FID
+  batch_size: 32                   # Batch size for FID feature extraction
+  min_samples: 50                  # Minimum samples needed per class for valid FID
+  # Offline weights path (for HPC clusters without internet)
+  # Leave null to use automatic download via TORCH_HOME
+  # Example: /scratch/models/torch_cache/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
+  weights_path: /mnt/home/users/tic_163_uma/mpascual/fscratch/pretrained_fid_weights/hub/checkpoints/weights-inception-2015-12-05-6726825d.pth
 
 bVAE:
   model:
@@ -265,3 +375,4 @@ bVAE:
       kernel: "rbf"
     per_class_mmd_use: false  # NEW: per-class MMD q(z|x,y) vs p(z|y)
     per_class_mmd_w: 1.0      # weight for per-class MMD (if enabled)
+
