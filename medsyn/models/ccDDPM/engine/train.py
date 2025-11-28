@@ -852,7 +852,11 @@ def train(yaml_path: str, split: str = "train") -> None:
             train_metrics[key] = value
 
         # CRITICAL: Synchronize training metrics across all GPUs
+        if use_ddp and rank != 0:
+            logger.debug(f"[Rank {rank}] Waiting to sync training metrics...")
         train_metrics = sync_metrics_dict(train_metrics, device, use_ddp)
+        if use_ddp and rank != 0:
+            logger.debug(f"[Rank {rank}] Training metrics synced")
 
         # Calculate training time
         train_time = time.time() - epoch_start_time
@@ -1256,6 +1260,8 @@ def train(yaml_path: str, split: str = "train") -> None:
         # ---- Visualizations (only rank-0) ----
         # Skip visualizations on non-main processes to save computation
         if is_main_process():
+            vis_start_time = time.time()
+            logger.info(f"[Rank {rank}] Starting visualization generation (may take several minutes)...")
             # Use EMA weights for better quality if available
             original_state = None
             if ema:
@@ -1382,8 +1388,28 @@ def train(yaml_path: str, split: str = "train") -> None:
             if ema and original_state is not None:
                 base_model.load_state_dict(original_state)
 
+            vis_time = time.time() - vis_start_time
+            logger.info(f"[Rank {rank}] Visualization generation complete (took {format_time(vis_time)})")
+
         # All processes set model back to training mode
         model.train()
+
+        # ========================================================================
+        # CRITICAL DDP SYNCHRONIZATION: Barrier after visualization
+        # ========================================================================
+        # ISSUE: Rank 0 spends ~12 minutes generating visualizations while other
+        # ranks skip this block. Without a barrier, other ranks start the next
+        # epoch's training and trigger ALLREDUCE operations while rank 0 is still
+        # visualizing, causing NCCL timeout.
+        # SOLUTION: Synchronize all ranks before starting the next epoch.
+        if use_ddp:
+            if is_main_process():
+                logger.info(f"[Rank {rank}] Visualization complete, waiting for barrier...")
+            else:
+                logger.info(f"[Rank {rank}] Waiting at post-visualization barrier...")
+            barrier()
+            if is_main_process():
+                logger.info(f"[Rank {rank}] All ranks synchronized, proceeding to next epoch")
 
     # ========================================================================
     # TRAINING COMPLETE
