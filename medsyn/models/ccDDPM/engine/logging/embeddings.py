@@ -175,7 +175,11 @@ def extract_features_from_layer(
 
     def hook_fn(module, input, output):
         # Store output activation
-        features['activation'] = output
+        # Handle case where output is a tuple (e.g., from attention layers)
+        if isinstance(output, tuple):
+            features['activation'] = output[0]
+        else:
+            features['activation'] = output
 
     # Register hook
     try:
