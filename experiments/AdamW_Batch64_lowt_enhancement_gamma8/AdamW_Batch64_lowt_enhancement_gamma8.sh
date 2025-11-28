@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J log_AdamW_Batch64_lowt_enhancement_gamma8
-#SBATCH --time=1-12:00:00
+#SBATCH --time=20:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:2
 #SBATCH --output=%x.%j.out
