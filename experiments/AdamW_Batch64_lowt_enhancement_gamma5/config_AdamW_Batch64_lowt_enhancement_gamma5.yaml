@@ -26,13 +26,60 @@ ccddpm:
   # To use multi-GPU training, launch with torchrun:
   # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM picasso_cfg.yaml
   dist:
-    enabled: true  # Set to true to enable multi-GPU distributed training
+    enabled: false  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
     num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
     grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
     seed_offset: 0  # Offset for per-rank seed decorrelation
+
+  # ========================================================================
+  # LOGGING CONFIGURATION
+  # ========================================================================
+  logging:
+    embeddings:
+      enabled: true
+      log_every_n_epochs: 1  # Log detailed diagnostics every 1 epoch
+      output_dir: embeddings  # Relative to main output_dir
+      save_class_embeddings: true  # Always save class embedding trajectory
+
+      # Option 1: Use preset (uncomment to use)
+      # preset: custom  # Options: minimal, custom, research
+
+      # Option 2: Manual configuration (overrides preset if both specified)
+      probe:
+        enabled: true
+        samples_per_class: 50  # Number of samples per class in probe set
+        timesteps: [100, 500, 900]  # Early, mid, late diffusion
+        layer_names:
+          - down_blocks.1  # Intermediate encoding with attention
+          - mid_block      # Critical bottleneck representation
+          - up_blocks.1    # Intermediate decoding with attention
+
+        save_both_branches: true  # Save both conditional and unconditional
+        pooling_strategy: mean  # mean, max, or flatten
+
+      clustering:
+        enabled: true
+        n_clusters: null  # null = auto-detect from num_classes
+        algorithm: kmeans  # kmeans or gmm
+        random_state: 42
+        compute_scores: true  # Compute silhouette, CH, DB scores
+
+      metadata:
+        save_metadata: true
+        dataset_name: PathMNIST
+        class_names:  # Optional - will be auto-detected for PathMNIST
+          - Adipose
+          - Background
+          - Debris
+          - Lymphocytes
+          - Mucus
+          - Smooth Muscle
+          - Normal Colon Mucosa
+          - Cancer-Associated Stroma
+          - Colorectal Adenocarcinoma Epithelium
 
   dataloader:
     type: npz # Options are JSON, if we are using the index json file or NPZ.

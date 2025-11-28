@@ -71,6 +71,8 @@ from medsyn.models.ccDDPM.engine.logging.training_logging import (
     CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES,
     DEFAULT_FID_CONFIG, save_class_embeddings_trajectory
 )
+from medsyn.models.ccDDPM.engine.logging.embeddings import log_enhanced_embeddings
+from medsyn.models.ccDDPM.config import EmbeddingLogConfig
 from medsyn.models.ccDDPM.engine.utils.ddp_utils import (
     ddp_is_enabled, ddp_init, is_main_process,
     barrier, cleanup, all_reduce_mean, broadcast_bool, get_state_dict_for_save, sync_metrics_dict
@@ -108,6 +110,9 @@ def train(yaml_path: str, split: str = "train") -> None:
     scfg = cfg.ccddpm.sched
     icfg = cfg.ccddpm.infer
     optimizer_cfg = cfg.ccddpm.optimizer  # Renamed from ocfg
+
+    # Initialize embeddings logging state
+    probe_set = None  # Will be created on first enhanced embeddings log
 
     # ========================================================================
     # FID WEIGHTS SETUP (Before any FID computation)
@@ -1057,11 +1062,63 @@ def train(yaml_path: str, split: str = "train") -> None:
         )
         diagnostics.update(elbo_diagnostics)
 
-        # ---- Save class embedding trajectory (rank-0 only) ----
-        if is_main_process() and hasattr(tcfg, 'snapshot_class_embedding_every'):
+        # ---- Enhanced Embeddings Logging (rank-0 only) ----
+        if is_main_process() and cfg.ccddpm.logging and cfg.ccddpm.logging.embeddings:
+            emb_cfg = cfg.ccddpm.logging.embeddings
+
+            if emb_cfg.enabled:
+                # Resolve output directory (relative to main output_dir)
+                emb_output_dir = out_dir / emb_cfg.output_dir
+
+                # Update metadata with class names if available
+                if emb_cfg.metadata.class_names is None:
+                    # Try to infer class names from dataset
+                    # For PathMNIST, use known class names
+                    if emb_cfg.metadata.dataset_name == "PathMNIST" or "pathmnist" in str(dl_cfg.npz_path).lower():
+                        emb_cfg.metadata.class_names = [
+                            "Adipose", "Background", "Debris", "Lymphocytes",
+                            "Mucus", "Smooth Muscle", "Normal Colon Mucosa",
+                            "Cancer-Associated Stroma", "Colorectal Adenocarcinoma Epithelium"
+                        ]
+
+                # Update config with resolved paths
+                from pathlib import Path
+                emb_cfg_resolved = EmbeddingLogConfig(
+                    enabled=emb_cfg.enabled,
+                    log_every_n_epochs=emb_cfg.log_every_n_epochs,
+                    output_dir=str(emb_output_dir),
+                    save_class_embeddings=emb_cfg.save_class_embeddings,
+                    preset=emb_cfg.preset,
+                    probe=emb_cfg.probe,
+                    clustering=emb_cfg.clustering,
+                    metadata=emb_cfg.metadata
+                )
+
+                # Call enhanced logging
+                probe_set = log_enhanced_embeddings(
+                    model=base_model,  # Use unwrapped model
+                    dataloader=train_loader,
+                    noise_scheduler=noise_scheduler,
+                    device=device,
+                    epoch=epoch,
+                    config=emb_cfg_resolved,
+                    probe_set=probe_set,  # Reuse across epochs
+                    training_config=tcfg,
+                    model_config=mcfg,
+                    optimizer_config=optimizer_cfg,
+                    scheduler_config=scfg,
+                )
+            elif emb_cfg.save_class_embeddings:
+                # Fallback to legacy class embedding trajectory only
+                if hasattr(tcfg, 'snapshot_class_embedding_every'):
+                    if tcfg.snapshot_class_embedding_every > 0 and \
+                       (epoch % tcfg.snapshot_class_embedding_every) == 0:
+                        emb_out_path = out_dir / "embeddings" / "class_embeddings_trajectory.pt"
+                        save_class_embeddings_trajectory(base_model, epoch, emb_out_path)
+        elif is_main_process() and hasattr(tcfg, 'snapshot_class_embedding_every'):
+            # Legacy fallback if no logging config
             if tcfg.snapshot_class_embedding_every > 0 and (epoch % tcfg.snapshot_class_embedding_every) == 0:
                 emb_out_path = out_dir / "embeddings" / "class_embeddings_trajectory.pt"
-                # Use base_model to avoid DDP wrappers; EMA is not active here
                 save_class_embeddings_trajectory(base_model, epoch, emb_out_path)
 
         # Log validation metrics with early stopping diagnostics (only rank-0)

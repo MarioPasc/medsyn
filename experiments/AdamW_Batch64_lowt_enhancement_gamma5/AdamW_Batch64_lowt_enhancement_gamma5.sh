@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH -J log_AdamW_Batch64_lowt_enhancement_gamma5
-#SBATCH --time=20:00:00
+#SBATCH --time=1-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=16G
 #SBATCH --constraint=dgx
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --output=%x.%j.out
 #SBATCH --error=%x.%j.err
 
@@ -31,9 +31,9 @@ export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs
 
 # Important: Set CUDA environment variables for multi-GPU
 # Hardcoded number of GPUs for this job (must match --gres=gpu:N above)
-NUM_GPUS=2
+NUM_GPUS=1
 MEDSYN_DEBUG_DATALOADER=1
-export CUDA_VISIBLE_DEVICES=0,1  # Assuming 2 GPUs allocated by SLURM
+export CUDA_VISIBLE_DEVICES=0  # Assuming 1 GPU allocated by SLURM
 export NCCL_DEBUG=INFO  # For debugging distributed training (optional)
 
 echo "================================================================================"

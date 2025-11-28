@@ -6,7 +6,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, Mapping, Sequence
+from typing import Optional, Dict, List, Any, Mapping, Sequence, Literal
 import yaml
 import os
 import logging
@@ -364,6 +364,133 @@ class DistCfg:
     grad_accum_steps: int = 1  # Gradient accumulation steps (optional)
     seed_offset: int = 0  # Seed offset per rank for decorrelation
 
+# ============================================================================
+# Embeddings Logging Configuration
+# ============================================================================
+
+@dataclass
+class ProbeConfig:
+    """Configuration for feature probe bank collection.
+
+    Collects feature vectors from a balanced sample set to analyze how
+    class embeddings interact with actual data during diffusion.
+    """
+    enabled: bool = True
+    samples_per_class: int = 10
+    timesteps: List[int] = field(default_factory=lambda: [100, 500, 900])
+    layer_names: List[str] = field(default_factory=list)
+    save_both_branches: bool = True
+    pooling_strategy: Literal["mean", "max", "flatten"] = "mean"
+
+    def __post_init__(self):
+        if self.samples_per_class < 1:
+            raise ValueError(f"samples_per_class must be >= 1, got {self.samples_per_class}")
+        if not all(0 <= t <= 1000 for t in self.timesteps):
+            raise ValueError(f"timesteps must be in [0, 1000], got {self.timesteps}")
+        if self.pooling_strategy not in ["mean", "max", "flatten"]:
+            raise ValueError(f"pooling_strategy must be 'mean', 'max', or 'flatten', got {self.pooling_strategy}")
+
+
+@dataclass
+class ClusteringConfig:
+    """Configuration for clustering quality metrics.
+
+    Computes silhouette, Calinski-Harabasz, and Davies-Bouldin scores
+    to quantify latent space organization.
+    """
+    enabled: bool = True
+    n_clusters: Optional[int] = None
+    algorithm: Literal["kmeans", "gmm"] = "kmeans"
+    random_state: int = 42
+    compute_scores: bool = True
+
+    def __post_init__(self):
+        if self.algorithm not in ["kmeans", "gmm"]:
+            raise ValueError(f"algorithm must be 'kmeans' or 'gmm', got {self.algorithm}")
+        if self.n_clusters is not None and self.n_clusters < 2:
+            raise ValueError(f"n_clusters must be >= 2, got {self.n_clusters}")
+
+
+@dataclass
+class MetadataConfig:
+    """Configuration for experimental metadata logging.
+
+    Captures complete experimental context for reproducibility.
+    """
+    save_metadata: bool = True
+    class_names: Optional[List[str]] = None
+    dataset_name: str = "unknown"
+
+
+@dataclass
+class EmbeddingLogConfig:
+    """Master configuration for enhanced embedding logging.
+
+    Coordinates class embeddings, probe features, clustering metrics,
+    and metadata logging during training.
+    """
+    enabled: bool = False
+    log_every_n_epochs: int = 5
+    output_dir: str = "embeddings"
+    save_class_embeddings: bool = True
+    preset: Optional[str] = None
+
+    # Component configs
+    probe: ProbeConfig = field(default_factory=ProbeConfig)
+    clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    metadata: MetadataConfig = field(default_factory=MetadataConfig)
+
+    def __post_init__(self):
+        if self.log_every_n_epochs < 1:
+            raise ValueError(f"log_every_n_epochs must be >= 1, got {self.log_every_n_epochs}")
+
+        # Apply preset if specified
+        if self.preset:
+            self._apply_preset(self.preset)
+
+    def _apply_preset(self, preset: str):
+        """Apply preset configuration (minimal/custom/research)."""
+        if preset == "minimal":
+            # Lightweight: 5 samples/class, 1 timestep, no layers
+            self.probe.samples_per_class = 5
+            self.probe.timesteps = [500]
+            self.probe.layer_names = []
+            self.probe.save_both_branches = False
+            self.clustering.enabled = False
+            self.log_every_n_epochs = 10
+
+        elif preset == "custom":
+            # Balanced: 10 samples/class, 3 timesteps, some layers
+            self.probe.samples_per_class = 10
+            self.probe.timesteps = [100, 500, 900]
+            self.probe.layer_names = ["down_blocks.1", "up_blocks.1"]
+            self.probe.save_both_branches = True
+            self.clustering.enabled = True
+            self.log_every_n_epochs = 5
+
+        elif preset == "research":
+            # Comprehensive: 50 samples/class, 9 timesteps, all layers
+            self.probe.samples_per_class = 50
+            self.probe.timesteps = [10, 50, 100, 250, 500, 750, 900, 950, 990]
+            self.probe.layer_names = [
+                "down_blocks.0", "down_blocks.1", "down_blocks.2", "down_blocks.3",
+                "mid_block",
+                "up_blocks.0", "up_blocks.1", "up_blocks.2", "up_blocks.3"
+            ]
+            self.probe.save_both_branches = True
+            self.clustering.enabled = True
+            self.log_every_n_epochs = 5
+
+        else:
+            raise ValueError(f"Unknown preset: {preset}. Must be 'minimal', 'custom', or 'research'")
+
+
+@dataclass
+class LoggingCfg:
+    """Container for all logging-related configurations."""
+    embeddings: Optional[EmbeddingLogConfig] = None
+
+
 @dataclass
 class CCDDPmCfg:
     train: TrainCfg = field(default_factory=TrainCfg)
@@ -375,6 +502,7 @@ class CCDDPmCfg:
     data: DataCfg | None = None  # set after reading YAML
     augmentation: Any = None  # AugmentationConfig, set after reading YAML
     dist: DistCfg = field(default_factory=DistCfg)  # Distributed training config
+    logging: LoggingCfg | None = None  # Logging configuration (embeddings, etc.)
 
     @property
     def optim(self) -> OptimizerCfg:
@@ -510,6 +638,59 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
             logger.warning("Augmentation config found but augmentation module not available. Skipping augmentation.")
             augmentation_cfg = None
 
+    # ========================================================================
+    # Parse logging configuration (embeddings, etc.)
+    # ========================================================================
+    logging_dict = cc.get('logging', {})
+    logging_cfg = None
+
+    if logging_dict and isinstance(logging_dict, dict):
+        embeddings_dict = logging_dict.get('embeddings')
+        embeddings_cfg = None
+
+        if embeddings_dict and isinstance(embeddings_dict, dict):
+            # Parse nested configs
+            probe_dict = embeddings_dict.get('probe', {})
+            if probe_dict and isinstance(probe_dict, dict):
+                # Convert timesteps list if present
+                if 'timesteps' in probe_dict and isinstance(probe_dict['timesteps'], list):
+                    probe_dict['timesteps'] = probe_dict['timesteps']  # Keep as list
+                probe_cfg = ProbeConfig(**{**ProbeConfig().__dict__, **probe_dict})
+            else:
+                probe_cfg = ProbeConfig()
+
+            clustering_dict = embeddings_dict.get('clustering', {})
+            if clustering_dict and isinstance(clustering_dict, dict):
+                clustering_cfg = ClusteringConfig(**{**ClusteringConfig().__dict__, **clustering_dict})
+            else:
+                clustering_cfg = ClusteringConfig()
+
+            metadata_dict = embeddings_dict.get('metadata', {})
+            if metadata_dict and isinstance(metadata_dict, dict):
+                # Convert class_names list if present
+                if 'class_names' in metadata_dict and isinstance(metadata_dict['class_names'], list):
+                    metadata_dict['class_names'] = metadata_dict['class_names']
+                metadata_cfg = MetadataConfig(**{**MetadataConfig().__dict__, **metadata_dict})
+            else:
+                metadata_cfg = MetadataConfig()
+
+            # Create EmbeddingLogConfig
+            emb_base = {
+                k: v for k, v in embeddings_dict.items()
+                if k not in ['probe', 'clustering', 'metadata']
+            }
+            embeddings_cfg = EmbeddingLogConfig(
+                **{**EmbeddingLogConfig().__dict__, **emb_base},
+                probe=probe_cfg,
+                clustering=clustering_cfg,
+                metadata=metadata_cfg
+            )
+
+            logger.info("Embeddings logging configured: enabled=%s, log_every_n_epochs=%d, preset=%s",
+                       embeddings_cfg.enabled, embeddings_cfg.log_every_n_epochs, embeddings_cfg.preset)
+
+        logging_cfg = LoggingCfg(embeddings=embeddings_cfg)
+
     # Parse UNet architecture configuration (denoising_unet section)
     unet_dict = cc.get('denoising_unet', {})
     if unet_dict:
@@ -546,7 +727,7 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
     cc_cfg = CCDDPmCfg(
         train=train, optimizer=optimizer_cfg, sched=sched, infer=infer,
         dataloader=dataloader_cfg, unet=unet_cfg, data=data_cfg,
-        augmentation=augmentation_cfg, dist=dist
+        augmentation=augmentation_cfg, dist=dist, logging=logging_cfg
     )
 
     # Load FID configuration (optional, for FID computation during validation)
