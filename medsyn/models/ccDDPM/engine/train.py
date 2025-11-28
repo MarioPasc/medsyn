@@ -967,11 +967,15 @@ def train(yaml_path: str, split: str = "train") -> None:
             fid_weights_path = fid_config.get("weights_path") if isinstance(fid_config, dict) else None
             setup_fid_weights_cache(fid_weights_path)
 
+            # CRITICAL: Use base_model (unwrapped) for FID to avoid DDP collective ops
+            # Only rank-0 is in this block; calling forward() on DDP model would cause NCCL timeout
+            base_model.eval()
+
             if IS_SUPERCOMPUTER:
                 log_phase_start("FID (validation)", 0)
 
             val_fid_metrics = compute_fid_on_split(
-                model=model,
+                model=base_model,
                 dataloader=val_loader,
                 noise_scheduler=noise_scheduler,
                 device=device,
@@ -987,7 +991,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                 log_phase_start("FID (test)", 0)
 
             test_fid_metrics = compute_fid_on_split(
-                model=model,
+                model=base_model,
                 dataloader=test_loader,
                 noise_scheduler=noise_scheduler,
                 device=device,
@@ -1259,7 +1263,9 @@ def train(yaml_path: str, split: str = "train") -> None:
                 original_state = {k: v.cpu().clone() for k, v in base_model.state_dict().items()}
                 ema.copy_to(base_model)
 
-            model.eval()
+            # CRITICAL: Use base_model (unwrapped) for visualizations to avoid DDP collective ops
+            # Only rank-0 is in this block; calling forward() on DDP model would cause NCCL timeout
+            base_model.eval()
 
             # Every epoch: Save reconstruction comparisons (x0 predictions vs ground truth)
             with torch.no_grad():
@@ -1277,8 +1283,8 @@ def train(yaml_path: str, split: str = "train") -> None:
                 noise_vis = torch.randn_like(x0_vis)
                 x_t_vis = noise_scheduler.add_noise(x0_vis, noise_vis, t_vis)
 
-                # Predict noise and reconstruct x0
-                noise_pred_vis = model(x_t_vis, t_vis, y_vis)
+                # Predict noise and reconstruct x0 (use base_model to avoid DDP collective ops)
+                noise_pred_vis = base_model(x_t_vis, t_vis, y_vis)
                 sqrt_alpha_prod = noise_scheduler.alphas_cumprod[t_vis].sqrt().view(-1, 1, 1, 1)
                 sqrt_one_minus_alpha_prod = (1 - noise_scheduler.alphas_cumprod[t_vis]).sqrt().view(-1, 1, 1, 1)
                 x0_pred_vis = (x_t_vis - sqrt_one_minus_alpha_prod * noise_pred_vis) / sqrt_alpha_prod
@@ -1310,7 +1316,7 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                     # 2. Denoising process visualization (full sampling)
                     denoising_steps = visualize_denoising_process(
-                        model, noise_scheduler,
+                        base_model, noise_scheduler,
                         shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                         class_label=single_label,
                         num_steps=10,
@@ -1326,7 +1332,7 @@ def train(yaml_path: str, split: str = "train") -> None:
                     # 3. Multi-timestep reconstruction visualization
                     timesteps_to_vis = [50, 150, 300, 500, 700, 900]
                     multistep_recons = visualize_multistep_reconstruction(
-                        model, single_img, noise_scheduler, single_label,
+                        base_model, single_img, noise_scheduler, single_label,
                         timesteps=timesteps_to_vis, device=device
                     )
                     multistep_recons_01 = (multistep_recons + 1.0) / 2.0
@@ -1339,12 +1345,12 @@ def train(yaml_path: str, split: str = "train") -> None:
                     for c in range(tcfg.num_classes):
                         class_label_sample = torch.tensor([c], device=device)
                         sample = visualize_denoising_process(
-                            model, noise_scheduler,
+                            base_model, noise_scheduler,
                             shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                             class_label=class_label_sample,
                             num_steps=10,  # Minimal intermediate step (returns 3 images: initial + 1 intermediate + final)
                             device=device,
-                            guidance_scale=cfg.ccddpm.infer.guidance_scale 
+                            guidance_scale=cfg.ccddpm.infer.guidance_scale
                         )
                         # sample has shape [3, C, H, W]: [initial_noise, intermediate, final_image]
                         # Take only the final denoised image
@@ -1361,7 +1367,7 @@ def train(yaml_path: str, split: str = "train") -> None:
 
                     # 5. Conditioning sanity check - verify class labels affect predictions
                     cond_stats = conditioning_sanity_check(
-                        model, noise_scheduler,
+                        base_model, noise_scheduler,
                         num_classes=tcfg.num_classes,
                         image_shape=(tcfg.in_channels, tcfg.image_size, tcfg.image_size),
                         device=device,

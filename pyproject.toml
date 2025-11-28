@@ -71,6 +71,8 @@ metrics = [
     "torch-fidelity>=0.3.0",  # For FID/IS/KID computation
     "clean-fid>=0.1.35",       # Alternative FID implementation
     "lpips>=0.1.4",            # Learned Perceptual Image Patch Similarity
+    "umap-learn",     # UMAP for embedding visualization
+    "tabulate",      # For pretty-printing tables in analysis
 ]
 
 # Optional dependencies for DistDiff integration
