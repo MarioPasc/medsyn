@@ -53,9 +53,9 @@ ccddpm:
         samples_per_class: 50  # Number of samples per class in probe set
         timesteps: [100, 500, 900]  # Early, mid, late diffusion
         layer_names:
-          - down_blocks.1  # Intermediate encoding with attention
-          - mid_block      # Critical bottleneck representation
-          - up_blocks.1    # Intermediate decoding with attention
+          - unet.down_blocks.1  # Intermediate encoding with attention
+          - unet.mid_block      # Critical bottleneck representation
+          - unet.up_blocks.1    # Intermediate decoding with attention
 
         save_both_branches: true  # Save both conditional and unconditional
         pooling_strategy: mean  # mean, max, or flatten

@@ -555,7 +555,7 @@ def save_class_embeddings_trajectory(
 
     if output_path.exists():
         # Load existing trajectory and append
-        state = torch.load(output_path, map_location="cpu")
+        state = torch.load(output_path, map_location="cpu", weights_only=False)
         epochs = state.get("epochs", [])
         prev_emb = state.get("embeddings", None)
 
@@ -663,7 +663,7 @@ def save_clustering_metrics(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
-        state = torch.load(output_path, map_location="cpu")
+        state = torch.load(output_path, map_location="cpu", weights_only=False)
         epochs = state.get("epochs", [])
         scores = state.get("scores", [])
     else:

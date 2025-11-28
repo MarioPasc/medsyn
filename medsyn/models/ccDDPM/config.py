@@ -463,7 +463,7 @@ class EmbeddingLogConfig:
             # Balanced: 10 samples/class, 3 timesteps, some layers
             self.probe.samples_per_class = 10
             self.probe.timesteps = [100, 500, 900]
-            self.probe.layer_names = ["down_blocks.1", "up_blocks.1"]
+            self.probe.layer_names = ["unet.down_blocks.1", "unet.up_blocks.1"]
             self.probe.save_both_branches = True
             self.clustering.enabled = True
             self.log_every_n_epochs = 5
@@ -473,9 +473,9 @@ class EmbeddingLogConfig:
             self.probe.samples_per_class = 50
             self.probe.timesteps = [10, 50, 100, 250, 500, 750, 900, 950, 990]
             self.probe.layer_names = [
-                "down_blocks.0", "down_blocks.1", "down_blocks.2", "down_blocks.3",
-                "mid_block",
-                "up_blocks.0", "up_blocks.1", "up_blocks.2", "up_blocks.3"
+                "unet.down_blocks.0", "unet.down_blocks.1", "unet.down_blocks.2", "unet.down_blocks.3",
+                "unet.mid_block",
+                "unet.up_blocks.0", "unet.up_blocks.1", "unet.up_blocks.2", "unet.up_blocks.3"
             ]
             self.probe.save_both_branches = True
             self.clustering.enabled = True
