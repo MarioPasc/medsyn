@@ -547,6 +547,7 @@ def save_class_embeddings_trajectory(
         - Accumulated trajectory over all logged epochs
         - Shape: [num_epochs, num_classes, emb_dim]
     """
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Current embedding matrix [num_classes, emb_dim]
@@ -607,6 +608,7 @@ def save_probe_features(
         - Metadata arrays: sample_ids, class_ids, epochs, timesteps, layer_names, branches
         - Allows efficient querying (e.g., "all features from layer X at timestep Y")
     """
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not records:
@@ -657,6 +659,7 @@ def save_clustering_metrics(
         - Cluster centers and assignments
         - Trajectory over all logged epochs
     """
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_path.exists():
@@ -697,6 +700,7 @@ def save_metadata(
         - Complete experimental context (dataset, model, training config)
         - Enables reproducibility and cross-run comparison
     """
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, 'w') as f:
@@ -752,7 +756,7 @@ def log_enhanced_embeddings(
         - Clustering: {output_dir}/clustering_metrics.pt
         - Metadata: {output_dir}/run_metadata.json
     """
-    output_dir = config.output_dir
+    output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Always save class embeddings (legacy)
