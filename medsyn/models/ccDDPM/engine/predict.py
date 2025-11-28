@@ -9,6 +9,7 @@ import logging
 import torch
 from torchvision.utils import save_image, make_grid
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from medsyn.models.ccDDPM.config import load_cfg, ProjectCfg
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 
@@ -16,7 +17,7 @@ logger = logging.getLogger("medsyn.ccddpm.predict")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 @torch.no_grad()
-def _cfg_step(model: CCDDPM, scheduler: DDPMScheduler, x: torch.Tensor, t: torch.Tensor, class_labels: torch.Tensor, guidance_scale: float) -> torch.Tensor:
+def _cfg_step(model: CCDDPM, scheduler: DDPMScheduler | DDIMScheduler, x: torch.Tensor, t: torch.Tensor, class_labels: torch.Tensor, guidance_scale: float) -> torch.Tensor:
     """
     Classifier-free guidance step.
 
@@ -88,16 +89,27 @@ def generate(yaml_path: str, checkpoint: Path, class_id: int, k: int) -> List[Pa
     logger.info("Loaded model with UNet config: block_out_channels=%s", mcfg.get_block_out_channels())
 
     # scheduler
-    scheduler = DDPMScheduler(
-        num_train_timesteps=scfg.num_train_timesteps,
-        beta_start=scfg.beta_start,
-        beta_end=scfg.beta_end,
-        beta_schedule=scfg.beta_schedule,
-        prediction_type=scfg.prediction_type,
-        clip_sample=True,
-        clip_sample_range=1.0,
-        thresholding=False,
-    )
+    if icfg.sampler == "ddim":
+        scheduler = DDIMScheduler(
+            num_train_timesteps=scfg.num_train_timesteps,
+            beta_start=scfg.beta_start,
+            beta_end=scfg.beta_end,
+            beta_schedule=scfg.beta_schedule,
+            prediction_type=scfg.prediction_type,
+            clip_sample=True,
+            set_alpha_to_one=False,
+        )
+    else:
+        scheduler = DDPMScheduler(
+            num_train_timesteps=scfg.num_train_timesteps,
+            beta_start=scfg.beta_start,
+            beta_end=scfg.beta_end,
+            beta_schedule=scfg.beta_schedule,
+            prediction_type=scfg.prediction_type,
+            clip_sample=True,
+            clip_sample_range=1.0,
+            thresholding=False,
+        )
     scheduler.set_timesteps(icfg.num_inference_steps, device=device)
 
     bsz = min(k, 64)
@@ -115,7 +127,11 @@ def generate(yaml_path: str, checkpoint: Path, class_id: int, k: int) -> List[Pa
             # Move timestep to device to avoid device mismatch
             t_device = t.to(device)
             eps = _cfg_step(model, scheduler, x, t_device, labels, icfg.guidance_scale)
-            x = scheduler.step(model_output=eps, timestep=t_device, sample=x).prev_sample # type: ignore
+            
+            if icfg.sampler == "ddim":
+                x = scheduler.step(model_output=eps, timestep=t_device, sample=x, eta=icfg.eta).prev_sample
+            else:
+                x = scheduler.step(model_output=eps, timestep=t_device, sample=x).prev_sample
 
         # map from [-1,1] to [0,1]
         imgs = (x.clamp(-1, 1) + 1.0) / 2.0

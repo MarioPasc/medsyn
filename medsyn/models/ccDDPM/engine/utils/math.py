@@ -1,15 +1,17 @@
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 import logging
 import math
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
 from medsyn.models.ccDDPM.loss import estimate_elbo_terms
+
+from medsyn.models.ccDDPM.config import InferenceCfg, SchedCfg
 
 logger = logging.getLogger("medsyn.ccddpm.train")
 
@@ -168,68 +170,100 @@ def compute_training_diagnostics(
     return result
 
 @torch.no_grad()
-def full_chain_reconstruction_metrics(model, scheduler, x0, y, device) -> Dict[str, float]:
+def full_chain_reconstruction_metrics(
+    inference_config: InferenceCfg,
+    training_scheduler_config: SchedCfg,
+    model: nn.Module,
+    ddpm_scheduler: Union[DDPMScheduler, DDIMScheduler],
+    x0: torch.Tensor,
+    y: torch.Tensor,
+    device: torch.device,
+    seed: Optional[int] = 3012022,
+) -> Dict[str, float]:
     """
-    Full-chain reconstruction test: add noise at random t, sample back to t=0, compute metrics.
-    This catches multi-step drift that single-step x̂₀ formulas miss.
-
-    Args:
-        model: DDPM model
-        scheduler: DDPM scheduler
-        x0: Clean image [N, C, H, W]
-        y: Class labels [N]
-        device: Device
-
-    Returns:
-        Dictionary with:
-        - psnr: PSNR of reconstructed image
-        - ssim: SSIM of reconstructed image
+    Compute full-chain reconstruction that gives the option of
+    using deterministic DDIM sampling.
+    
+    DDIM (Song et al., 2020) uses a non-Markovian reverse process that is
+    deterministic when η=0, eliminating sampling variance:
+    
+        x_{t-1} = √(ᾱ_{t-1}) * x̂_0 + √(1-ᾱ_{t-1}) * ε_θ(x_t, t)
+    
+    where x̂_0 = (x_t - √(1-ᾱ_t) * ε_θ) / √(ᾱ_t)
+    
+    References:
+        Song et al. (2020), "Denoising Diffusion Implicit Models"
     """
+    
+    # Save current RNG state
+    rng_state = torch.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state(device) if device.type == 'cuda' else None
+    
+    # Set fixed seed for deterministic forward/reverse process
+    torch.manual_seed(seed)
+    if device.type == 'cuda':
+        torch.cuda.manual_seed(seed)
+        
     model.eval()
-    x0 = x0[:1].to(device)
-    y = y[:1].to(device)
-    T = scheduler.config.num_train_timesteps
-    t = torch.randint(T // 4, 3 * T // 4, (1,), device=device, dtype=torch.long)
+
+    # Forward: noise to x_T
     noise = torch.randn_like(x0)
-    x_t = scheduler.add_noise(x0, noise, t)
+    T = training_scheduler_config.num_train_timesteps - 1
+    x_t = ddpm_scheduler.add_noise(x0, noise, torch.tensor([T], device=device))
+    
 
-    # Run reverse from current t to 0
-    scheduler.set_timesteps(T)
-    # Find index of closest scheduler timestep to t
-    start_idx = int((scheduler.timesteps - t.cpu()).abs().argmin().item())
-    # Move scheduler timesteps to device to avoid device mismatch in scheduler.step()
-    scheduler.timesteps = scheduler.timesteps.to(device)
+    if inference_config.sampler == "ddim":
+        # Create DDIM scheduler from DDPM config
+        ddim_scheduler = DDIMScheduler(
+            num_train_timesteps=training_scheduler_config.num_train_timesteps,
+            beta_start=training_scheduler_config.beta_start,
+            beta_end=training_scheduler_config.beta_end,
+            beta_schedule=training_scheduler_config.beta_schedule,
+            prediction_type=training_scheduler_config.prediction_type,
+            clip_sample=True,
+            set_alpha_to_one=False,
+        )
+        ddim_scheduler.set_timesteps(inference_config.num_inference_steps, device=device)
+        timesteps = ddim_scheduler.timesteps
+        scheduler_step = ddim_scheduler
+    else:
+        # Use DDPM reverse process instead of DDIM     
+        # Set timesteps
+        ddpm_scheduler.set_timesteps(inference_config.num_inference_steps, device=device)
+        timesteps = ddpm_scheduler.timesteps
+        scheduler_step = ddpm_scheduler
 
-    x = x_t
-    for i in range(start_idx, len(scheduler.timesteps)):
-        tt = scheduler.timesteps[i].unsqueeze(0)
-        eps = model(x, tt, y)
-        x = scheduler.step(eps, tt, x).prev_sample
+    # Reverse: x_T to x_0
+    for t in timesteps:
+        t_batch = t.expand(x0.size(0)).to(device)
+        noise_pred = model(x_t, t_batch, y)
+        
+        if inference_config.sampler == "ddim":
+            # DDIM step (eta=0 for deterministic)
+            x_t = scheduler_step.step(
+                noise_pred, t, x_t, eta=inference_config.eta
+            ).prev_sample
+        else:
+            # DDPM step
+            x_t = scheduler_step.step(noise_pred, t, x_t).prev_sample
+        
+    x0_recon = x_t
+    
+    # Rescale to [0, 1] for metrics
+    x0_01 = (x0.clamp(-1, 1) + 1) / 2
+    x0_recon_01 = (x0_recon.clamp(-1, 1) + 1) / 2
+    
+    # Compute PSNR and SSIM
+    from medsyn.models.ccDDPM.metrics import compute_psnr, compute_ssim
+    psnr = compute_psnr(x0_recon_01, x0_01, max_val=1.0)
+    ssim = compute_ssim(x0_recon_01, x0_01, max_val=1.0)
 
-    x_rec = torch.clamp(x, -1, 1)
+    torch.set_rng_state(rng_state)
+    if cuda_rng_state is not None:
+        torch.cuda.set_rng_state(cuda_rng_state, device)
 
-    # Convert to [0, 1] range for metrics
-    x_rec_01 = (x_rec + 1) / 2
-    x0_01 = (x0 + 1) / 2
+    return {"psnr": psnr, "ssim": ssim}
 
-    psnr = compute_psnr(x_rec_01, x0_01, max_val=1.0)
-    ssim = compute_ssim(x_rec_01, x0_01, max_val=1.0)
-
-    return {
-        "psnr": float(psnr),
-        "ssim": float(ssim),
-    }
-
-
-# Legacy function for backwards compatibility
-@torch.no_grad()
-def full_chain_reconstruction_psnr(model, scheduler, x0, y, device) -> float:
-    """
-    Legacy function that returns only PSNR.
-    Use full_chain_reconstruction_metrics() for both PSNR and SSIM.
-    """
-    metrics = full_chain_reconstruction_metrics(model, scheduler, x0, y, device)
-    return metrics["psnr"]
 
 def compute_class_weights_from_counts(
     counts,  # np.ndarray
@@ -488,15 +522,6 @@ def compute_elbo_diagnostics(
         "elbo_weight_ratio_mid_t": float(weight_ratio_mid),
         "elbo_weight_ratio_high_t": float(weight_ratio_high),
     }
-
-def _maybe_drop_labels(labels: torch.Tensor, p: float) -> Optional[torch.Tensor]:
-    if p <= 0:
-        return labels
-    mask = torch.rand_like(labels.float()) < p
-    out = labels.clone()
-    out[mask] = 0  # value unused
-    # Return None for unconditional; model handles None as zeros
-    return None if mask.all() else out
 
 @torch.no_grad()
 def conditioning_sanity_check(

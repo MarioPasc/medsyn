@@ -48,7 +48,7 @@ from medsyn.models.ccDDPM.engine.utils.math import (
     conditioning_sanity_check,
     compute_class_weights_from_counts,
     full_chain_reconstruction_metrics,
-    full_chain_reconstruction_psnr
+    
 )
 from medsyn.models.ccDDPM.engine.utils.fid import compute_fid_on_split
 from medsyn.models.ccDDPM.engine.logging.logging import (
@@ -106,6 +106,7 @@ def train(yaml_path: str, split: str = "train") -> None:
     cfg: ProjectCfg = load_cfg(yaml_path, split=split)
     tcfg = cfg.ccddpm.train
     scfg = cfg.ccddpm.sched
+    icfg = cfg.ccddpm.infer
     optimizer_cfg = cfg.ccddpm.optimizer  # Renamed from ocfg
 
     # ========================================================================
@@ -1019,8 +1020,10 @@ def train(yaml_path: str, split: str = "train") -> None:
 
         # Full-chain reconstruction test (includes both PSNR and SSIM)
         full_chain_metrics = full_chain_reconstruction_metrics(
+            inference_config=icfg,
+            training_scheduler_config=scfg,
             model=model,
-            scheduler=noise_scheduler,
+            ddpm_scheduler=noise_scheduler,
             x0=x0_diag,
             y=labels_diag,
             device=device

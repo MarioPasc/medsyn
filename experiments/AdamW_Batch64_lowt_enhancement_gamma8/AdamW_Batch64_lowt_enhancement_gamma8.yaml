@@ -146,8 +146,8 @@ ccddpm:
     in_channels: 3
     class_embed_dim: 64
     num_classes: 9
-    batch_size: 8
-    epochs: 100
+    batch_size: 64
+    epochs: 200 # ↑ from 100
 
     # ========================================================================
     # EARLY STOPPING CONFIGURATION
@@ -162,7 +162,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 8              # Stop if no improvement for this many epochs
+      patience: 15              # ↑ from 8
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -179,9 +179,9 @@ ccddpm:
     ema_decay: 0.9999
 
     use_min_snr: true          # Min-SNR weighting
-    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    min_snr_gamma: 8.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
-    per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
+    per_class_weight_temperature: 1.5  # ↑ from 1.2 (moderate increase)
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
@@ -206,13 +206,11 @@ ccddpm:
       T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
       eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
 
-      warmup_epochs: 10        # Number of *epochs* to warm up (converted to steps internally)
-
+      warmup_epochs: 20         # ↑ from 10 — 10% of 200 epochs
       # New parameters for LinearWarmupCosineAnnealingLR-like schedule
       warmup_start_lr: null   # Absolute LR at the very first step of warmup.
                               # If null, computed as warmup_start_factor * base_lr.
-      warmup_start_factor: 0.01  # Relative factor: start LR = base_lr * warmup_start_factor
-                                # Only used when warmup_start_lr is null.
+      warmup_start_factor: 0.001  # ↓ from 0.01 — gentler warmup start
 
       # Step parameters (used when type == "step")
       step_size: 30
@@ -224,9 +222,9 @@ ccddpm:
   # ========================================================================
   # Supported types: adamw (default), adam, sgd, rmsprop
   optimizer:
-    type: "lion"              # Optimizer type: adamw, adam, sgd, rmsprop
+    type: "adamw"              # Optimizer type: adamw, adam, sgd, rmsprop
     lr: 1.0e-4                 # Learning rate (if you see overflows, try 1.0e-4)
-    wd: 0.001                    # Weight decay (L2 regularization)
+    wd: 0.01                    # Weight decay (L2 regularization)
     # Adam/AdamW/Lion specific
     betas: [0.9, 0.999]        # Beta coefficients for Adam
     eps: 1.0e-8                # Epsilon for numerical stability
@@ -246,7 +244,11 @@ ccddpm:
     prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
     guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
-    num_inference_steps: 1000
+    sampler: ddim        # Sampler type: ddim, ddpm
+    
+    eta: 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)
+    num_inference_steps: 100
+    
     out_dir: ${OUTPUT_DIR}/samples
 
 
