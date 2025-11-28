@@ -2,16 +2,13 @@
 # Purpose: Training loop for class-conditioned DDPM with Diffusers' DDPMScheduler.
 # Features: mixed precision, EMA, classifier-free guidance (label drop), checkpointing, CSV logs, DDP support.
 from __future__ import annotations
-from pathlib import Path
-from typing import Optional, Dict, Any
 import os
 import csv
 import time
 import math
 import logging
+from pathlib import Path
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -21,13 +18,9 @@ from medsyn.models.ccDDPM.config import ProjectCfg, load_cfg
 from medsyn.models.ccDDPM.dataloaders.json import build_json_loader
 from medsyn.models.ccDDPM.dataloaders.npz import build_npz_loader
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
-from medsyn.models.ccDDPM.loss import DDPMNoiseMSE, estimate_elbo_terms
+from medsyn.models.ccDDPM.loss import DDPMNoiseMSE
 from medsyn.models.ccDDPM.metrics import (
-    compute_psnr, compute_ssim,
-    compute_per_class_metrics,
     PerClassMetricsAccumulator,
-    compute_class_weight_correlation,
-    TorchmetricsFIDComputer,
     setup_fid_weights_cache,
 )
 from medsyn.models.ccDDPM.vis.training_visualizations import (
@@ -69,9 +62,9 @@ from medsyn.models.ccDDPM.engine.logging.logging import (
 )
 from medsyn.models.ccDDPM.engine.logging.training_logging import (
     CSVTrainingLogger, EpochAverager, TRAINING_FIELDS, DIAGNOSTIC_FIELDS, NUM_CLASSES,
-    DEFAULT_FID_CONFIG, save_class_embeddings_trajectory
+    DEFAULT_FID_CONFIG
 )
-from medsyn.models.ccDDPM.engine.logging.embeddings import log_enhanced_embeddings
+from medsyn.models.ccDDPM.engine.logging.embeddings import log_enhanced_embeddings, save_class_embeddings_trajectory
 from medsyn.models.ccDDPM.config import EmbeddingLogConfig
 from medsyn.models.ccDDPM.engine.utils.ddp_utils import (
     ddp_is_enabled, ddp_init, is_main_process,
