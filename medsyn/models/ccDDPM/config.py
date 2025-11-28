@@ -679,8 +679,13 @@ def load_cfg(yaml_path: str | Path, split: str = "train") -> ProjectCfg:
                 k: v for k, v in embeddings_dict.items()
                 if k not in ['probe', 'clustering', 'metadata']
             }
+            # Merge defaults with YAML values, excluding nested configs to avoid duplicate kwargs
+            emb_defaults = {
+                k: v for k, v in EmbeddingLogConfig().__dict__.items()
+                if k not in ['probe', 'clustering', 'metadata']
+            }
             embeddings_cfg = EmbeddingLogConfig(
-                **{**EmbeddingLogConfig().__dict__, **emb_base},
+                **{**emb_defaults, **emb_base},
                 probe=probe_cfg,
                 clustering=clustering_cfg,
                 metadata=metadata_cfg
