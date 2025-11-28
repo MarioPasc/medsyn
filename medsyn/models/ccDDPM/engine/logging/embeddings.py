@@ -631,19 +631,53 @@ def save_probe_features(
     timesteps = np.array([r.timestep for r in records])
     layer_names = np.array([r.layer_name for r in records])
     branches = np.array([r.branch for r in records])
-    features = np.stack([r.feature for r in records])  # [n_records, d]
+
+    # Check if all features have the same shape
+    feature_shapes = [r.feature.shape for r in records]
+    feature_lengths = [r.feature.size for r in records]
+    unique_shapes = set(feature_shapes)
+
+    if len(unique_shapes) > 1:
+        # Different layers have different dimensions - pad to max length
+        max_length = max(feature_lengths)
+        logger.warning(
+            f"Multiple feature shapes detected: {unique_shapes}. "
+            f"This is expected when extracting from different layers. "
+            f"Padding all features to length {max_length}."
+        )
+        # Pad features to same length
+        padded_features = []
+        for r in records:
+            feat = r.feature.flatten()
+            if feat.size < max_length:
+                padded = np.pad(feat, (0, max_length - feat.size), mode='constant', constant_values=0)
+            else:
+                padded = feat
+            padded_features.append(padded)
+        features = np.stack(padded_features)  # [n_records, max_length]
+        # Store original lengths for reconstruction
+        feature_lengths_array = np.array(feature_lengths)
+    else:
+        # All features have same shape - stack into 2D array
+        features = np.stack([r.feature for r in records])  # [n_records, d]
+        feature_lengths_array = None
 
     # Save as npz for efficiency
-    np.savez_compressed(
-        output_path,
-        features=features,
-        sample_ids=sample_ids,
-        class_ids=class_ids,
-        epochs=epochs,
-        timesteps=timesteps,
-        layer_names=layer_names,
-        branches=branches,
-    )
+    save_dict = {
+        'features': features,
+        'sample_ids': sample_ids,
+        'class_ids': class_ids,
+        'epochs': epochs,
+        'timesteps': timesteps,
+        'layer_names': layer_names,
+        'branches': branches,
+    }
+
+    # Include feature lengths if features were padded
+    if feature_lengths_array is not None:
+        save_dict['feature_lengths'] = feature_lengths_array
+
+    np.savez_compressed(output_path, **save_dict)
 
     logger.info(
         f"Saved {len(records)} probe features to {output_path} "
