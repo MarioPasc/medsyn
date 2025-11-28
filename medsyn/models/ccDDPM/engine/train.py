@@ -1075,7 +1075,6 @@ def train(yaml_path: str, split: str = "train") -> None:
                         ]
 
                 # Update config with resolved paths
-                from pathlib import Path
                 emb_cfg_resolved = EmbeddingLogConfig(
                     enabled=emb_cfg.enabled,
                     log_every_n_epochs=emb_cfg.log_every_n_epochs,
