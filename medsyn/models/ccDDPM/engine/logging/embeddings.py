@@ -226,9 +226,14 @@ def extract_features_from_layer(
         elif act.dim() == 2:
             # Already flat [B, C]
             feat = act
+        elif act.dim() == 1:
+            # 1D tensor - add batch dimension
+            logger.warning(f"1D activation shape: {act.shape}, adding batch dimension")
+            feat = act.unsqueeze(0)
         else:
-            logger.warning(f"Unexpected activation shape: {act.shape}")
-            feat = act.flatten(1)
+            # 5D or higher - flatten everything except batch
+            logger.warning(f"Unexpected activation shape: {act.shape}, flattening")
+            feat = act.flatten(1) if act.dim() > 1 else act.unsqueeze(0)
 
         return feat
 
@@ -306,7 +311,7 @@ def collect_probe_features(
                         )
                     else:
                         # No layer specified, use class embedding directly
-                        feat_cond = model.class_embed(label)  # [1, D]
+                        feat_cond = model.class_embed.emb(label)  # [1, D]
 
                     records.append(FeatureRecord(
                         sample_id=sample_id,
@@ -327,7 +332,7 @@ def collect_probe_features(
                         else:
                             # Unconditional uses -1 or special token
                             uncond_label = torch.tensor([-1], device=device)
-                            feat_uncond = model.class_embed(uncond_label)
+                            feat_uncond = model.class_embed.emb(uncond_label)
 
                         records.append(FeatureRecord(
                             sample_id=sample_id,
@@ -817,6 +822,10 @@ def log_enhanced_embeddings(
         if config.clustering.enabled and len(features) > 0:
             # Extract features and labels for clustering
             # Use only conditional branch, one timestep, one layer for simplicity
+            if not config.probe.timesteps:
+                logger.warning("No timesteps configured for probe, skipping clustering")
+                return probe_set
+
             target_timestep = config.probe.timesteps[len(config.probe.timesteps) // 2]  # Middle timestep
             target_layer = config.probe.layer_names[0] if config.probe.layer_names else "class_embed"
 
