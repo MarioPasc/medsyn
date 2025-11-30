@@ -578,6 +578,7 @@ def plot_timestep_evolution(
 # ---------------------------------------------------------------------------
 
 def main():
+    #  python medsyn/analysis/embeddings/time_sensitive_anisotropy_evolution.py --features_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings --output_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings --max_epoch 10 --num_epochs_to_plot 10 
     parser = argparse.ArgumentParser(
         description="Time-sensitive anisotropy evolution visualization."
     )
