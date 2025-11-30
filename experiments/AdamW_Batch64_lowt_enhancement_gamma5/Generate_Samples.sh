@@ -51,7 +51,7 @@ WORKDIR="${MYLOCALSCRATCH}/work"
 REPO_DIR="${WORKDIR}/medsyn"
 CKPT_DIR="${WORKDIR}/checkpoints"
 OUT_DIR="${WORKDIR}/generated"
-CONFIG_TEMP="${WORKDIR}/picasso_cfg_generate.yaml"
+CONFIG_TEMP="${REPO_DIR}/experiments/AdamW_Batch64_lowt_enhancement_gamma5/config_AdamW_Batch64_lowt_enhancement_gamma5.yaml"
 
 mkdir -p "${WORKDIR}" "${CKPT_DIR}" "${OUT_DIR}"
 
