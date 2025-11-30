@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#SBATCH -J ccddpm_generate_parallel
-#SBATCH --time=23:00:00
+#SBATCH -J log_AdamW_Batch64_lowt_enhancement_gamma5_generate_parallel
+#SBATCH --time=10:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -37,10 +37,10 @@ set -euo pipefail
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 
 # Path to trained checkpoint
-CHECKPOINT_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel/ckpts/best.pt"
+CHECKPOINT_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/AdamW_Batch64_lowt_enhancement_gamma5/ckpts/best.pt"
 
 # Where to store generated images
-RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/PathMNIST_ccDDPM_parallel_generated"
+RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/AdamW_Batch64_lowt_enhancement_gamma5_generated"
 
 # Number of GPUs to use (auto-detected from SLURM, or set manually)
 NUM_GPUS=${SLURM_GPUS_ON_NODE:-4}

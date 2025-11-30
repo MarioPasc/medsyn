@@ -332,11 +332,8 @@ class TrainCfg:
 class InferenceCfg:
     guidance_scale: float = 2.0  # 0 = unconditional; >0 for cfg
     sampler: str = "ddim"        # Sampler type: ddpm, ddim
-    if sampler == "ddim":
-        eta: float = 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)
-        num_inference_steps: int = 100
-    else:
-        num_inference_steps: int = 1000
+    eta: float = 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)
+    num_inference_steps: int = 100  # Number of inference steps (100 for DDIM, 1000 for DDPM)
     save_grid: bool = True
     out_dir: Path = Path("./samples/ccddpm")
 

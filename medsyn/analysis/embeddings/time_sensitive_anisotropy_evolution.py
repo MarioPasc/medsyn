@@ -41,6 +41,14 @@ from medsyn.analysis.embeddings.anisotropy_single_visualization import (
     compute_local_anisotropy,
 )
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+try:
+    import umap
+    UMAP_AVAILABLE = True
+except ImportError:
+    UMAP_AVAILABLE = False
+    logging.warning("UMAP not available. Install with: pip install umap-learn")
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +182,11 @@ def load_probe_features_2d_with_variance(
     feature_branch: str = "cond",
     random_state: int = 42,
     max_samples: Optional[int] = None,
+    dim_reduction: str = "pca",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Load probe feature vectors from NPZ and reduce to 2D with PCA.
-    Returns PCA variance explained ratios.
+    Load probe feature vectors from NPZ and reduce to 2D with specified method.
+    Returns variance explained ratios.
 
     Parameters
     ----------
@@ -190,18 +199,20 @@ def load_probe_features_2d_with_variance(
     feature_branch : {"cond", "uncond", "both"}, default "cond"
         Which CFG branch to include.
     random_state : int
-        Random seed for PCA reproducibility.
+        Random seed for reproducibility.
     max_samples : int or None
         Optional maximum number of feature vectors to subsample.
+    dim_reduction : {"pca", "tsne", "umap"}, default "pca"
+        Dimensionality reduction method to use.
 
     Returns
     -------
     Z : ndarray of shape (N, 2)
-        2D PCA projection of selected features.
+        2D projection of selected features.
     class_ids : ndarray of shape (N,)
         Class IDs corresponding to each feature vector.
     variance_ratio : ndarray of shape (2,)
-        PCA explained variance ratio for each component.
+        Variance explained ratio for each component.
     """
     data = np.load(npz_path, allow_pickle=True)
 
@@ -249,11 +260,34 @@ def load_probe_features_2d_with_variance(
         sel_features = sel_features[idx]
         sel_class_ids = sel_class_ids[idx]
 
-    # PCA -> 2D
-    pca = PCA(n_components=2, random_state=random_state)
-    Z = pca.fit_transform(sel_features)
+    # Dimensionality reduction to 2D
+    if dim_reduction.lower() == "pca":
+        reducer = PCA(n_components=2, random_state=random_state)
+        Z = reducer.fit_transform(sel_features)
+        variance_ratio = reducer.explained_variance_ratio_
 
-    return Z, sel_class_ids, pca.explained_variance_ratio_
+    elif dim_reduction.lower() == "tsne":
+        reducer = TSNE(n_components=2, random_state=random_state, perplexity=30, max_iter=1000)
+        Z = reducer.fit_transform(sel_features)
+        # Calculate variance for each dimension
+        var_per_dim = np.var(Z, axis=0)
+        total_var = np.sum(var_per_dim)
+        variance_ratio = var_per_dim / total_var
+
+    elif dim_reduction.lower() == "umap":
+        if not UMAP_AVAILABLE:
+            raise ImportError("UMAP is not available. Install with: pip install umap-learn")
+        reducer = umap.UMAP(n_components=2, random_state=random_state, n_neighbors=15, min_dist=0.1)
+        Z = reducer.fit_transform(sel_features)
+        # Calculate variance for each dimension
+        var_per_dim = np.var(Z, axis=0)
+        total_var = np.sum(var_per_dim)
+        variance_ratio = var_per_dim / total_var
+
+    else:
+        raise ValueError(f"Unknown dimensionality reduction method: {dim_reduction}")
+
+    return Z, sel_class_ids, variance_ratio
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +306,7 @@ def plot_anisotropy_with_marginals(
     class_ids: Optional[np.ndarray] = None,
     grid_res: int = 80,
     show_legend: bool = False,
+    dim_reduction: str = "pca",
 ) -> Tuple[plt.Axes, plt.Axes, plt.Axes]:
     """
     Plot anisotropy visualization with marginal distributions in a jointplot style.
@@ -291,7 +326,7 @@ def plot_anisotropy_with_marginals(
     ylim : tuple of (ymin, ymax)
         Y-axis limits (fixed for all subplots).
     pca_var : ndarray of shape (2,)
-        PCA explained variance ratios.
+        Variance explained ratios for each component.
     conf_level : float, default 0.95
         Confidence level for high-density region.
     class_ids : ndarray or None
@@ -300,6 +335,8 @@ def plot_anisotropy_with_marginals(
         Resolution of KDE grid for contours.
     show_legend : bool, default False
         Whether to show legend on this subplot.
+    dim_reduction : str, default "pca"
+        Dimensionality reduction method used.
 
     Returns
     -------
@@ -433,13 +470,30 @@ def plot_anisotropy_with_marginals(
         )
 
     # Set axis labels with variance explained
+    # Create appropriate labels based on dimensionality reduction method
+    method_prefix = dim_reduction.upper()
+    if dim_reduction.lower() == "pca":
+        xlabel = f"PC1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"PC2 ({pca_var[1]*100:.1f}%)"
+    elif dim_reduction.lower() == "tsne":
+        xlabel = f"t-SNE 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"t-SNE 2 ({pca_var[1]*100:.1f}%)"
+    elif dim_reduction.lower() == "umap":
+        xlabel = f"UMAP 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"UMAP 2 ({pca_var[1]*100:.1f}%)"
+    else:
+        xlabel = f"Dim 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"Dim 2 ({pca_var[1]*100:.1f}%)"
+
     ax_main.set_xlabel(
-        f"PC1 ({pca_var[0]*100:.1f}%)",
-        fontsize=PLOT_SETTINGS["axes_labelsize"]
+        xlabel,
+        fontsize=PLOT_SETTINGS["axes_labelsize"],
+        fontweight='bold'
     )
     ax_main.set_ylabel(
-        f"PC2 ({pca_var[1]*100:.1f}%)",
-        fontsize=PLOT_SETTINGS["axes_labelsize"]
+        ylabel,
+        fontsize=PLOT_SETTINGS["axes_labelsize"],
+        fontweight='bold'
     )
     ax_main.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
     ax_main.grid(
@@ -478,7 +532,7 @@ def plot_anisotropy_with_marginals(
         color=PLOT_SETTINGS["kde_color"],
         linewidth=PLOT_SETTINGS["kde_line_width"]
     )
-    ax_top.set_ylabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"])
+    ax_top.set_ylabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
     ax_top.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelbottom=False)
     ax_top.grid(
         True,
@@ -508,7 +562,7 @@ def plot_anisotropy_with_marginals(
         color=PLOT_SETTINGS["kde_color"],
         linewidth=PLOT_SETTINGS["kde_line_width"]
     )
-    ax_right.set_xlabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"])
+    ax_right.set_xlabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
     ax_right.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelleft=False)
     ax_right.grid(
         True,
@@ -535,6 +589,7 @@ def plot_timestep_evolution(
     min_samples: int = 10,
     random_state: int = 42,
     max_features: Optional[int] = None,
+    dim_reduction: str = "pca",
 ) -> None:
     """
     Create a multi-panel figure for a single timestep showing evolution across epochs.
@@ -561,6 +616,8 @@ def plot_timestep_evolution(
         Random seed.
     max_features : int or None
         Optional cap on number of feature vectors.
+    dim_reduction : str, default "pca"
+        Dimensionality reduction method ("pca", "tsne", or "umap").
     """
     branches = ["uncond", "cond", "both"]
     n_epochs = len(epochs_to_plot)
@@ -587,6 +644,7 @@ def plot_timestep_evolution(
                     feature_branch=branch,
                     random_state=random_state,
                     max_samples=max_features,
+                    dim_reduction=dim_reduction,
                 )
 
                 result = compute_local_anisotropy(
@@ -657,6 +715,7 @@ def plot_timestep_evolution(
                     conf_level=conf_level,
                     class_ids=class_ids,
                     show_legend=False,
+                    dim_reduction=dim_reduction,
                 )
 
                 # Collect legend info from first subplot only
@@ -794,6 +853,13 @@ def main():
         default=None,
         help="Optional cap on number of feature vectors (for speed).",
     )
+    parser.add_argument(
+        "--dim_reduction",
+        type=str,
+        default="pca",
+        choices=["pca", "tsne", "umap"],
+        help="Dimensionality reduction method to use (default: pca).",
+    )
 
     args = parser.parse_args()
 
@@ -853,6 +919,7 @@ def main():
             min_samples=args.min_samples,
             random_state=args.random_state,
             max_features=args.max_features,
+            dim_reduction=args.dim_reduction,
         )
 
     logging.info("Done!")

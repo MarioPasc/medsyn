@@ -38,6 +38,7 @@ from torchvision.utils import save_image
 from medsyn.models.ccDDPM.config import load_cfg, ProjectCfg
 from medsyn.models.ccDDPM.model import CCDDPM, CCDDPMInit
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -189,7 +190,7 @@ def parse_generation_config(config_path: Path) -> tuple[dict[str, dict[int, int]
 
 def load_model_and_scheduler(
     config_path: str | Path, checkpoint_path: Path, device: torch.device
-) -> tuple[CCDDPM, DDPMScheduler, ProjectCfg]:
+) -> tuple[CCDDPM, DDPMScheduler | DDIMScheduler, ProjectCfg]:
     """
     Load the ccDDPM model and scheduler from checkpoint.
 
@@ -295,24 +296,38 @@ def load_model_and_scheduler(
     model.eval()
     logger.debug("Model set to evaluation mode")
 
-    # Initialize scheduler for inference
-    scheduler = DDPMScheduler(
-        num_train_timesteps=scfg.num_train_timesteps,
-        beta_start=scfg.beta_start,
-        beta_end=scfg.beta_end,
-        beta_schedule=scfg.beta_schedule,
-        prediction_type=scfg.prediction_type,
-        clip_sample=True,            # <- critical
-        clip_sample_range=1.0,
-        thresholding=False,
-    )
+    # Initialize scheduler for inference based on config
+    if icfg.sampler.lower() == "ddim":
+        logger.info("Using DDIM scheduler for fast sampling")
+        scheduler = DDIMScheduler(
+            num_train_timesteps=scfg.num_train_timesteps,
+            beta_start=scfg.beta_start,
+            beta_end=scfg.beta_end,
+            beta_schedule=scfg.beta_schedule,
+            prediction_type=scfg.prediction_type,
+            clip_sample=True,
+            set_alpha_to_one=False,
+        )
+    else:
+        logger.info("Using DDPM scheduler for standard sampling")
+        scheduler = DDPMScheduler(
+            num_train_timesteps=scfg.num_train_timesteps,
+            beta_start=scfg.beta_start,
+            beta_end=scfg.beta_end,
+            beta_schedule=scfg.beta_schedule,
+            prediction_type=scfg.prediction_type,
+            clip_sample=True,            # <- critical
+            clip_sample_range=1.0,
+            thresholding=False,
+        )
     scheduler.set_timesteps(icfg.num_inference_steps, device=device)
-    
+
     logger.debug("Scheduler initialized with %d timesteps", len(scheduler.timesteps))
 
     # Log scheduler configuration to verify it matches training
     logger.info("=" * 60)
     logger.info("Scheduler Configuration (must match training):")
+    logger.info("  sampler: %s", icfg.sampler)
     logger.info("  num_train_timesteps: %d", scfg.num_train_timesteps)
     logger.info("  beta_schedule: %s", scfg.beta_schedule)
     logger.info("  beta_start: %.6f", scfg.beta_start)
@@ -320,6 +335,8 @@ def load_model_and_scheduler(
     logger.info("  prediction_type: %s", scfg.prediction_type)
     logger.info("  num_inference_steps: %d", icfg.num_inference_steps)
     logger.info("  guidance_scale: %.2f", icfg.guidance_scale)
+    if icfg.sampler.lower() == "ddim":
+        logger.info("  eta (DDIM stochasticity): %.2f", icfg.eta)
     logger.info("=" * 60)
 
     logger.info(
@@ -335,7 +352,7 @@ def load_model_and_scheduler(
 @torch.no_grad()
 def generate_with_cfg(
     model: CCDDPM,
-    scheduler: DDPMScheduler,
+    scheduler: DDPMScheduler | DDIMScheduler,
     class_label: int,
     image_size: int,
     in_channels: int,
@@ -343,6 +360,7 @@ def generate_with_cfg(
     device: torch.device,
     debug: bool = False,
     batch_size: int = 1,
+    eta: float = 0.0,
 ) -> torch.Tensor:
     """
     Generate images using classifier-free guidance with optional batching.
@@ -397,8 +415,11 @@ def generate_with_cfg(
                            f"x_t_range=[{x_t.min():.3f}, {x_t.max():.3f}], " +
                            f"eps_range=[{eps.min():.3f}, {eps.max():.3f}]")
 
-        # Denoising step
-        x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t).prev_sample
+        # Denoising step (DDIM uses eta parameter, DDPM doesn't)
+        if isinstance(scheduler, DDIMScheduler):
+            x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t, eta=eta).prev_sample
+        else:
+            x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t).prev_sample
 
         # Extra debug for first few steps
         if debug and step_idx < 5:
@@ -413,13 +434,14 @@ def generate_with_cfg(
 @torch.no_grad()
 def generate_with_denoising_steps(
     model: CCDDPM,
-    scheduler: DDPMScheduler,
+    scheduler: DDPMScheduler | DDIMScheduler,
     class_label: int,
     image_size: int,
     in_channels: int,
     guidance_scale: float,
     device: torch.device,
     num_vis_steps: int = 10,
+    eta: float = 0.0,
 ) -> tuple[torch.Tensor, list[torch.Tensor]]:
     """
     Generate an image while capturing intermediate denoising steps for visualization.
@@ -464,7 +486,11 @@ def generate_with_denoising_steps(
         else:
             eps = model(x_t, t_batch, labels)
 
-        x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t).prev_sample
+        # Denoising step (DDIM uses eta parameter, DDPM doesn't)
+        if isinstance(scheduler, DDIMScheduler):
+            x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t, eta=eta).prev_sample
+        else:
+            x_t = scheduler.step(model_output=eps, timestep=t, sample=x_t).prev_sample
 
         if i in save_indices:
             intermediate_steps.append(x_t.cpu().clone())
@@ -521,7 +547,7 @@ def create_denoising_visualization(
 
 def generate_images_for_class(
     model: CCDDPM,
-    scheduler: DDPMScheduler,
+    scheduler: DDPMScheduler | DDIMScheduler,
     class_id: int,
     num_samples: int,
     output_dir: Path,
@@ -557,6 +583,7 @@ def generate_images_for_class(
         - Dictionary mapping sample IDs to metadata (for JSON index)
         - NumPy array of images [N, H, W, C] uint8
         - NumPy array of labels [N] int64
+        - Dictionary of time statistics (mean, std, min, max, total_seconds, num_samples)
     """
     tcfg = config.ccddpm.train
     icfg = config.ccddpm.infer
@@ -579,6 +606,9 @@ def generate_images_for_class(
     # Lists to collect images and labels for NPZ
     images_list: list[np.ndarray] = []
     labels_list: list[int] = []
+
+    # List to track per-image generation times for statistics
+    per_image_times: list[float] = []
 
     logger.debug("Generating %d images for class %d using batch_size=%d...",
                 num_samples, class_id, batch_size)
@@ -607,6 +637,9 @@ def generate_images_for_class(
         # Enable debug logging for first batch
         enable_debug = (class_id == 0 and batch_idx == 0)
 
+        # Start timing for this batch
+        batch_start_time = time.time()
+
         # Generate batch of images
         if vis_in_batch:
             # Generate visualization separately (single image)
@@ -622,6 +655,7 @@ def generate_images_for_class(
                 guidance_scale=icfg.guidance_scale,
                 device=device,
                 num_vis_steps=10,
+                eta=icfg.eta,
             )
 
             # Create visualization
@@ -643,6 +677,7 @@ def generate_images_for_class(
                     device=device,
                     debug=enable_debug,
                     batch_size=batch_without_vis,
+                    eta=icfg.eta,
                 )
                 # Combine visualization and batch images
                 # Insert vis image at correct position
@@ -669,7 +704,17 @@ def generate_images_for_class(
                 device=device,
                 debug=enable_debug,
                 batch_size=current_batch_size,
+                eta=icfg.eta,
             )
+
+        # End timing for this batch and calculate per-image time
+        batch_end_time = time.time()
+        batch_generation_time = batch_end_time - batch_start_time
+        per_image_time_batch = batch_generation_time / current_batch_size
+
+        # Add per-image time for each image in this batch
+        for _ in range(current_batch_size):
+            per_image_times.append(per_image_time_batch)
 
         # Process and save each image in the batch
         for batch_pos in range(current_batch_size):
@@ -785,7 +830,20 @@ def generate_images_for_class(
     logger.debug("  Images array shape: %s, dtype: %s", images_array.shape, images_array.dtype)
     logger.debug("  Labels array shape: %s, dtype: %s", labels_array.shape, labels_array.dtype)
 
-    return samples_metadata, images_array, labels_array
+    # Calculate per-class time statistics
+    time_stats = {
+        "mean_seconds": float(np.mean(per_image_times)),
+        "std_seconds": float(np.std(per_image_times)),
+        "min_seconds": float(np.min(per_image_times)),
+        "max_seconds": float(np.max(per_image_times)),
+        "total_seconds": total_time,
+        "num_samples": num_samples,
+    }
+    logger.debug("  Time statistics: mean=%.3fs, std=%.3fs, min=%.3fs, max=%.3fs",
+                time_stats["mean_seconds"], time_stats["std_seconds"],
+                time_stats["min_seconds"], time_stats["max_seconds"])
+
+    return samples_metadata, images_array, labels_array, time_stats
 
 
 def build_json_index(
@@ -829,6 +887,166 @@ def build_json_index(
 
     # Build the structure matching _build_index_structure
     return {dataset_name: {split_name: flat_samples}}
+
+
+def save_generation_metadata(
+    output_path: Path,
+    all_time_stats: dict[int, dict[str, float]],
+    global_stats: dict[str, float],
+    config: ProjectCfg,
+    device: torch.device,
+    split_name: str,
+    num_gpus: int = 1,
+) -> None:
+    """
+    Save generation metadata to JSON file.
+
+    Args:
+        output_path: Path where to save the metadata JSON
+        all_time_stats: Per-class time statistics
+        global_stats: Global time statistics
+        config: Project configuration
+        device: Device used for generation
+        split_name: Name of the split (train, val, test)
+        num_gpus: Number of GPUs used (default: 1)
+    """
+    import datetime
+    import platform
+
+    tcfg = config.ccddpm.train
+    scfg = config.ccddpm.sched
+    icfg = config.ccddpm.infer
+
+    metadata = {
+        "generation_info": {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "split": split_name,
+            "num_gpus": num_gpus,
+            "device": str(device),
+        },
+        "model_config": {
+            "num_classes": tcfg.num_classes,
+            "image_size": tcfg.image_size,
+            "in_channels": tcfg.in_channels,
+            "class_embed_dim": tcfg.class_embed_dim,
+        },
+        "scheduler_config": {
+            "sampler": icfg.sampler,
+            "num_train_timesteps": scfg.num_train_timesteps,
+            "beta_schedule": scfg.beta_schedule,
+            "beta_start": scfg.beta_start,
+            "beta_end": scfg.beta_end,
+            "prediction_type": scfg.prediction_type,
+            "num_inference_steps": icfg.num_inference_steps,
+            "guidance_scale": icfg.guidance_scale,
+        },
+        "sampler_params": {},
+        "per_class_statistics": {
+            str(class_id): {
+                "mean_time_seconds": stats["mean_seconds"],
+                "std_time_seconds": stats["std_seconds"],
+                "min_time_seconds": stats["min_seconds"],
+                "max_time_seconds": stats["max_seconds"],
+                "total_time_seconds": stats["total_seconds"],
+                "num_samples": stats["num_samples"],
+            }
+            for class_id, stats in sorted(all_time_stats.items())
+        },
+        "global_statistics": {
+            "mean_time_seconds": global_stats["mean_seconds"],
+            "std_time_seconds": global_stats["std_seconds"],
+            "min_time_seconds": global_stats["min_seconds"],
+            "max_time_seconds": global_stats["max_seconds"],
+            "total_time_seconds": global_stats["total_seconds"],
+            "total_samples": global_stats["total_samples"],
+            "throughput_samples_per_second": (
+                global_stats["total_samples"] / global_stats["total_seconds"]
+                if global_stats["total_seconds"] > 0
+                else 0.0
+            ),
+        },
+        "system_info": {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+        },
+    }
+
+    # Add sampler-specific parameters
+    if icfg.sampler.lower() == "ddim":
+        metadata["sampler_params"]["eta"] = icfg.eta
+
+    # Add GPU information if available
+    if device.type == "cuda":
+        metadata["system_info"]["cuda_version"] = torch.version.cuda
+        metadata["system_info"]["gpu_devices"] = []
+        for i in range(torch.cuda.device_count()):
+            gpu_props = torch.cuda.get_device_properties(i)
+            metadata["system_info"]["gpu_devices"].append({
+                "id": i,
+                "name": torch.cuda.get_device_name(i),
+                "total_memory_gb": gpu_props.total_memory / 1e9,
+            })
+
+    # Save to JSON
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"Generation metadata saved to: {output_path}")
+
+
+def compute_global_time_stats(
+    all_time_stats: dict[int, dict[str, float]]
+) -> dict[str, float]:
+    """
+    Compute global time statistics from per-class statistics.
+
+    Args:
+        all_time_stats: Dictionary mapping class_id -> time_stats
+
+    Returns:
+        Dictionary with global mean, std, min, max, and total time
+    """
+    if not all_time_stats:
+        return {
+            "mean_seconds": 0.0,
+            "std_seconds": 0.0,
+            "min_seconds": 0.0,
+            "max_seconds": 0.0,
+            "total_seconds": 0.0,
+            "total_samples": 0,
+        }
+
+    # Collect all per-class means and samples
+    all_means = []
+    all_mins = []
+    all_maxs = []
+    all_totals = []
+    total_samples = 0
+
+    for class_id, stats in sorted(all_time_stats.items()):
+        # Weight each class mean by number of samples for global mean calculation
+        all_means.extend([stats["mean_seconds"]] * stats["num_samples"])
+        all_mins.append(stats["min_seconds"])
+        all_maxs.append(stats["max_seconds"])
+        all_totals.append(stats["total_seconds"])
+        total_samples += stats["num_samples"]
+
+    # Compute global statistics
+    global_mean = float(np.mean(all_means))
+    global_std = float(np.std(all_means))
+    global_min = float(np.min(all_mins))
+    global_max = float(np.max(all_maxs))
+    global_total = float(np.sum(all_totals))
+
+    return {
+        "mean_seconds": global_mean,
+        "std_seconds": global_std,
+        "min_seconds": global_min,
+        "max_seconds": global_max,
+        "total_seconds": global_total,
+        "total_samples": total_samples,
+    }
 
 
 def save_split_npz(
@@ -1061,6 +1279,7 @@ The YAML config should contain a 'generate' section:
             all_samples: dict[int, dict[str, dict[str, Any]]] = {}
             all_images: dict[int, np.ndarray] = {}
             all_labels: dict[int, np.ndarray] = {}
+            all_time_stats: dict[int, dict[str, float]] = {}
 
             sorted_class_ids = sorted(class_to_samples.keys())
             total_classes = len(sorted_class_ids)
@@ -1071,7 +1290,7 @@ The YAML config should contain a 'generate' section:
                 logger.info("Generating class %d [%d/%d]: %d samples",
                            class_id, class_idx + 1, total_classes, num_samples)
 
-                samples_metadata, images_array, labels_array = generate_images_for_class(
+                samples_metadata, images_array, labels_array, time_stats = generate_images_for_class(
                     model=model,
                     scheduler=scheduler,
                     class_id=class_id,
@@ -1093,6 +1312,7 @@ The YAML config should contain a 'generate' section:
                 all_samples[class_id] = samples_metadata
                 all_images[class_id] = images_array
                 all_labels[class_id] = labels_array
+                all_time_stats[class_id] = time_stats
 
             # Build and save JSON index for this split
             print(f"\nBuilding JSON index for {split_name} split...")
@@ -1122,11 +1342,27 @@ The YAML config should contain a 'generate' section:
                 output_path=npz_path,
             )
 
+            # Compute global statistics and save metadata
+            print(f"\nSaving generation metadata for {split_name} split...")
+            logger.info("Computing global statistics and saving metadata for split '%s'", split_name)
+            global_stats = compute_global_time_stats(all_time_stats)
+            metadata_path = split_output_dir / f"{args.dataset_name.lower()}_{split_name}_generation_metadata.json"
+            save_generation_metadata(
+                output_path=metadata_path,
+                all_time_stats=all_time_stats,
+                global_stats=global_stats,
+                config=cfg,
+                device=device,
+                split_name=split_name,
+                num_gpus=1,
+            )
+
             print(f"\n{split_name.capitalize()} split completed!")
             print(f"  Images: {sum(len(arr) for arr in all_images.values())}")
             print(f"  JSON index: {json_path}")
             print(f"  NPZ file: {npz_path}")
-            
+            print(f"  Metadata: {metadata_path}")
+
             logger.info("Split '%s' processing completed successfully", split_name)
 
         # Summary

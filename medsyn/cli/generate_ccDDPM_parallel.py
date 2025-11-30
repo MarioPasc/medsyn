@@ -41,6 +41,8 @@ from medsyn.cli.generate_ccDDPM import (
     generate_images_for_class,
     build_json_index,
     save_split_npz,
+    compute_global_time_stats,
+    save_generation_metadata,
 )
 
 # Setup logging
@@ -66,6 +68,7 @@ class GenerationResult(NamedTuple):
     samples_metadata: dict[str, dict[str, Any]]
     images_array: np.ndarray
     labels_array: np.ndarray
+    time_stats: dict[str, float]
     success: bool
     error_msg: str = ""
 
@@ -153,7 +156,7 @@ def worker_process(
 
                 # Generate images for this class
                 try:
-                    samples_metadata, images_array, labels_array = generate_images_for_class(
+                    samples_metadata, images_array, labels_array, time_stats = generate_images_for_class(
                         model=model,
                         scheduler=scheduler,
                         class_id=task.class_id,
@@ -182,6 +185,7 @@ def worker_process(
                         samples_metadata=samples_metadata,
                         images_array=images_array,
                         labels_array=labels_array,
+                        time_stats=time_stats,
                         success=True,
                     )
                     result_queue.put(result)
@@ -201,6 +205,7 @@ def worker_process(
                         samples_metadata={},
                         images_array=np.array([]),
                         labels_array=np.array([]),
+                        time_stats={},
                         success=False,
                         error_msg=str(e),
                     )
@@ -332,14 +337,20 @@ def create_task_queue(split_to_class_to_samples: dict[str, dict[int, int]]) -> l
 def aggregate_results(
     results: list[GenerationResult],
     output_base_path: Path,
+    config: Any,
+    device: torch.device,
+    num_gpus: int,
     dataset_name: str = "PathMNIST",
 ) -> None:
     """
-    Aggregate results from all workers into JSON and NPZ files.
+    Aggregate results from all workers into JSON, NPZ, and metadata files.
 
     Args:
         results: List of GenerationResult objects from all workers
         output_base_path: Base output directory
+        config: Project configuration
+        device: Device used for generation
+        num_gpus: Number of GPUs used
         dataset_name: Dataset name for JSON index
     """
     logger.info("Aggregating results from all workers...")
@@ -359,15 +370,17 @@ def aggregate_results(
 
         split_output_dir = output_base_path / split_name
 
-        # Collect all samples, images, and labels
+        # Collect all samples, images, labels, and time stats
         all_samples: dict[int, dict[str, dict[str, Any]]] = {}
         all_images: dict[int, np.ndarray] = {}
         all_labels: dict[int, np.ndarray] = {}
+        all_time_stats: dict[int, dict[str, float]] = {}
 
         for result in sorted(split_results, key=lambda r: r.class_id):
             all_samples[result.class_id] = result.samples_metadata
             all_images[result.class_id] = result.images_array
             all_labels[result.class_id] = result.labels_array
+            all_time_stats[result.class_id] = result.time_stats
 
             logger.debug(f"  Class {result.class_id}: {len(result.images_array)} samples")
 
@@ -395,11 +408,26 @@ def aggregate_results(
             output_path=npz_path,
         )
 
+        # Compute global statistics and save metadata
+        logger.info(f"Computing global statistics and saving metadata for split '{split_name}'...")
+        global_stats = compute_global_time_stats(all_time_stats)
+        metadata_path = split_output_dir / f"{dataset_name.lower()}_{split_name}_generation_metadata.json"
+        save_generation_metadata(
+            output_path=metadata_path,
+            all_time_stats=all_time_stats,
+            global_stats=global_stats,
+            config=config,
+            device=device,
+            split_name=split_name,
+            num_gpus=num_gpus,
+        )
+
         total_samples = sum(len(arr) for arr in all_images.values())
         logger.info(f"Split '{split_name}' aggregation complete:")
         logger.info(f"  Total samples: {total_samples}")
         logger.info(f"  JSON index: {json_path}")
         logger.info(f"  NPZ file: {npz_path}")
+        logger.info(f"  Metadata: {metadata_path}")
 
 
 def main() -> None:
@@ -611,7 +639,20 @@ Examples:
         print("=" * 80 + "\n")
 
         logger.info("Step 3: Aggregating results")
-        aggregate_results(results, output_base_path, args.dataset_name)
+
+        # Load config for metadata generation (lightweight operation, already cached by workers)
+        from medsyn.models.ccDDPM.config import load_cfg
+        cfg = load_cfg(str(config_path), split="train")
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        aggregate_results(
+            results=results,
+            output_base_path=output_base_path,
+            config=cfg,
+            device=device,
+            num_gpus=num_gpus,
+            dataset_name=args.dataset_name,
+        )
 
         # Summary
         print("\n" + "=" * 80)
