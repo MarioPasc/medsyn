@@ -785,7 +785,8 @@ def extract_prototypes_with_encoder(args, model):
     )
     trainloader = data.DataLoader(trainset, batch_size=64, shuffle=False, drop_last=False)
 
-    model = model.float()
+    # Move model to CUDA before extracting prototypes (inputs are moved to CUDA in extract_prototype)
+    model = model.float().cuda()
     global_prototype, local_prototype = extract_prototype(args, trainloader, model)
     return global_prototype, local_prototype
 

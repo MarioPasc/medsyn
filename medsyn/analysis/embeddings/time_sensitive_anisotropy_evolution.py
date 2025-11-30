@@ -44,6 +44,79 @@ from sklearn.decomposition import PCA
 
 
 # ---------------------------------------------------------------------------
+# Global plot settings
+# ---------------------------------------------------------------------------
+
+PLOT_SETTINGS = {
+    # Font settings
+    "font_family": "sans-serif",
+    "font_sans_serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+    "font_size": 10,
+
+    # Axis label font sizes
+    "axes_labelsize": 8,
+    "axes_titlesize": 10,
+
+    # Tick settings
+    "tick_labelsize": 6,
+    "tick_major_width": 0.8,
+    "tick_minor_width": 0.5,
+
+    # Legend settings
+    "legend_fontsize": 5,
+    "legend_framealpha": 0.8,
+
+    # Grid settings
+    "grid_linestyle": "--",
+    "grid_alpha": 0.3,
+    "grid_linewidth": 0.5,
+
+    # Line settings
+    "line_width": 1.2,
+    "kde_line_width": 1.5,
+    "contour_line_width": 0.8,
+    "ellipse_line_width": 1.0,
+
+    # Scatter settings
+    "scatter_size_outside": 2,
+    "scatter_size_inside": 5,
+    "scatter_alpha_outside": 0.2,
+    "scatter_alpha_inside": 0.6,
+
+    # Histogram settings
+    "hist_bins": 30,
+    "hist_edgecolor": "black",
+    "hist_linewidth": 0.6,
+    "hist_color": "lightgray",
+
+    # KDE settings
+    "kde_resolution": 200,
+    "kde_color": "black",
+
+    # Marginal histogram settings
+    "marginal_bins": 30,
+}
+
+
+def apply_plot_settings():
+    """Apply global matplotlib settings from PLOT_SETTINGS dictionary."""
+    plt.rcParams.update({
+        'font.family': PLOT_SETTINGS['font_family'],
+        'font.sans-serif': PLOT_SETTINGS['font_sans_serif'],
+        'font.size': PLOT_SETTINGS['font_size'],
+        'axes.labelsize': PLOT_SETTINGS['axes_labelsize'],
+        'axes.titlesize': PLOT_SETTINGS['axes_titlesize'],
+        'xtick.labelsize': PLOT_SETTINGS['tick_labelsize'],
+        'ytick.labelsize': PLOT_SETTINGS['tick_labelsize'],
+        'legend.fontsize': PLOT_SETTINGS['legend_fontsize'],
+        'lines.linewidth': PLOT_SETTINGS['line_width'],
+        'grid.linestyle': PLOT_SETTINGS['grid_linestyle'],
+        'grid.alpha': PLOT_SETTINGS['grid_alpha'],
+        'grid.linewidth': PLOT_SETTINGS['grid_linewidth'],
+    })
+
+
+# ---------------------------------------------------------------------------
 # Utility functions
 # ---------------------------------------------------------------------------
 
@@ -274,17 +347,24 @@ def plot_anisotropy_with_marginals(
     if class_ids is None:
         ax_main.scatter(
             x[~high_idx], y[~high_idx],
-            s=3, color="black", alpha=0.3, label="Sample",
+            s=PLOT_SETTINGS["scatter_size_outside"],
+            color="black",
+            alpha=PLOT_SETTINGS["scatter_alpha_outside"],
+            label="Sample",
         )
         ax_main.scatter(
             x[high_idx], y[high_idx],
-            s=3, color="blue", alpha=0.5,
+            s=PLOT_SETTINGS["scatter_size_inside"],
+            color="blue",
+            alpha=PLOT_SETTINGS["scatter_alpha_inside"],
             label=f"{int(100 * conf_level)}% high-density",
         )
     else:
         ax_main.scatter(
             x[~high_idx], y[~high_idx],
-            s=2, color="lightgray", alpha=0.2,
+            s=PLOT_SETTINGS["scatter_size_outside"],
+            color="lightgray",
+            alpha=PLOT_SETTINGS["scatter_alpha_outside"],
             label="Outside high-density",
         )
         cmap = plt.get_cmap("tab10")
@@ -295,14 +375,21 @@ def plot_anisotropy_with_marginals(
                 continue
             ax_main.scatter(
                 x[mask], y[mask],
-                s=5, alpha=0.6,
+                s=PLOT_SETTINGS["scatter_size_inside"],
+                alpha=PLOT_SETTINGS["scatter_alpha_inside"],
                 color=cmap(i % 10),
                 label=f"class {cls}",
             )
 
     # KDE contours
     levels = np.linspace(zz.min(), zz.max(), 4)[1:]
-    ax_main.contour(xx, yy, zz, levels=levels, colors="black", linewidths=0.4, alpha=0.4)
+    ax_main.contour(
+        xx, yy, zz,
+        levels=levels,
+        colors="black",
+        linewidths=PLOT_SETTINGS["contour_line_width"],
+        alpha=0.4
+    )
 
     # High-density contour
     ax_main.contour(
@@ -310,7 +397,7 @@ def plot_anisotropy_with_marginals(
         levels=[thr],
         colors="blue",
         linestyles="--",
-        linewidths=0.8,
+        linewidths=PLOT_SETTINGS["contour_line_width"],
     )
 
     # Anisotropy ellipses and arrows
@@ -325,7 +412,8 @@ def plot_anisotropy_with_marginals(
         angle = np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
         ell = Ellipse(
             xy=center, width=width, height=height, angle=angle,
-            edgecolor="red", facecolor="none", lw=0.8,
+            edgecolor="red", facecolor="none",
+            lw=PLOT_SETTINGS["ellipse_line_width"],
         )
         ax_main.add_patch(ell)
 
@@ -339,48 +427,95 @@ def plot_anisotropy_with_marginals(
         ax_main.text(
             center[0], center[1],
             rf"$\beta_{{{i}}}={beta:.1f}$",
-            color="red", fontsize=5,
+            color="red", fontsize=PLOT_SETTINGS["legend_fontsize"],
             ha="center", va="center",
             bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.7),
         )
 
     # Set axis labels with variance explained
-    ax_main.set_xlabel(f"PC1 ({pca_var[0]*100:.1f}%)", fontsize=6)
-    ax_main.set_ylabel(f"PC2 ({pca_var[1]*100:.1f}%)", fontsize=6)
-    ax_main.tick_params(labelsize=5)
-    ax_main.grid(True, linestyle="--", alpha=0.2)
+    ax_main.set_xlabel(
+        f"PC1 ({pca_var[0]*100:.1f}%)",
+        fontsize=PLOT_SETTINGS["axes_labelsize"]
+    )
+    ax_main.set_ylabel(
+        f"PC2 ({pca_var[1]*100:.1f}%)",
+        fontsize=PLOT_SETTINGS["axes_labelsize"]
+    )
+    ax_main.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
+    ax_main.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
     ax_main.set_xlim(x_min, x_max)
     ax_main.set_ylim(y_min, y_max)
 
     if show_legend:
-        ax_main.legend(loc="upper right", fontsize=4, ncol=2)
+        ax_main.legend(
+            loc="upper right",
+            fontsize=PLOT_SETTINGS["legend_fontsize"],
+            ncol=2
+        )
 
     # Top histogram (x marginal)
-    ax_top.hist(x, bins=20, density=False, color="lightgray", edgecolor="black", linewidth=0.5)
+    ax_top.hist(
+        x,
+        bins=PLOT_SETTINGS["marginal_bins"],
+        density=False,
+        color=PLOT_SETTINGS["hist_color"],
+        edgecolor=PLOT_SETTINGS["hist_edgecolor"],
+        linewidth=PLOT_SETTINGS["hist_linewidth"]
+    )
+    # KDE overlay on histogram
     kde_x = gaussian_kde(x)
-    xs = np.linspace(x_min, x_max, 100)
-    bin_width = (x_max - x_min) / 20
-    ax_top.plot(xs, kde_x(xs) * len(x) * bin_width, color="black", linewidth=0.8)
-    ax_top.set_ylabel("Count", fontsize=5)
-    ax_top.tick_params(labelsize=5, labelbottom=False)
-    ax_top.grid(True, linestyle="--", alpha=0.2)
+    xs = np.linspace(x_min, x_max, PLOT_SETTINGS["kde_resolution"])
+    # Calculate bin width for proper scaling
+    bin_width_x = (x_max - x_min) / PLOT_SETTINGS["marginal_bins"]
+    ax_top.plot(
+        xs,
+        kde_x(xs) * len(x) * bin_width_x,
+        color=PLOT_SETTINGS["kde_color"],
+        linewidth=PLOT_SETTINGS["kde_line_width"]
+    )
+    ax_top.set_ylabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"])
+    ax_top.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelbottom=False)
+    ax_top.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
 
     # Right histogram (y marginal)
     ax_right.hist(
-        y, bins=20, density=False,
+        y,
+        bins=PLOT_SETTINGS["marginal_bins"],
+        density=False,
         orientation="horizontal",
-        color="lightgray", edgecolor="black", linewidth=0.5,
+        color=PLOT_SETTINGS["hist_color"],
+        edgecolor=PLOT_SETTINGS["hist_edgecolor"],
+        linewidth=PLOT_SETTINGS["hist_linewidth"]
     )
+    # KDE overlay on histogram
     kde_y = gaussian_kde(y)
-    ys = np.linspace(y_min, y_max, 100)
-    bin_width = (y_max - y_min) / 20
+    ys = np.linspace(y_min, y_max, PLOT_SETTINGS["kde_resolution"])
+    # Calculate bin width for proper scaling
+    bin_width_y = (y_max - y_min) / PLOT_SETTINGS["marginal_bins"]
     ax_right.plot(
-        kde_y(ys) * len(y) * bin_width, ys,
-        color="black", linewidth=0.8,
+        kde_y(ys) * len(y) * bin_width_y,
+        ys,
+        color=PLOT_SETTINGS["kde_color"],
+        linewidth=PLOT_SETTINGS["kde_line_width"]
     )
-    ax_right.set_xlabel("Count", fontsize=5)
-    ax_right.tick_params(labelsize=5, labelleft=False)
-    ax_right.grid(True, linestyle="--", alpha=0.2)
+    ax_right.set_xlabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"])
+    ax_right.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelleft=False)
+    ax_right.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
 
     return ax_main, ax_top, ax_right
 
@@ -532,11 +667,16 @@ def plot_timestep_evolution(
 
                 # Set titles: epoch on top row, branch on left column
                 if row_idx == 0:
-                    ax_top.set_title(f"Epoch {epoch}", fontsize=10, fontweight='bold', pad=5)
+                    ax_top.set_title(
+                        f"Epoch {epoch}",
+                        fontsize=PLOT_SETTINGS["axes_titlesize"],
+                        fontweight='bold',
+                        pad=5
+                    )
                 if col_idx == 0:
                     ax_main.set_ylabel(
                         f"{branch.capitalize()}\n{ax_main.get_ylabel()}",
-                        fontsize=8,
+                        fontsize=PLOT_SETTINGS["axes_labelsize"],
                         fontweight='bold',
                     )
 
@@ -553,15 +693,16 @@ def plot_timestep_evolution(
             all_labels,
             loc='lower center',
             ncol=min(len(all_labels), 6),
-            fontsize=7,
+            fontsize=PLOT_SETTINGS["legend_fontsize"] + 2,
             bbox_to_anchor=(0.5, -0.01),
             frameon=True,
+            framealpha=PLOT_SETTINGS["legend_framealpha"],
         )
 
     # Overall title
     fig.suptitle(
         f"Anisotropy Evolution: Layer={feature_layer}, Timestep={timestep}",
-        fontsize=13,
+        fontsize=PLOT_SETTINGS["font_size"] + 3,
         fontweight='bold',
         y=0.995,
     )
@@ -578,7 +719,11 @@ def plot_timestep_evolution(
 # ---------------------------------------------------------------------------
 
 def main():
-    #  python medsyn/analysis/embeddings/time_sensitive_anisotropy_evolution.py --features_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings --output_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings --max_epoch 10 --num_epochs_to_plot 10 
+    #  python medsyn/analysis/embeddings/time_sensitive_anisotropy_evolution.py --features_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings --output_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings --max_epoch 10 --num_epochs_to_plot 10
+
+    # Apply global plot settings
+    apply_plot_settings()
+
     parser = argparse.ArgumentParser(
         description="Time-sensitive anisotropy evolution visualization."
     )
