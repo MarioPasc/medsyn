@@ -1,33 +1,51 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Local anisotropic ratio visualization for class embedding latent space.
+Local anisotropic ratio visualization for ccDDPM latent spaces.
 
-Given a trajectory file with:
-  - "epochs": list[int], length E
-  - "embeddings": tensor [E, num_classes, emb_dim]
+Two modes are supported:
 
-this script:
-  1) Selects embeddings (all epochs or a single epoch).
-  2) Reduces them to 2D with PCA.
+1) Class mode ("class"):
+   - Input: class_embeddings_trajectory.pt
+   - Uses parametric class embeddings only.
+
+2) Features mode ("features"):
+   - Input: probe_features_epoch_XXXX.npz
+   - Uses probe feature vectors (conditional/unconditional, layer, timestep)
+     as the latent cloud, which is much closer to the setup of Mabadeje et al.
+
+In both cases the script:
+  1) Selects a point cloud in some latent space R^d.
+  2) Reduces it to 2D with PCA.
   3) Computes a Gaussian KDE in 2D latent space.
-  4) Identifies a high-density region (e.g., 95% highest density mass).
+  4) Identifies a high-density region (e.g. 95% highest-density mass).
   5) Clusters that region and computes a covariance-based local anisotropic
-     ratio β_local for each cluster.
+     ratio β_local for each cluster (via eigenvalues of the covariance).
   6) Generates a jointplot-style figure with:
        - Scatter + KDE contours,
        - 95% contour,
        - Local anisotropy ellipses and arrows,
        - Marginal histograms.
 
-Usage example:
+Usage examples:
 
-  python local_anisotropy_plot.py \\
+  # Original behaviour: class embeddings only
+  python anisotropy_visualization.py \\
+      --mode class \\
       --trajectory_path class_embeddings_trajectory.pt \\
-      --output_path local_anisotropy.png \\
+      --output_path anisotropy_class.png \\
       --use_all_epochs
 
-The interpretation is analogous to Mabadeje et al. (2024):
+  # New behaviour: probe features from one epoch
+  python anisotropy_visualization.py \\
+      --mode features \\
+      --features_path probe_features_epoch_0005.npz \\
+      --feature_layer class_embed \\
+      --feature_branch cond \\
+      --feature_timestep 500 \\
+      --output_path anisotropy_features_t500.png
+
+Interpretation follows Mabadeje et al. (2024):
 larger β_local indicates stronger directional anisotropy of the latent
 point cloud in that high-density region.
 """
@@ -35,7 +53,7 @@ point cloud in that high-density region.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import torch
@@ -47,7 +65,11 @@ from sklearn.cluster import DBSCAN
 from sklearn.decomposition import PCA
 
 
-def load_embeddings_2d(
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+
+def load_class_embeddings_2d(
     trajectory_path: str,
     use_all_epochs: bool = True,
     epoch: int | None = None,
@@ -97,6 +119,98 @@ def load_embeddings_2d(
     return Z
 
 
+def load_probe_features_2d(
+    npz_path: str,
+    feature_layer: str,
+    feature_timestep: Optional[int],
+    feature_branch: str = "cond",
+    random_state: int = 42,
+    max_samples: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Load probe feature vectors from NPZ and reduce to 2D with PCA.
+
+    Parameters
+    ----------
+    npz_path : str
+        Path to probe_features_epoch_XXXX.npz.
+    feature_layer : str
+        Layer name to select (e.g. "class_embed" or "down_blocks.1").
+    feature_timestep : int or None
+        Timestep to select. If None, use the median timestep present in the file.
+    feature_branch : {"cond", "uncond", "both"}, default "cond"
+        Which CFG branch to include.
+    random_state : int
+        Random seed for PCA reproducibility.
+    max_samples : int or None
+        Optional maximum number of feature vectors to subsample (for speed).
+
+    Returns
+    -------
+    Z : ndarray of shape (N, 2)
+        2D PCA projection of selected features.
+    class_ids : ndarray of shape (N,)
+        Class IDs corresponding to each feature vector (for coloring).
+    """
+    data = np.load(npz_path, allow_pickle=True)
+
+    features = data["features"]          # [N, D_pad]
+    class_ids = data["class_ids"]       # [N]
+    timesteps = data["timesteps"]       # [N]
+    layer_names = data["layer_names"]   # [N]
+    branches = data["branches"]         # [N]
+    feature_lengths = data.get("feature_lengths", None)  # [N] or None
+
+    # Ensure string comparison works (npz may give bytes or unicode)
+    layer_names = layer_names.astype(str)
+    branches = branches.astype(str)
+
+    # Decide timestep if not provided: use the median available
+    unique_t = np.unique(timesteps)
+    if feature_timestep is None:
+        feature_timestep = int(np.median(unique_t))
+
+    # Build mask: layer, timestep, branch
+    mask = (layer_names == feature_layer) & (timesteps == feature_timestep)
+    if feature_branch.lower() in {"cond", "uncond"}:
+        mask &= (branches == feature_branch.lower())
+    # "both" keeps both branches
+
+    if not np.any(mask):
+        raise ValueError(
+            f"No features found in {npz_path} for "
+            f"layer={feature_layer}, timestep={feature_timestep}, branch={feature_branch}."
+        )
+
+    sel_features = features[mask]
+    sel_class_ids = class_ids[mask]
+
+    # If features were padded, recover the original dimensionality for this layer
+    if feature_lengths is not None:
+        sel_lengths = feature_lengths[mask]
+        # All records for a single layer should share the same original length
+        d_orig = int(sel_lengths.max())
+        sel_features = sel_features[:, :d_orig]
+
+    # Optional subsampling for speed
+    N = sel_features.shape[0]
+    if max_samples is not None and N > max_samples:
+        rng = np.random.default_rng(seed=random_state)
+        idx = rng.choice(N, size=max_samples, replace=False)
+        sel_features = sel_features[idx]
+        sel_class_ids = sel_class_ids[idx]
+
+    # PCA -> 2D
+    pca = PCA(n_components=2, random_state=random_state)
+    Z = pca.fit_transform(sel_features)
+
+    return Z, sel_class_ids
+
+
+# ---------------------------------------------------------------------------
+# KDE and local anisotropy
+# ---------------------------------------------------------------------------
+
 def compute_local_anisotropy(
     Z: np.ndarray,
     conf_level: float = 0.95,
@@ -116,7 +230,7 @@ def compute_local_anisotropy(
     bandwidth : float or None
         Optional manual bandwidth for gaussian_kde. If None, use Scott's rule.
     eps : float, default 0.2
-        DBSCAN eps parameter for clustering high-density points (in latent units).
+        DBSCAN eps parameter for clustering high-density points (latent units).
     min_samples : int, default 10
         DBSCAN min_samples parameter.
 
@@ -127,7 +241,7 @@ def compute_local_anisotropy(
             'kde' : gaussian_kde object.
             'density' : KDE values at sample points, shape (N,).
             'threshold' : density threshold for high-density region.
-            'labels' : cluster labels for high-density points (array of shape (Nh,)).
+            'labels' : cluster labels for high-density points (shape (Nh,)).
             'high_idx' : boolean mask for high-density points (shape (N,)).
             'regions' : list of dicts with keys
                         {'points', 'center', 'eigvals', 'eigvecs', 'beta'}.
@@ -201,6 +315,10 @@ def compute_local_anisotropy(
     }
 
 
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
 def plot_local_anisotropy_joint(
     Z: np.ndarray,
     anisotropy_result: dict[str, Any],
@@ -208,6 +326,7 @@ def plot_local_anisotropy_joint(
     title: str | None = None,
     grid_res: int = 200,
     conf_level: float = 0.95,
+    class_ids: Optional[np.ndarray] = None,
 ) -> None:
     """
     Generate a joint-plot-style figure with KDE contours, marginal histograms,
@@ -227,6 +346,8 @@ def plot_local_anisotropy_joint(
         Resolution of KDE grid for contours.
     conf_level : float, default 0.95
         Confidence level used when labelling the high-density region.
+    class_ids : ndarray or None
+        Optional class labels for coloring high-density points.
     """
     Z = np.asarray(Z)
     kde = anisotropy_result["kde"]
@@ -272,28 +393,55 @@ def plot_local_anisotropy_joint(
     fig.add_subplot(gs[0, 1]).axis("off")  # empty corner
 
     # Main scatter and KDE contours
-    ax_main.scatter(
-        x[~high_idx],
-        y[~high_idx],
-        s=10,
-        color="black",
-        alpha=0.5,
-        label="Sample",
-    )
-    ax_main.scatter(
-        x[high_idx],
-        y[high_idx],
-        s=10,
-        color="blue",
-        alpha=0.7,
-        label=f"{int(100 * conf_level)}% high-density region",
-    )
+    if class_ids is None:
+        # Original behavior: no class coloring, just samples vs high-density region
+        ax_main.scatter(
+            x[~high_idx],
+            y[~high_idx],
+            s=10,
+            color="black",
+            alpha=0.5,
+            label="Sample",
+        )
+        ax_main.scatter(
+            x[high_idx],
+            y[high_idx],
+            s=10,
+            color="blue",
+            alpha=0.7,
+            label=f"{int(100 * conf_level)}% high-density region",
+        )
+    else:
+        # Outside high-density region: gray
+        ax_main.scatter(
+            x[~high_idx],
+            y[~high_idx],
+            s=8,
+            color="lightgray",
+            alpha=0.4,
+            label="Outside high-density",
+        )
+        # Inside high-density: color-coded by class
+        cmap = plt.get_cmap("tab10")
+        unique_classes = np.unique(class_ids)
+        for i, cls in enumerate(unique_classes):
+            mask = (class_ids == cls) & high_idx
+            if not np.any(mask):
+                continue
+            ax_main.scatter(
+                x[mask],
+                y[mask],
+                s=18,
+                alpha=0.8,
+                color=cmap(i % 10),
+                label=f"class {cls} (high-density)",
+            )
 
     levels = np.linspace(zz.min(), zz.max(), 7)[1:]
     cs = ax_main.contour(xx, yy, zz, levels=levels, colors="black", linewidths=0.8)
     ax_main.clabel(cs, inline=True, fontsize=6, fmt="%.2f")
 
-    # Contour close to the 95% high-density threshold
+    # Contour close to the high-density threshold
     ax_main.contour(
         xx,
         yy,
@@ -395,18 +543,39 @@ def plot_local_anisotropy_joint(
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
+    """
+    python medsyn/analysis/embeddings/anisotropy_visualization.py --mode features --trajectory_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings/class_embeddings_trajectory.pt --features_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings/probe_features_epoch_0031.npz --output_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings/anisotropy_visualization.png --feature_timestep 100 --feature_branch cond
+    """
+    
     import argparse
     import logging
 
     parser = argparse.ArgumentParser(
-        description="Local anisotropy visualization for class embedding latent space."
+        description="Local anisotropy visualization for ccDDPM latent space."
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["class", "features"],
+        default="class",
+        help="Whether to use class embeddings or probe features.",
     )
     parser.add_argument(
         "--trajectory_path",
         type=str,
-        required=True,
-        help="Path to class_embeddings_trajectory.pt",
+        default=None,
+        help="Path to class_embeddings_trajectory.pt (used in 'class' mode).",
+    )
+    parser.add_argument(
+        "--features_path",
+        type=str,
+        default=None,
+        help="Path to probe_features_epoch_XXXX.npz (used in 'features' mode).",
     )
     parser.add_argument(
         "--output_path",
@@ -417,13 +586,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_all_epochs",
         action="store_true",
-        help="If set, use embeddings from all epochs; otherwise use last epoch.",
+        help="[class mode] If set, use embeddings from all epochs; "
+             "otherwise use a single epoch.",
     )
     parser.add_argument(
         "--epoch",
         type=int,
         default=None,
-        help="Specific epoch to plot (used only if --use_all_epochs is not set).",
+        help="[class mode] Specific epoch to plot if --use_all_epochs is not set.",
     )
     parser.add_argument(
         "--conf_level",
@@ -435,7 +605,7 @@ if __name__ == "__main__":
         "--eps",
         type=float,
         default=0.2,
-        help="DBSCAN eps parameter in latent units (tune if clusters merge/split).",
+        help="DBSCAN eps parameter in latent units.",
     )
     parser.add_argument(
         "--min_samples",
@@ -447,7 +617,33 @@ if __name__ == "__main__":
         "--random_state",
         type=int,
         default=42,
-        help="Random seed for PCA.",
+        help="Random seed for PCA and subsampling.",
+    )
+    # Feature-specific options
+    parser.add_argument(
+        "--feature_layer",
+        type=str,
+        default="unet.mid_block",
+        help="[features mode] Layer name to select (e.g. 'class_embed', 'down_blocks.1').",
+    )
+    parser.add_argument(
+        "--feature_timestep",
+        type=int,
+        default=None,
+        help="[features mode] Timestep to select. If omitted, median timestep is used.",
+    )
+    parser.add_argument(
+        "--feature_branch",
+        type=str,
+        default="cond",
+        choices=["cond", "uncond", "both"],
+        help="[features mode] Which CFG branch to include.",
+    )
+    parser.add_argument(
+        "--max_features",
+        type=int,
+        default=None,
+        help="[features mode] Optional cap on number of feature vectors (for speed).",
     )
 
     args = parser.parse_args()
@@ -457,12 +653,33 @@ if __name__ == "__main__":
         format="[%(asctime)s] %(levelname)s - %(message)s",
     )
 
-    Z = load_embeddings_2d(
-        trajectory_path=args.trajectory_path,
-        use_all_epochs=args.use_all_epochs,
-        epoch=args.epoch,
-        random_state=args.random_state,
-    )
+    if args.mode == "class":
+        if args.trajectory_path is None:
+            parser.error("--trajectory_path is required in 'class' mode.")
+        Z = load_class_embeddings_2d(
+            trajectory_path=args.trajectory_path,
+            use_all_epochs=args.use_all_epochs,
+            epoch=args.epoch,
+            random_state=args.random_state,
+        )
+        class_ids = None
+        title = "Local anisotropic ratio from class embedding latent space"
+    else:
+        if args.features_path is None:
+            parser.error("--features_path is required in 'features' mode.")
+        Z, class_ids = load_probe_features_2d(
+            npz_path=args.features_path,
+            feature_layer=args.feature_layer,
+            feature_timestep=args.feature_timestep,
+            feature_branch=args.feature_branch,
+            random_state=args.random_state,
+            max_samples=args.max_features,
+        )
+        title = (
+            f"Local anisotropy from probe features "
+            f"(layer={args.feature_layer}, t={args.feature_timestep}, "
+            f"branch={args.feature_branch})"
+        )
 
     result = compute_local_anisotropy(
         Z,
@@ -476,6 +693,7 @@ if __name__ == "__main__":
         Z,
         result,
         out_path=out_path,
-        title="Local anisotropic ratio from class embedding latent space",
+        title=title,
         conf_level=args.conf_level,
+        class_ids=class_ids,
     )
