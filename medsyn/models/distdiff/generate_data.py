@@ -718,10 +718,12 @@ def transform_guidance(latents, batch, sub_timesteps, noise_scheduler, unet, pro
                        total_global_proto, total_local_proto):
     bs = latents.shape[0]
     channel_noise_dim = latents.shape[1]
-    channel_noise = Variable(torch.rand([bs, channel_noise_dim, 1, 1]), requires_grad=True).cuda().to(
-        dtype=weight_dtype)
+    # Use same device as latents to respect CUDA_VISIBLE_DEVICES
+    device = latents.device
+    channel_noise = Variable(torch.rand([bs, channel_noise_dim, 1, 1]), requires_grad=True).to(
+        device=device, dtype=weight_dtype)
     channel_noise_bias = Variable(torch.zeros([bs, channel_noise_dim, 1, 1]).data.normal_(0, 1),
-                                  requires_grad=True).cuda().to(dtype=weight_dtype)
+                                  requires_grad=True).to(device=device, dtype=weight_dtype)
     x_dec_noisy = latents * (1 + channel_noise) + channel_noise_bias
 
     score = 0.
@@ -880,6 +882,20 @@ def main(args):
     logger.info(f"Arguments: {args}")
     logger.info("="*80)
 
+    # GPU Assignment Verification - Critical for debugging parallel execution
+    logger.info("="*80)
+    logger.info(f"GPU Assignment Verification for split {args.split}")
+    logger.info("="*80)
+    logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+    logger.info(f"CUDA_DEVICE_ORDER: {os.environ.get('CUDA_DEVICE_ORDER', 'Not set')}")
+    logger.info(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+        logger.info(f"torch.cuda.current_device(): {torch.cuda.current_device()}")
+        logger.info(f"torch.cuda.get_device_name(0): {torch.cuda.get_device_name(0)}")
+    logger.info(f"accelerator.device (will be set after initialization): pending")
+    logger.info("="*80)
+
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -912,6 +928,16 @@ def main(args):
     else:
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
+
+    # Log final device assignment after accelerator initialization
+    logger.info("="*80)
+    logger.info(f"Post-Accelerator GPU Verification for split {args.split}")
+    logger.info("="*80)
+    logger.info(f"accelerator.device: {accelerator.device}")
+    logger.info(f"accelerator.num_processes: {accelerator.num_processes}")
+    logger.info(f"accelerator.is_main_process: {accelerator.is_main_process}")
+    logger.info(f"accelerator.is_local_main_process: {accelerator.is_local_main_process}")
+    logger.info("="*80)
 
     # If passed along, set the training seed now.
     if args.seed is not None:
@@ -1174,10 +1200,11 @@ def main(args):
         desc="Steps",
         disable=not accelerator.is_local_main_process,
     )
+    # Create image encoder without hardcoded .cuda() - will be moved to accelerator.device below
     image_encoder = create_model(args.arch, pretrained=False,
                                  num_classes=len(original_train_dataset.class_names),
                                  class_names=original_train_dataset.class_names,
-                                 cache_dir=args.cache_dir, dataset_name=args.dataset, weight_path=args.encoder_weight_path).cuda()
+                                 cache_dir=args.cache_dir, dataset_name=args.dataset, weight_path=args.encoder_weight_path)
     global_prototypes_numpy, local_prototypes_numpy = extract_prototypes_with_encoder(args, image_encoder)
 
     image_encoder.to(accelerator.device, dtype=weight_dtype)
@@ -1189,13 +1216,15 @@ def main(args):
 
     if args.optimize_targets is not None:
         if "global_prototype" in args.optimize_targets:
-            total_global_proto = torch.from_numpy(global_prototypes_numpy).cuda()
+            # Use accelerator.device instead of hardcoded .cuda()
+            total_global_proto = torch.from_numpy(global_prototypes_numpy).to(accelerator.device)
             total_global_proto = total_global_proto / total_global_proto.norm(dim=-1, keepdim=True)
         else:
             total_global_proto = None
 
         if "local_prototype" in args.optimize_targets:
-            total_local_proto = torch.from_numpy(local_prototypes_numpy).cuda()
+            # Use accelerator.device instead of hardcoded .cuda()
+            total_local_proto = torch.from_numpy(local_prototypes_numpy).to(accelerator.device)
             total_local_proto = total_local_proto / total_local_proto.norm(dim=-1, keepdim=True)
             print("local prototype shape:", total_local_proto.shape)
         else:

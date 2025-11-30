@@ -45,13 +45,38 @@ cleanup_and_sync() {
         echo "📦 Syncing results/logs back to permanent storage..."
         mkdir -p "${RESULTS_DST}"
 
-        # Copy everything: checkpoints, logs, synthetic data, and error traces
+        # Check for NPZ files before rsync
+        echo ""
+        echo "Checking for NPZ files in localscratch before sync..."
+        NPZ_COUNT=$(find "${OUT_DIR}/synthetic_data" -name "*.npz" 2>/dev/null | wc -l)
+        if [ ${NPZ_COUNT} -gt 0 ]; then
+            echo "✓ Found ${NPZ_COUNT} NPZ files to sync:"
+            find "${OUT_DIR}/synthetic_data" -name "*.npz" -exec ls -lh {} \; 2>/dev/null
+        else
+            echo "⚠️  No NPZ files found in ${OUT_DIR}/synthetic_data"
+        fi
+
+        # Copy everything: checkpoints, logs, synthetic data (including NPZ files), and error traces
+        echo ""
         echo "[sync] Copying from ${OUT_DIR} to ${RESULTS_DST}"
-        rsync -av "${OUT_DIR}/" "${RESULTS_DST}/" 2>&1 || echo "⚠️  rsync failed, but continuing..."
+        echo "       This includes NPZ files, checkpoints, and logs"
+        rsync -av --progress "${OUT_DIR}/" "${RESULTS_DST}/" 2>&1 || echo "⚠️  rsync failed, but continuing..."
 
         echo ""
         echo "Synced contents:"
         ls -lah "${RESULTS_DST}" 2>/dev/null || echo "  (could not list)"
+
+        # Verify NPZ files were synced
+        echo ""
+        echo "Verifying NPZ files in permanent storage..."
+        NPZ_SYNCED=$(find "${RESULTS_DST}/synthetic_data" -name "*.npz" 2>/dev/null | wc -l)
+        if [ ${NPZ_SYNCED} -gt 0 ]; then
+            echo "✓ ${NPZ_SYNCED} NPZ files successfully synced to permanent storage:"
+            find "${RESULTS_DST}/synthetic_data" -name "*.npz" -exec ls -lh {} \; 2>/dev/null
+        else
+            echo "❌ WARNING: No NPZ files found in ${RESULTS_DST}/synthetic_data"
+            echo "   Expected ${NPZ_COUNT} NPZ files but found 0 after rsync"
+        fi
 
         if [ ${exit_code} -ne 0 ]; then
             echo ""
@@ -304,7 +329,9 @@ cd "${REPO_DIR}"
 # ---------- 6) Set environment variables ----------
 export DATASET_PATH="${DATA_DST}"
 export OUTPUT_DIR="${OUT_DIR}"
-export CUDA_VISIBLE_DEVICES=0,1,2,3  # 4 GPUs
+# NOTE: Do NOT export CUDA_VISIBLE_DEVICES globally - each parallel job will set it
+# export CUDA_VISIBLE_DEVICES=0,1,2,3  # DISABLED - causes all processes to use GPU 0
+export CUDA_DEVICE_ORDER=PCI_BUS_ID  # Ensure consistent GPU ordering
 export NCCL_DEBUG=INFO
 export IS_SUPERCOMPUTER=1
 
@@ -441,33 +468,39 @@ echo ""
 # Launch parallel generation jobs (one per GPU)
 # Each job processes 1/NUM_GPUS of the dataset
 # All parameters read from config file
+# IMPORTANT: Using subshells to ensure proper GPU isolation
 for split in $(seq 0 $((NUM_GPUS - 1))); do
     echo "  → Launching generation job ${split}/${NUM_GPUS} on GPU ${split}..."
 
-    CUDA_VISIBLE_DEVICES=${split} python medsyn/models/distdiff/generate_data.py \
-        --guidance_type="${GUIDANCE_TYPE}" \
-        -a "${MODEL_ARCH}" \
-        -d pathmnist_npz \
-        --data_dir "${DATA_DST}" \
-        --output_dir "${SYNTH_DATA_DIR}/split_${split}" \
-        --pretrained_model_name_or_path "${PRETRAINED_MODEL}" \
-        ${CACHE_DIR_ARG} \
-        ${LOCAL_FILES_ONLY_FLAG} \
-        ${GRAD_CKPT_FLAG} \
-        --K "${K_PROTOTYPES}" \
-        --train_batch_size 1 \
-        --optimize_targets "${OPTIMIZE_TARGETS}" \
-        --strength "${STRENGTH}" \
-        --num_images_per_prompt "${NUM_IMAGES_PER_PROMPT}" \
-        --guidance_step "${GUIDANCE_STEP}" \
-        --guidance_period "${GUIDANCE_PERIOD}" \
-        --encoder_weight_path "${GUIDE_MODEL_PATH}" \
-        --guidance_scale "${GUIDANCE_SCALE}" \
-        --constraint_value "${CONSTRAINT_VALUE}" \
-        --rho "${RHO}" \
-        --total_split "${NUM_GPUS}" \
-        --split ${split} \
-        > "${OUT_DIR}/logs/generation_split_${split}.log" 2>&1 &
+    # Use subshell to isolate CUDA_VISIBLE_DEVICES per process
+    (
+        export CUDA_VISIBLE_DEVICES=${split}
+
+        python medsyn/models/distdiff/generate_data.py \
+            --guidance_type="${GUIDANCE_TYPE}" \
+            -a "${MODEL_ARCH}" \
+            -d pathmnist_npz \
+            --data_dir "${DATA_DST}" \
+            --output_dir "${SYNTH_DATA_DIR}/split_${split}" \
+            --pretrained_model_name_or_path "${PRETRAINED_MODEL}" \
+            ${CACHE_DIR_ARG} \
+            ${LOCAL_FILES_ONLY_FLAG} \
+            ${GRAD_CKPT_FLAG} \
+            --K "${K_PROTOTYPES}" \
+            --train_batch_size 1 \
+            --optimize_targets "${OPTIMIZE_TARGETS}" \
+            --strength "${STRENGTH}" \
+            --num_images_per_prompt "${NUM_IMAGES_PER_PROMPT}" \
+            --guidance_step "${GUIDANCE_STEP}" \
+            --guidance_period "${GUIDANCE_PERIOD}" \
+            --encoder_weight_path "${GUIDE_MODEL_PATH}" \
+            --guidance_scale "${GUIDANCE_SCALE}" \
+            --constraint_value "${CONSTRAINT_VALUE}" \
+            --rho "${RHO}" \
+            --total_split "${NUM_GPUS}" \
+            --split ${split} \
+            > "${OUT_DIR}/logs/generation_split_${split}.log" 2>&1
+    ) &
 done
 
 # Wait for all generation jobs to complete
@@ -485,16 +518,76 @@ fi
 echo "✅ Stage 2 completed successfully"
 echo ""
 
-# Verify synthetic data was generated
+# ========================================================================
+# STAGE 2.5: COMPRESS PNG OUTPUT TO NPZ FORMAT
+# ========================================================================
+echo ""
+echo "================================================================================"
+echo "📦 STAGE 2.5: Compressing PNG Output to NPZ Format"
+echo "================================================================================"
+echo "[compress] Compressing generated images to NPZ for efficient transfer..."
+echo ""
+
+COMPRESS_SUCCESS=true
+for split in $(seq 0 $((NUM_GPUS - 1))); do
+    SPLIT_DIR="${SYNTH_DATA_DIR}/split_${split}"
+    NPZ_OUTPUT="${SYNTH_DATA_DIR}/split_${split}.npz"
+
+    if [ -d "${SPLIT_DIR}" ]; then
+        echo "  → Compressing split ${split}..."
+
+        python medsyn/models/distdiff/compress_split.py \
+            --split_dir "${SPLIT_DIR}" \
+            --output "${NPZ_OUTPUT}"
+            # Note: Not deleting PNGs automatically to preserve data for Stage 3
+            # You can manually delete PNG directories after confirming NPZ files are valid
+
+        COMPRESS_EXIT=$?
+        if [ ${COMPRESS_EXIT} -ne 0 ]; then
+            echo "⚠️  Warning: Compression failed for split ${split}"
+            COMPRESS_SUCCESS=false
+        else
+            echo "✓ Split ${split} compressed to NPZ ($(du -h "${NPZ_OUTPUT}" | cut -f1))"
+        fi
+    else
+        echo "⚠️  Warning: Split directory not found: ${SPLIT_DIR}"
+        COMPRESS_SUCCESS=false
+    fi
+done
+
+if [ "${COMPRESS_SUCCESS}" = true ]; then
+    echo ""
+    echo "✅ All splits compressed successfully"
+    echo ""
+    echo "NPZ files created:"
+    ls -lh "${SYNTH_DATA_DIR}"/*.npz 2>/dev/null || echo "  (no NPZ files found)"
+else
+    echo ""
+    echo "⚠️  Some splits failed to compress, but continuing..."
+fi
+echo ""
+
+# Verify synthetic data was generated (check for NPZ files or PNG directories)
 SYNTH_COUNT=0
 for split in $(seq 0 $((NUM_GPUS - 1))); do
-    if [ -d "${SYNTH_DATA_DIR}/split_${split}" ]; then
-        # Check if directory actually contains class directories with images
-        CLASS_COUNT=$(find "${SYNTH_DATA_DIR}/split_${split}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+    NPZ_FILE="${SYNTH_DATA_DIR}/split_${split}.npz"
+    SPLIT_DIR="${SYNTH_DATA_DIR}/split_${split}"
+
+    # Check if NPZ file exists (preferred)
+    if [ -f "${NPZ_FILE}" ]; then
+        NPZ_SIZE=$(stat -c%s "${NPZ_FILE}" 2>/dev/null || echo "0")
+        if [ "${NPZ_SIZE}" -gt 1000000 ]; then  # At least 1MB
+            SYNTH_COUNT=$((SYNTH_COUNT + 1))
+        else
+            echo "⚠️  Warning: split_${split}.npz exists but appears corrupted (size: ${NPZ_SIZE} bytes)"
+        fi
+    # Fallback: check if directory exists with PNG files
+    elif [ -d "${SPLIT_DIR}" ]; then
+        CLASS_COUNT=$(find "${SPLIT_DIR}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
         if [ ${CLASS_COUNT} -gt 0 ]; then
             SYNTH_COUNT=$((SYNTH_COUNT + 1))
         else
-            echo "⚠️  Warning: split_${split} exists but is empty (no class directories)"
+            echo "⚠️  Warning: split_${split} directory exists but is empty (no class directories)"
         fi
     fi
 done
@@ -594,16 +687,31 @@ echo ""
 echo "Pipeline Summary:"
 echo "  ✅ Stage 1: Guide model trained (${MODEL_ARCH})"
 echo "  ✅ Stage 2: Synthetic data generated (${EXPAND_FACTOR}x expansion, ${NUM_GPUS} parallel jobs)"
+echo "  ✅ Stage 2.5: Synthetic data compressed to NPZ format (${NUM_GPUS} files)"
 echo "  ✅ Stage 3: Classifier trained on expanded data"
 echo ""
 echo "Results will be synced to: ${RESULTS_DST}"
 echo "  • Guide model: checkpoints/guide_model/"
 echo "  • Expanded classifier: checkpoints/classifier_on_expanded/"
-echo "  • Synthetic data: synthetic_data/"
+echo "  • Synthetic data PNG: synthetic_data/split_*/"
+echo "  • Synthetic data NPZ: synthetic_data/split_*.npz (compressed format)"
 echo "  • Logs: logs/"
 echo "================================================================================"
 echo ""
+echo "IMPORTANT: Retrieving NPZ Files"
+echo "================================================================================"
+echo "The NPZ files will be automatically synced on job exit to:"
+echo "  ${RESULTS_DST}/synthetic_data/"
+echo ""
+echo "To copy NPZ files to your local machine:"
+echo "  scp user@picasso:${RESULTS_DST}/synthetic_data/split_*.npz /local/path/"
+echo ""
+echo "Or use rsync for better transfer:"
+echo "  rsync -avz --progress user@picasso:${RESULTS_DST}/synthetic_data/*.npz /local/path/"
+echo "================================================================================"
+echo ""
 echo "Note: Result synchronization and cleanup will run automatically on exit."
+echo "Check the sync output above to verify NPZ files were transferred successfully."
 echo "================================================================================"
 
 # Exit with success - trap will handle sync and cleanup
