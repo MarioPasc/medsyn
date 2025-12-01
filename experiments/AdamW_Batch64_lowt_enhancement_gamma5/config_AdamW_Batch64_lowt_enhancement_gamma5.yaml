@@ -290,7 +290,7 @@ ccddpm:
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
-    guidance_scale: 2.0  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
+    guidance_scale: 7.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     sampler: ddim        # Sampler type: ddim, ddpm
     
     eta: 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)

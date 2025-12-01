@@ -129,7 +129,7 @@ echo "==========================================================================
 # ---------- Prepare Configuration ----------
 cd "${REPO_DIR}"
 
-cp config/picasso_cfg.yaml "${CONFIG_TEMP}"
+# cp experiments/AdamW_Batch64_lowt_enhancement_gamma5/config_AdamW_Batch64_lowt_enhancement_gamma5.yaml "${CONFIG_TEMP}"
 
 # Update checkpoint path in config
 sed -i "s|checkpoint:.*|checkpoint: ${CKPT_DST}|g" "${CONFIG_TEMP}"
