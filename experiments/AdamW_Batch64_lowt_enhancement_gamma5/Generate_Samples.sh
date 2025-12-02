@@ -158,7 +158,8 @@ START_TIME=$(date +%s)
 srun python -m medsyn.cli.generate_ccDDPM_parallel \
   "${CONFIG_TEMP}" \
   --num-gpus "${NUM_GPUS}" \
-  --batch-size 4
+  --batch-size 8 \
+  --no-pngs
 
 EXIT_CODE=$?
 

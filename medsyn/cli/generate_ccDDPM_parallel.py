@@ -83,6 +83,7 @@ def worker_process(
     create_visualization: bool,
     total_images_in_job: int,
     batch_size: int = 4,
+    save_pngs: bool = True,
 ) -> None:
     """
     Worker process that generates images on a specific GPU.
@@ -168,6 +169,7 @@ def worker_process(
                         batch_size=batch_size,
                         total_images_in_job=total_images_in_job,
                         images_completed_before_this_class=0,  # Conservative estimate for parallel execution
+                        save_pngs=save_pngs,
                     )
 
                     task_duration = time.time() - task_start_time
@@ -466,6 +468,11 @@ Examples:
         help="Disable denoising process visualizations",
     )
     parser.add_argument(
+        "--no-pngs",
+        action="store_true",
+        help="Disable saving individual PNG images (only save NPZ and JSON)",
+    )
+    parser.add_argument(
         "--dataset-name",
         type=str,
         default="PathMNIST",
@@ -526,6 +533,7 @@ Examples:
         print(f"  Number of GPUs: {num_gpus}")
         print(f"  Total tasks: {len(tasks)}")
         print(f"  Visualizations: {'Disabled' if args.no_visualizations else 'Enabled'}")
+        print(f"  Save PNGs: {'Disabled' if args.no_pngs else 'Enabled'}")
 
         print("\nSamples per split and class:")
         total_samples = 0
@@ -582,6 +590,7 @@ Examples:
                     not args.no_visualizations,
                     total_images_in_job,
                     args.batch_size,
+                    not args.no_pngs,
                 ),
                 name=f"Worker-GPU{gpu_id}",
             )

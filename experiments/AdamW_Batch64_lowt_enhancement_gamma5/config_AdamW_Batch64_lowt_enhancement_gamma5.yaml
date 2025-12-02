@@ -290,7 +290,7 @@ ccddpm:
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
-    guidance_scale: 7.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
+    guidance_scale: 2.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     sampler: ddim        # Sampler type: ddim, ddpm
     
     eta: 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)
@@ -307,26 +307,15 @@ generate:
     save_to: ${OUTPUT_DIR}/synth
     train:
       classes:
-        0: 3519
-        1: 3376
-        2: 2525
-        3: 2484
-        4: 4879
-        5: 703
-        6: 4999
-        7: 3484
-        8: 1
-    val:
-      classes:
-        0: 391
-        1: 375
-        2: 280
-        3: 276
-        4: 542
-        5: 78
-        6: 555
-        7: 387
-        8: 1
+        0: 10000
+        1: 10000
+        2: 10000
+        3: 10000
+        4: 10000
+        5: 10000
+        6: 10000
+        7: 10000
+        8: 10000
 
 yolo:
   # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 

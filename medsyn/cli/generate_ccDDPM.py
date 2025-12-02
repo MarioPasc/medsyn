@@ -559,6 +559,7 @@ def generate_images_for_class(
     batch_size: int = 4,
     total_images_in_job: int | None = None,
     images_completed_before_this_class: int = 0,
+    save_pngs: bool = True,
 ) -> tuple[dict[str, dict[str, Any]], np.ndarray, np.ndarray]:
     """
     Generate synthetic images for a specific class with batch generation support.
@@ -577,6 +578,7 @@ def generate_images_for_class(
         batch_size: Number of images to generate in parallel per batch (default: 4)
         total_images_in_job: Total images across all classes/splits in the entire job (for global ETA)
         images_completed_before_this_class: Number of images completed before starting this class (for global ETA)
+        save_pngs: Whether to save individual PNG images (default: True)
 
     Returns:
         Tuple of:
@@ -728,7 +730,8 @@ def generate_images_for_class(
 
             # Convert from [-1, 1] to [0, 1] and save PNG
             img_normalized = (img.clamp(-1, 1) + 1.0) / 2.0
-            save_image(img_normalized, file_path)
+            if save_pngs:
+                save_image(img_normalized, file_path)
 
             # Log first sample of each class
             if idx == 0:
@@ -1168,6 +1171,11 @@ The YAML config should contain a 'generate' section:
         help="Disable denoising process visualizations",
     )
     parser.add_argument(
+        "--no-pngs",
+        action="store_true",
+        help="Disable saving individual PNG images (only save NPZ and JSON)",
+    )
+    parser.add_argument(
         "--dataset-name",
         type=str,
         default="PathMNIST",
@@ -1237,6 +1245,7 @@ The YAML config should contain a 'generate' section:
         print(f"  Inference steps: {cfg.ccddpm.infer.num_inference_steps}")
         print(f"  Batch size: {args.batch_size} images per batch (GPU utilization optimization)")
         print(f"  Visualizations: {'Disabled' if args.no_visualizations else 'Enabled'}")
+        print(f"  Save PNGs: {'Disabled' if args.no_pngs else 'Enabled'}")
 
         print("\nSamples per split and class:")
         total_samples = 0
@@ -1304,6 +1313,7 @@ The YAML config should contain a 'generate' section:
                     batch_size=args.batch_size,
                     total_images_in_job=total_samples,
                     images_completed_before_this_class=images_completed_so_far,
+                    save_pngs=not args.no_pngs,
                 )
 
                 # Update global progress counter
