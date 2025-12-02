@@ -73,6 +73,7 @@ metrics = [
     "lpips>=0.1.4",            # Learned Perceptual Image Patch Similarity
     "umap-learn",     # UMAP for embedding visualization
     "tabulate",      # For pretty-printing tables in analysis
+    "torchmetrics[image]" # Extra image metrics
 ]
 
 # Optional dependencies for DistDiff integration
