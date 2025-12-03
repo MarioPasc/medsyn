@@ -16,6 +16,7 @@ Output format maintains the same structure with both real and synthetic samples.
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
 import sys
 from pathlib import Path
@@ -31,10 +32,231 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def analyze_class_distribution(labels: np.ndarray) -> dict[int, int]:
+    """
+    Analyze class distribution in a dataset.
+
+    Args:
+        labels: Array of labels
+
+    Returns:
+        Dictionary mapping class_id -> count
+    """
+    unique_classes, counts = np.unique(labels, return_counts=True)
+    return {int(cls): int(count) for cls, count in zip(unique_classes, counts)}
+
+
+def balance_and_expand_synthetic(
+    orig_labels: np.ndarray,
+    synth_images: np.ndarray,
+    synth_labels: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, dict[int, int]]]:
+    """
+    Balance classes using synthetic data, then expand uniformly with remaining samples.
+
+    Algorithm:
+    1. Count samples per class in original dataset
+    2. Find max class count (balancing target)
+    3. For each class, take synthetic samples to reach the target (balancing phase)
+    4. Distribute remaining synthetic samples equally across all classes (expansion phase)
+    5. Track discarded samples that can't be used while maintaining balance
+
+    Args:
+        orig_labels: Original dataset labels
+        synth_images: Synthetic images array
+        synth_labels: Synthetic labels array
+
+    Returns:
+        Tuple of:
+        - Selected synthetic images
+        - Selected synthetic labels
+        - Statistics dict with keys 'original', 'used_synthetic', 'discarded_synthetic'
+    """
+    # Analyze original distribution
+    orig_dist = analyze_class_distribution(orig_labels)
+    synth_dist = analyze_class_distribution(synth_labels)
+    
+    classes = sorted(set(orig_dist.keys()) | set(synth_dist.keys()))
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("CLASS BALANCING AND EXPANSION")
+    logger.info("=" * 60)
+    logger.info("\nOriginal class distribution:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {orig_dist.get(cls, 0)} samples")
+    
+    logger.info("\nAvailable synthetic samples per class:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {synth_dist.get(cls, 0)} samples")
+    
+    # Phase 1: Balance to max class count
+    max_orig_count = max(orig_dist.values())
+    logger.info(f"\nBalancing target (max original count): {max_orig_count}")
+    
+    # Calculate how many synthetic samples needed per class for balancing
+    balancing_needs = {}
+    for cls in classes:
+        orig_count = orig_dist.get(cls, 0)
+        deficit = max(0, max_orig_count - orig_count)
+        available_synth = synth_dist.get(cls, 0)
+        balancing_needs[cls] = min(deficit, available_synth)
+    
+    logger.info("\nBalancing phase - samples to add per class:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {balancing_needs[cls]} samples")
+    
+    # Phase 2: Expand uniformly with remaining samples
+    remaining_synth = {}
+    for cls in classes:
+        available = synth_dist.get(cls, 0)
+        used_for_balancing = balancing_needs[cls]
+        remaining_synth[cls] = available - used_for_balancing
+    
+    logger.info("\nRemaining synthetic samples after balancing:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {remaining_synth[cls]} samples")
+    
+    # Determine maximum uniform expansion
+    min_remaining = min(remaining_synth.values()) if remaining_synth else 0
+    expansion_per_class = min_remaining
+    
+    logger.info(f"\nUniform expansion: {expansion_per_class} samples per class")
+    
+    # Total synthetic samples to use per class
+    total_to_use = {cls: balancing_needs[cls] + expansion_per_class for cls in classes}
+    
+    logger.info("\nTotal synthetic samples to use per class:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {total_to_use[cls]} samples")
+    
+    # Collect statistics
+    stats = {
+        'original': orig_dist,
+        'used_synthetic': total_to_use,
+        'discarded_synthetic': {
+            cls: synth_dist.get(cls, 0) - total_to_use[cls]
+            for cls in classes
+        }
+    }
+    
+    logger.info("\nDiscarded synthetic samples per class:")
+    for cls in classes:
+        logger.info(f"  Class {cls}: {stats['discarded_synthetic'][cls]} samples")
+    
+    # Sample the synthetic data
+    selected_indices = []
+    for cls in classes:
+        # Get indices for this class
+        cls_indices = np.where(synth_labels == cls)[0]
+        n_to_select = total_to_use[cls]
+        
+        if n_to_select > 0 and len(cls_indices) > 0:
+            # Randomly select without replacement
+            selected = np.random.choice(cls_indices, size=min(n_to_select, len(cls_indices)), replace=False)
+            selected_indices.extend(selected.tolist())
+    
+    selected_indices = np.array(selected_indices)
+    
+    # Return selected samples
+    if len(selected_indices) == 0:
+        return (
+            np.empty((0,) + synth_images.shape[1:], dtype=synth_images.dtype),
+            np.empty(0, dtype=synth_labels.dtype),
+            stats
+        )
+    
+    return (
+        synth_images[selected_indices],
+        synth_labels[selected_indices],
+        stats
+    )
+
+
+def generate_balancing_summary_csv(
+    stats: dict[str, dict[int, int]],
+    output_path: Path,
+    split_name: str,
+) -> None:
+    """
+    Generate CSV summary of class balancing statistics.
+
+    CSV columns:
+    - class: Class ID (or 'TOTAL' for aggregate row)
+    - original: Original sample count
+    - synthetic: Synthetic samples used
+    - original+synthetic: Total after merging
+    - expansion_term: Multiplication factor (e.g., 1.5x, 2.0x)
+    - discarded_synthetic_images: Number of synthetic samples not used
+
+    Args:
+        stats: Statistics dictionary from balance_and_expand_synthetic
+        output_path: Path where to save CSV file
+        split_name: Name of the split (for logging)
+    """
+    orig_dist = stats['original']
+    used_synth = stats['used_synthetic']
+    discarded_synth = stats['discarded_synthetic']
+    
+    classes = sorted(set(orig_dist.keys()) | set(used_synth.keys()))
+    
+    rows = []
+    
+    # Per-class rows
+    for cls in classes:
+        orig_count = orig_dist.get(cls, 0)
+        synth_count = used_synth.get(cls, 0)
+        total_count = orig_count + synth_count
+        expansion = total_count / orig_count if orig_count > 0 else 0
+        discarded_count = discarded_synth.get(cls, 0)
+        
+        rows.append({
+            'class': cls,
+            'original': orig_count,
+            'synthetic': synth_count,
+            'original+synthetic': total_count,
+            'expansion_term': f"{expansion:.2f}x",
+            'discarded_synthetic_images': discarded_count,
+        })
+    
+    # Total row
+    total_orig = sum(orig_dist.values())
+    total_synth = sum(used_synth.values())
+    total_merged = total_orig + total_synth
+    total_expansion = total_merged / total_orig if total_orig > 0 else 0
+    total_discarded = sum(discarded_synth.values())
+    
+    rows.append({
+        'class': 'TOTAL',
+        'original': total_orig,
+        'synthetic': total_synth,
+        'original+synthetic': total_merged,
+        'expansion_term': f"{total_expansion:.2f}x",
+        'discarded_synthetic_images': total_discarded,
+    })
+    
+    # Write CSV
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w', newline='') as f:
+        fieldnames = ['class', 'original', 'synthetic', 'original+synthetic', 'expansion_term', 'discarded_synthetic_images']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    
+    logger.info(f"\nBalancing summary saved to: {output_path}")
+    logger.info("\nSummary:")
+    logger.info(f"  Total original: {total_orig}")
+    logger.info(f"  Total synthetic used: {total_synth}")
+    logger.info(f"  Total merged: {total_merged}")
+    logger.info(f"  Overall expansion: {total_expansion:.2f}x")
+    logger.info(f"  Total discarded: {total_discarded}")
+
+
 def merge_split(
     original_data: dict[str, np.ndarray],
     synth_data: dict[str, np.ndarray],
     split_name: str,
+    account_for_imbalances: bool = False,
+    output_csv_path: Optional[Path] = None,
 ) -> dict[str, np.ndarray]:
     """
     Merge original and synthetic data for a single split.
@@ -43,6 +265,8 @@ def merge_split(
         original_data: Dictionary from original NPZ file
         synth_data: Dictionary from synthetic NPZ file
         split_name: Name of the split (train, val, test)
+        account_for_imbalances: If True, balance classes and expand uniformly
+        output_csv_path: Path to save CSV summary (only used if account_for_imbalances=True)
 
     Returns:
         Dictionary with merged data for this split
@@ -76,6 +300,26 @@ def merge_split(
     synth_images = synth_data[images_key]
     synth_labels = synth_data[labels_key]
     synth_is_synth = synth_data.get(is_synth_key, np.ones(len(synth_images), dtype=bool))
+
+    # Apply class balancing if requested
+    if account_for_imbalances:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Applying class balancing for {split_name} split")
+        logger.info(f"{'='*60}")
+        
+        synth_images, synth_labels, stats = balance_and_expand_synthetic(
+            orig_labels=orig_labels,
+            synth_images=synth_images,
+            synth_labels=synth_labels,
+        )
+        
+        # Update is_synth array to match new synthetic data
+        synth_is_synth = np.ones(len(synth_images), dtype=bool)
+        
+        # Generate CSV summary if path provided
+        if output_csv_path is not None:
+            csv_path = output_csv_path.parent / f"{output_csv_path.stem}_{split_name}.csv"
+            generate_balancing_summary_csv(stats, csv_path, split_name)
 
     # Validate shapes
     if orig_images.shape[1:] != synth_images.shape[1:]:
@@ -118,17 +362,22 @@ def merge_npz_files(
     output_npz_path: Path,
     splits: Optional[list[str]] = None,
     dataset_name: str = "pathmnist",
+    account_for_imbalances: bool = False,
+    output_csv_path: Optional[Path] = None,
 ) -> None:
     """
     Merge original and synthetic NPZ files.
 
     Args:
         original_npz_path: Path to original dataset NPZ file (contains all splits)
-        synth_base_path: Path to base directory containing split subdirectories
-                        (e.g., /path/to/generated/ containing train/, val/, test/)
+        synth_base_path: Path to synthetic data. Can be either:
+                        - A directory containing split subdirectories (train/, val/, test/)
+                        - A single NPZ file containing all splits in the expected format
         output_npz_path: Path where to save merged NPZ file
         splits: List of splits to merge (default: ["train", "val", "test"])
-        dataset_name: Dataset name used in NPZ filenames (default: "pathmnist")
+        dataset_name: Dataset name used in NPZ filenames (default: "pathmnist", only used in directory mode)
+        account_for_imbalances: If True, balance classes and expand uniformly
+        output_csv_path: Path to save CSV summary (only used if account_for_imbalances=True)
 
     Raises:
         FileNotFoundError: If input files don't exist
@@ -138,22 +387,28 @@ def merge_npz_files(
         raise FileNotFoundError(f"Original NPZ file not found: {original_npz_path}")
 
     if not synth_base_path.exists():
-        raise FileNotFoundError(f"Synthetic base directory not found: {synth_base_path}")
-
-    if not synth_base_path.is_dir():
-        raise ValueError(f"Synthetic base path must be a directory: {synth_base_path}")
+        raise FileNotFoundError(f"Synthetic path not found: {synth_base_path}")
 
     if splits is None:
         splits = ["train", "val", "test"]
+
+    # Detect if synthetic path is a single NPZ file or a directory
+    is_single_npz = synth_base_path.is_file() and synth_base_path.suffix == '.npz'
 
     logger.info("=" * 80)
     logger.info("Merging NPZ files")
     logger.info("=" * 80)
     logger.info(f"Original: {original_npz_path}")
-    logger.info(f"Synthetic base directory: {synth_base_path}")
+    if is_single_npz:
+        logger.info(f"Synthetic NPZ file: {synth_base_path}")
+        logger.info("Mode: Single NPZ file merge")
+    else:
+        logger.info(f"Synthetic base directory: {synth_base_path}")
+        logger.info("Mode: Directory-based merge")
     logger.info(f"Output: {output_npz_path}")
     logger.info(f"Splits to merge: {splits}")
-    logger.info(f"Dataset name: {dataset_name}")
+    if not is_single_npz:
+        logger.info(f"Dataset name: {dataset_name}")
     logger.info("=" * 80)
 
     # Load original NPZ file (contains all splits)
@@ -164,26 +419,57 @@ def merge_npz_files(
     # Merge each split
     merged_data = {}
 
-    for split_name in splits:
-        # Construct path to synthetic NPZ for this split
-        synth_split_dir = synth_base_path / split_name
-        synth_npz_filename = f"{dataset_name}_{split_name}_synth.npz"
-        synth_npz_path = synth_split_dir / synth_npz_filename
-
-        if not synth_npz_path.exists():
-            logger.warning(f"Synthetic NPZ not found for split '{split_name}': {synth_npz_path}")
-            logger.warning(f"Skipping split '{split_name}'...")
-            continue
-
-        # Load synthetic NPZ for this split
-        logger.info(f"\nLoading synthetic NPZ for split '{split_name}': {synth_npz_path}")
-        synth_data = np.load(synth_npz_path)
+    if is_single_npz:
+        # Single NPZ file mode: load once and merge all splits from it
+        logger.info(f"\nLoading synthetic NPZ file: {synth_base_path}")
+        synth_data = np.load(synth_base_path)
         logger.info(f"Synthetic NPZ keys: {list(synth_data.keys())}")
 
-        # Merge this split
-        split_merged = merge_split(original_data, synth_data, split_name)
-        if split_merged:
-            merged_data.update(split_merged)
+        for split_name in splits:
+            # Check if split exists in synthetic NPZ
+            images_key = f"{split_name}_images"
+            if images_key not in synth_data:
+                logger.warning(f"Split '{split_name}' not found in synthetic NPZ, skipping...")
+                continue
+
+            # Merge this split
+            split_merged = merge_split(
+                original_data,
+                synth_data,
+                split_name,
+                account_for_imbalances=account_for_imbalances,
+                output_csv_path=output_csv_path,
+            )
+            if split_merged:
+                merged_data.update(split_merged)
+    else:
+        # Directory mode: load separate NPZ files per split
+        for split_name in splits:
+            # Construct path to synthetic NPZ for this split
+            synth_split_dir = synth_base_path / split_name
+            synth_npz_filename = f"{dataset_name}_{split_name}_synth.npz"
+            synth_npz_path = synth_split_dir / synth_npz_filename
+
+            if not synth_npz_path.exists():
+                logger.warning(f"Synthetic NPZ not found for split '{split_name}': {synth_npz_path}")
+                logger.warning(f"Skipping split '{split_name}'...")
+                continue
+
+            # Load synthetic NPZ for this split
+            logger.info(f"\nLoading synthetic NPZ for split '{split_name}': {synth_npz_path}")
+            synth_data = np.load(synth_npz_path)
+            logger.info(f"Synthetic NPZ keys: {list(synth_data.keys())}")
+
+            # Merge this split
+            split_merged = merge_split(
+                original_data,
+                synth_data,
+                split_name,
+                account_for_imbalances=account_for_imbalances,
+                output_csv_path=output_csv_path,
+            )
+            if split_merged:
+                merged_data.update(split_merged)
 
     if not merged_data:
         raise ValueError("No valid splits were merged. Check your input files and split names.")
@@ -499,7 +785,22 @@ Examples:
     -t /path/to/merged.npz \\
     --dataset-name pathmnist
 
-Directory structure expected for synthetic data:
+  # Balance classes and expand uniformly with remaining synthetic data
+  python -m medsyn.utils.merge_synth_with_original \
+    --original /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/PathMNIST.npz \
+    --synthetic /media/mpascual/Sandisk2TB1/research/medsyn/synthetic_samples/AdamW_Batch64_lowt_enhancement_gamma5_generated \
+    --output /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_synth.npz \
+    --sanity-check \
+    --account-for-imbalances \
+    --balancing-csv /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_class_counts.csv
+
+  # Merge with a single synthetic NPZ file (already in expected format)
+  python -m medsyn.utils.merge_synth_with_original \
+    --original /path/to/original.npz \
+    --synthetic /path/to/synthetic_all_splits.npz \
+    --output /path/to/merged.npz
+
+Directory structure expected for synthetic data (directory mode):
   <synthetic_base_dir>/
     train/
       pathmnist_train_synth.npz
@@ -516,6 +817,10 @@ Input NPZ files should have the following structure:
   {split}_labels: [N] int64
   {split}_is_synth: [N] bool
 
+For single NPZ file mode:
+  The synthetic NPZ should contain all splits in the same format as the original,
+  with keys like train_images, train_labels, train_is_synth, etc.
+
 The output NPZ will have the same structure with combined samples.
 You can distinguish real from synthetic using the is_synth flag.
 
@@ -526,6 +831,19 @@ Sanity check verifies:
   - is_synth flags correctly set
   - Data integrity (spot checks on samples)
   - Label distributions preserved
+
+Class balancing algorithm (--account-for-imbalances):
+  1. Count samples per class in original dataset
+  2. Find maximum class count (balancing target)
+  3. Phase 1 - Balancing: Add synthetic samples to bring all classes to max count
+  4. Phase 2 - Expansion: Uniformly expand all classes with remaining synthetic samples
+  5. Discard any synthetic samples that can't be used while maintaining balance
+  6. Generate CSV summary with per-class statistics
+  
+  Example: Original has [Class A: 100, Class B: 150], Synthetic has [A: 200, B: 200]
+  - Phase 1: Add 50 synthetic to Class A → [A: 150, B: 150] (balanced)
+  - Phase 2: Add 150 more to each class → [A: 300, B: 300] (uniformly expanded)
+  - Result: Discarded 0 from A, 50 from B. Overall expansion: 2.0x
         """,
     )
 
@@ -542,7 +860,9 @@ Sanity check verifies:
         "--synthetic",
         type=str,
         required=True,
-        help="Path to synthetic dataset base directory (contains train/, val/, test/ subdirectories)",
+        help="Path to synthetic dataset. Can be either: "
+             "(1) A base directory containing train/, val/, test/ subdirectories with separate NPZ files, or "
+             "(2) A single NPZ file containing all splits in the expected format ({split}_images, {split}_labels, {split}_is_synth)",
     )
 
     parser.add_argument(
@@ -580,12 +900,37 @@ Sanity check verifies:
         help="Only run sanity checks on an existing merged NPZ file (skip merging)",
     )
 
+    parser.add_argument(
+        "--account-for-imbalances",
+        action="store_true",
+        help="Balance classes using synthetic data, then expand uniformly with remaining samples. "
+             "Generates a CSV summary per split with class statistics.",
+    )
+
+    parser.add_argument(
+        "--balancing-csv",
+        type=str,
+        default=None,
+        help="Base path for CSV summary files (only used with --account-for-imbalances). "
+             "Will generate {base}_{split}.csv for each split. If not specified, "
+             "uses {output_dir}/balancing_summary.csv",
+    )
+
     args = parser.parse_args()
 
     # Convert paths
     original_path = Path(args.original).expanduser().resolve()
     synth_base_path = Path(args.synthetic).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
+    
+    # Determine CSV output path
+    csv_path = None
+    if args.account_for_imbalances:
+        if args.balancing_csv:
+            csv_path = Path(args.balancing_csv).expanduser().resolve()
+        else:
+            # Default: same directory as output NPZ
+            csv_path = output_path.parent / "balancing_summary.csv"
 
     try:
         # Sanity check only mode
@@ -613,6 +958,8 @@ Sanity check verifies:
             output_npz_path=output_path,
             splits=args.splits,
             dataset_name=args.dataset_name,
+            account_for_imbalances=args.account_for_imbalances,
+            output_csv_path=csv_path,
         )
 
         # Run sanity check if requested
