@@ -31,7 +31,8 @@ Usage:
     --output /media/mpascual/Sandisk2TB/research/medsyn/results/fid_results.csv \
     --counts 100 \
     --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid/ \
-    --verbose
+    --verbose \
+    --device cuda:1
     
   python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth /media/hddb/mario/data/medsyn/merged.npz \
@@ -40,7 +41,8 @@ Usage:
     --output /media/hddb/mario/results/medsyn/fid_results.csv \
     --counts 100 \
     --weights-dir /media/hddb/mario/data/medsyn/pretrained/fid/ \
-    --verbose
+    --verbose \
+    --device cuda:1
 
 
 
@@ -164,19 +166,25 @@ def compute_fid_per_class(
 
             # Add real images (all of them)
             with torch.no_grad():
-                real_batch = real_images_class.to(device)
-                fid_computer.update(real_batch, real=True)
-                del real_batch
-                if device == "cuda":
-                    torch.cuda.empty_cache()
+                # Process in chunks to avoid OOM
+                chunk_size = 256
+                for i in range(0, len(real_images_class), chunk_size):
+                    real_batch = real_images_class[i:i + chunk_size].to(device)
+                    fid_computer.update(real_batch, real=True)
+                    del real_batch
+                    if "cuda" in device:
+                        torch.cuda.empty_cache()
 
             # Add synthetic subset
             with torch.no_grad():
-                synth_batch = synth_subset.to(device)
-                fid_computer.update(synth_batch, real=False)
-                del synth_batch
-                if device == "cuda":
-                    torch.cuda.empty_cache()
+                # Process in chunks to avoid OOM
+                chunk_size = 256
+                for i in range(0, len(synth_subset), chunk_size):
+                    synth_batch = synth_subset[i:i + chunk_size].to(device)
+                    fid_computer.update(synth_batch, real=False)
+                    del synth_batch
+                    if "cuda" in device:
+                        torch.cuda.empty_cache()
 
             # Compute FID
             fid_value = float(fid_computer.compute().cpu().item())
@@ -189,7 +197,7 @@ def compute_fid_per_class(
 
             # Clean up
             del fid_computer
-            if device == "cuda":
+            if "cuda" in device:
                 torch.cuda.empty_cache()
 
         except Exception as e:
@@ -300,16 +308,19 @@ def compute_fid_global(
                     real_chunk = real_images[i:i + chunk_size].to(device)
                     fid_computer.update(real_chunk, real=True)
                     del real_chunk
-                    if device == "cuda":
+                    if "cuda" in device:
                         torch.cuda.empty_cache()
 
             # Add synthetic subset
             with torch.no_grad():
-                synth_batch = synth_subset.to(device)
-                fid_computer.update(synth_batch, real=False)
-                del synth_batch
-                if device == "cuda":
-                    torch.cuda.empty_cache()
+                # Process in chunks to avoid OOM
+                chunk_size = 256
+                for i in range(0, len(synth_subset), chunk_size):
+                    synth_batch = synth_subset[i:i + chunk_size].to(device)
+                    fid_computer.update(synth_batch, real=False)
+                    del synth_batch
+                    if "cuda" in device:
+                        torch.cuda.empty_cache()
 
             # Compute FID
             fid_value = float(fid_computer.compute().cpu().item())
@@ -321,7 +332,7 @@ def compute_fid_global(
 
             # Clean up
             del fid_computer
-            if device == "cuda":
+            if "cuda" in device:
                 torch.cuda.empty_cache()
 
         except Exception as e:
