@@ -1,0 +1,66 @@
+# ResNet50 Classification - Real Images + Traditional Augmentation
+# Configuration using real PathMNIST images with traditional data augmentation
+
+experiment:
+  name: "pathmnist_resnet50_real_plus_trad_aug"
+  output_dir: "experiments/classification/resnet50_real_plus_trad_aug"
+  seed: 42
+  device: "cuda"
+
+data:
+  npz_path: "/media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz"
+  regime: "real_plus_trad_aug"  # Real images + traditional augmentation
+  num_folds: 5                  # 5-fold cross-validation
+  num_workers: 4
+  batch_size: 64
+  image_size: 64
+
+model:
+  name: "resnet50"
+  pretrained: true
+  num_classes: 9
+  freeze_backbone: false
+  dropout: 0.0
+
+optimization:
+  optimizer: "adamw"
+  lr: 1e-4
+  weight_decay: 1e-2
+  betas: [0.9, 0.999]
+
+scheduler:
+  scheduler: "cosine"
+  warmup_epochs: 5
+  eta_min: 1e-7
+  step_size: 30
+  gamma: 0.1
+
+training:
+  max_epochs: 100
+  early_stopping_patience: 15
+  grad_clip_norm: 1.0
+  mixed_precision: true
+  checkpoint_every: 10
+  log_every: 10
+
+# Traditional augmentation for real_plus_trad_aug regime
+augmentation:
+  enabled: true
+  probability: 0.8
+  preserve_range: true
+  normalize_after_augment: true
+  transforms:
+    - name: HorizontalFlip
+      p: 0.5
+    - name: VerticalFlip
+      p: 0.5
+    - name: Rotate
+      p: 0.3
+      limit: 10
+    - name: RandomBrightnessContrast
+      p: 0.3
+      brightness_limit: 0.2
+      contrast_limit: 0.2
+    - name: GaussNoise
+      p: 0.2
+      var_limit: [10.0, 50.0]
