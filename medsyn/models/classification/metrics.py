@@ -19,7 +19,14 @@ class ClassificationMetrics:
     Tracks classification metrics during training/validation.
     """
 
-    def __init__(self):
+    def __init__(self, num_classes: int = None):
+        """
+        Initialize metrics tracker.
+
+        Args:
+            num_classes: Number of classes for per-class tracking (optional)
+        """
+        self.num_classes = num_classes
         self.reset()
 
     def reset(self):
@@ -30,12 +37,17 @@ class ClassificationMetrics:
         self.all_preds = []
         self.all_probs = []
 
+        # Per-class loss tracking
+        if self.num_classes is not None:
+            self.per_class_loss = {i: 0.0 for i in range(self.num_classes)}
+            self.per_class_samples = {i: 0 for i in range(self.num_classes)}
+
     def update(self, loss: float, logits: torch.Tensor, labels: torch.Tensor):
         """
         Update metrics with a batch.
 
         Args:
-            loss: Batch loss value
+            loss: Batch loss value (average across batch)
             logits: Model output logits (B, num_classes)
             labels: Ground truth labels (B,)
         """
@@ -52,6 +64,20 @@ class ClassificationMetrics:
         self.all_preds.append(preds)
         self.all_probs.append(probs)
 
+        # Track per-class losses
+        if self.num_classes is not None:
+            # Compute per-sample losses
+            per_sample_losses = torch.nn.functional.cross_entropy(
+                logits, labels, reduction='none'
+            ).cpu().numpy()
+
+            # Accumulate losses per class
+            for class_idx in range(self.num_classes):
+                class_mask = labels_np == class_idx
+                if class_mask.any():
+                    self.per_class_loss[class_idx] += per_sample_losses[class_mask].sum()
+                    self.per_class_samples[class_idx] += class_mask.sum()
+
     def accuracy(self) -> float:
         """Compute current accuracy."""
         if self.total_samples == 0:
@@ -60,15 +86,20 @@ class ClassificationMetrics:
         preds = np.concatenate(self.all_preds)
         return float(accuracy_score(labels, preds))
 
-    def compute(self) -> Dict[str, float]:
+    def compute(self) -> Dict[str, any]:
         """
         Compute all metrics.
 
         Returns:
-            Dictionary of metric name -> value
+            Dictionary containing:
+            - Overall metrics (loss, accuracy, precision, recall, f1, auc_macro)
+            - Per-class metrics (if num_classes is set)
         """
         if self.total_samples == 0:
-            return {"loss": 0.0, "accuracy": 0.0}
+            result = {"loss": 0.0, "accuracy": 0.0}
+            if self.num_classes is not None:
+                result["per_class"] = {}
+            return result
 
         labels = np.concatenate(self.all_labels)
         preds = np.concatenate(self.all_preds)
@@ -105,7 +136,65 @@ class ClassificationMetrics:
             # Not enough data or other issues
             metrics["auc_macro"] = 0.0
 
+        # Compute per-class metrics if enabled
+        if self.num_classes is not None:
+            metrics["per_class"] = self._compute_per_class_metrics(labels, preds, probs)
+
         return metrics
+
+    def _compute_per_class_metrics(
+        self,
+        labels: np.ndarray,
+        preds: np.ndarray,
+        probs: np.ndarray
+    ) -> Dict[str, any]:
+        """
+        Compute per-class metrics.
+
+        Args:
+            labels: Ground truth labels
+            preds: Predicted labels
+            probs: Class probabilities
+
+        Returns:
+            Dictionary with per-class metrics
+        """
+        # Per-class precision, recall, F1
+        precision, recall, f1, support = precision_recall_fscore_support(
+            labels, preds, labels=list(range(self.num_classes)), zero_division=0
+        )
+
+        # Per-class AUC (one-vs-rest)
+        per_class_auc = []
+        for class_idx in range(self.num_classes):
+            try:
+                binary_labels = (labels == class_idx).astype(int)
+                if len(np.unique(binary_labels)) == 2:
+                    auc = roc_auc_score(binary_labels, probs[:, class_idx])
+                else:
+                    auc = 0.0  # Only one class present
+            except Exception:
+                auc = 0.0
+            per_class_auc.append(auc)
+
+        # Per-class average losses
+        per_class_avg_loss = {}
+        for class_idx in range(self.num_classes):
+            if self.per_class_samples[class_idx] > 0:
+                per_class_avg_loss[class_idx] = float(
+                    self.per_class_loss[class_idx] / self.per_class_samples[class_idx]
+                )
+            else:
+                per_class_avg_loss[class_idx] = 0.0
+
+        return {
+            "loss": per_class_avg_loss,
+            "precision": precision.tolist(),
+            "recall": recall.tolist(),
+            "f1": f1.tolist(),
+            "auc": per_class_auc,
+            "support": support.tolist()
+        }
 
 
 def compute_per_class_metrics(

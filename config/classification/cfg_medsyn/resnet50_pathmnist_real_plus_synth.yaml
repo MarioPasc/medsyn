@@ -3,12 +3,12 @@
 
 experiment:
   name: "pathmnist_resnet50_real_plus_synth"
-  output_dir: "experiments/classification/resnet50_real_plus_synth"
+  output_dir: "/media/hddb/mario/results/medsyn/experiments/classification/resnet50_real_plus_synth"
   seed: 42
-  device: "cuda"
+  device: "cuda:1"
 
 data:
-  npz_path: "/media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz"
+  npz_path: "/media/hddb/mario/data/medsyn/merged_datasets/cfg_medsyn_synth.npz"
   regime: "real_plus_synth"  # Real + synthetic images
   num_folds: 5               # 5-fold cross-validation
   num_workers: 4

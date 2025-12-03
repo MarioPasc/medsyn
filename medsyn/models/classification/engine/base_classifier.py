@@ -21,7 +21,10 @@ from tqdm import tqdm
 from ..config import ClassificationConfig
 from ..dataloaders import build_classification_dataloader
 from ..metrics import ClassificationMetrics, compute_per_class_metrics
-from ..logging_utils import CSVLogger, save_checkpoint, load_checkpoint
+from ..logging_utils import (
+    CSVLogger, PerClassCSVLogger, BestEpochMetricsSaver,
+    save_checkpoint, load_checkpoint
+)
 from ..kfold_utils import StratifiedKFoldSplitter
 from ..cv_aggregator import CrossValidationAggregator
 
@@ -75,12 +78,15 @@ class BaseClassifier(ABC):
         self.best_epoch = 0
         self.epochs_no_improve = 0
 
-        # Metrics tracking
-        self.train_metrics = ClassificationMetrics()
-        self.val_metrics = ClassificationMetrics()
+        # Metrics tracking (with per-class support)
+        self.train_metrics = ClassificationMetrics(num_classes=config.model.num_classes)
+        self.val_metrics = ClassificationMetrics(num_classes=config.model.num_classes)
 
-        # CSV logger
+        # CSV loggers
         self.csv_logger: Optional[CSVLogger] = None
+        self.train_per_class_logger: Optional[PerClassCSVLogger] = None
+        self.val_per_class_logger: Optional[PerClassCSVLogger] = None
+        self.best_epoch_saver: Optional[BestEpochMetricsSaver] = None
 
     def _set_seed(self, seed: int):
         """Set random seed for reproducibility."""
@@ -173,9 +179,31 @@ class BaseClassifier(ABC):
             )
             self.augmentation_pipeline = AugmentationPipeline(aug_config)
 
-        # Setup CSV logger
+        # Setup CSV loggers
         log_file = self.output_dir / "logs" / "training_log.csv"
         self.csv_logger = CSVLogger(log_file)
+
+        # Setup per-class CSV loggers
+        train_per_class_log = self.output_dir / "logs" / "train_per_class_metrics.csv"
+        self.train_per_class_logger = PerClassCSVLogger(
+            train_per_class_log,
+            num_classes=self.config.model.num_classes,
+            split="train"
+        )
+
+        val_per_class_log = self.output_dir / "logs" / "val_per_class_metrics.csv"
+        self.val_per_class_logger = PerClassCSVLogger(
+            val_per_class_log,
+            num_classes=self.config.model.num_classes,
+            split="val"
+        )
+
+        # Setup best epoch metrics saver
+        best_epoch_path = self.output_dir / "logs" / "best_epoch_metrics.yaml"
+        self.best_epoch_saver = BestEpochMetricsSaver(
+            best_epoch_path,
+            num_classes=self.config.model.num_classes
+        )
 
     def build_dataloaders(
         self,
@@ -378,6 +406,12 @@ class BaseClassifier(ABC):
                 lr=current_lr
             )
 
+            # Log per-class metrics
+            if "per_class" in train_metrics:
+                self.train_per_class_logger.log_epoch(epoch, train_metrics["per_class"])
+            if "per_class" in val_metrics:
+                self.val_per_class_logger.log_epoch(epoch, val_metrics["per_class"])
+
             # Save checkpoint
             val_acc = val_metrics["accuracy"]
             if val_acc > self.best_val_acc:
@@ -394,6 +428,15 @@ class BaseClassifier(ABC):
                     metrics=val_metrics,
                     path=self.output_dir / "ckpts" / "best_model.pt"
                 )
+
+                # Save best epoch metrics
+                self.best_epoch_saver.update(
+                    epoch=epoch,
+                    train_metrics=train_metrics,
+                    val_metrics=val_metrics
+                )
+                self.best_epoch_saver.save()
+
                 logger.info(f"New best model saved! Val Acc: {val_acc:.4f}")
             else:
                 self.epochs_no_improve += 1
@@ -451,11 +494,7 @@ class BaseClassifier(ABC):
 
         # Evaluate
         self.model.eval()
-        test_metrics = ClassificationMetrics()
-
-        all_labels = []
-        all_preds = []
-        all_probs = []
+        test_metrics = ClassificationMetrics(num_classes=self.config.model.num_classes)
 
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="Testing"):
@@ -467,33 +506,26 @@ class BaseClassifier(ABC):
 
                 test_metrics.update(loss.item(), logits, labels)
 
-                all_labels.append(labels.cpu().numpy())
-                all_preds.append(logits.argmax(dim=1).cpu().numpy())
-                all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
-
-        # Compute final metrics
+        # Compute final metrics (includes per-class metrics)
         test_results = test_metrics.compute()
-
-        # Compute per-class metrics
-        all_labels = np.concatenate(all_labels)
-        all_preds = np.concatenate(all_preds)
-        all_probs = np.concatenate(all_probs)
-
-        per_class_results = compute_per_class_metrics(
-            all_labels, all_preds, all_probs, num_classes=self.config.model.num_classes
-        )
 
         # Save test results
         test_results_path = self.output_dir / "logs" / "test_results.yaml"
         with open(test_results_path, "w") as f:
-            yaml.safe_dump({
-                "overall": test_results,
-                "per_class": per_class_results
-            }, f)
+            yaml.safe_dump(test_results, f, default_flow_style=False)
 
         logger.info(f"Test results saved to: {test_results_path}")
         logger.info(f"Test Accuracy: {test_results['accuracy']:.4f}")
         logger.info(f"Test Loss: {test_results['loss']:.4f}")
+
+        # Log per-class metrics summary
+        if "per_class" in test_results:
+            logger.info("\nPer-Class Test Metrics:")
+            per_class = test_results["per_class"]
+            for class_idx in range(self.config.model.num_classes):
+                f1 = per_class["f1"][class_idx] if class_idx < len(per_class["f1"]) else 0.0
+                auc = per_class["auc"][class_idx] if class_idx < len(per_class["auc"]) else 0.0
+                logger.info(f"  Class {class_idx}: F1={f1:.4f}, AUC={auc:.4f}")
 
         return test_results
 
@@ -589,6 +621,12 @@ class BaseClassifier(ABC):
                     lr=current_lr
                 )
 
+                # Log per-class metrics
+                if "per_class" in train_metrics:
+                    fold_classifier.train_per_class_logger.log_epoch(epoch, train_metrics["per_class"])
+                if "per_class" in val_metrics:
+                    fold_classifier.val_per_class_logger.log_epoch(epoch, val_metrics["per_class"])
+
                 # Save best checkpoint for this fold
                 val_acc = val_metrics["accuracy"]
                 if val_acc > fold_classifier.best_val_acc:
@@ -602,6 +640,14 @@ class BaseClassifier(ABC):
                         metrics=val_metrics,
                         path=fold_output_dir / "ckpts" / "best_model.pt"
                     )
+
+                    # Save best epoch metrics for this fold
+                    fold_classifier.best_epoch_saver.update(
+                        epoch=epoch,
+                        train_metrics=train_metrics,
+                        val_metrics=val_metrics
+                    )
+                    fold_classifier.best_epoch_saver.save()
 
             fold_dirs.append(fold_output_dir)
             logger.info(f"Fold {fold_idx + 1} completed! Best Val Acc: {fold_classifier.best_val_acc:.4f}")
