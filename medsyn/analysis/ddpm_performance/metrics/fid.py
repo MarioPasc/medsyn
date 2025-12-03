@@ -25,13 +25,24 @@ Usage:
         --weights-dir /path/to/pretrained/fid/
 
   python medsyn/analysis/ddpm_performance/metrics/fid.py \
-    --ground-truth /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz \
-    --model CFG /media/.../cfg_model.npz \
-    --model DistDiff /media/.../distdiff.npz \
-    --output fid_results.csv \
-    --counts 500 \
-    --weights-dir /media/mpascual/PortableSSD/medsyn/pretrained/fid/ \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/merged.npz \
+    --model CFG_MedMNIST /media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/AdamW_Batch64_lowt_enhancement_gamma5_generated/train/pathmnist_train_synth.npz \
+    --model DistDiff /media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/DistDiff/split_0_64x64_balanced.npz \
+    --output /media/mpascual/Sandisk2TB/research/medsyn/results/fid_results.csv \
+    --counts 100 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid/ \
     --verbose
+    
+  python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/hddb/mario/data/medsyn/merged.npz \
+    --model CFG_MedMNIST /media/hddb/mario/data/medsyn/pathmnist_train_synth.npz \
+    --model DistDiff /media/hddb/mario/data/medsyn/split_0_64x64_balanced.npz \
+    --output /media/hddb/mario/results/medsyn/fid_results.csv \
+    --counts 100 \
+    --weights-dir /media/hddb/mario/data/medsyn/pretrained/fid/ \
+    --verbose
+
+
 
 
 Output CSV format:
@@ -492,8 +503,7 @@ Example usage:
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
-        choices=["cuda", "cpu"],
-        help="Device for computation (default: cuda if available)",
+        help="Device for computation (default: cuda if available, e.g. cuda:0, cuda:1)",
     )
 
     parser.add_argument(
