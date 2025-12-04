@@ -28,25 +28,18 @@ EXPERIMENT_FOLDERS = [
 CLIP_IMAGE_SIZE = 224
 
 def run_command(command: List[str]):
-    """Run a shell command and stream output."""
+    """Run a shell command."""
     logger.info(f"Running command: {' '.join(command)}")
     try:
-        process = subprocess.Popen(
+        # Use subprocess.run to let the command inherit stdout/stderr
+        # This preserves TTY for tqdm so it updates in-place instead of printing new lines
+        result = subprocess.run(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
+            check=False
         )
         
-        if process.stdout:
-            for line in process.stdout:
-                print(line, end='')
-            
-        process.wait()
-        
-        if process.returncode != 0:
-            logger.error(f"Command failed with return code {process.returncode}")
+        if result.returncode != 0:
+            logger.error(f"Command failed with return code {result.returncode}")
             return False
             
         return True

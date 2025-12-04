@@ -500,7 +500,7 @@ class BaseClassifier(ABC):
         test_metrics = ClassificationMetrics(num_classes=self.config.model.num_classes)
 
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="Testing"):
+            for batch in tqdm(test_loader, desc="Testing", leave=False):
                 images = batch["img"].to(self.device)
                 labels = batch["cls"].to(self.device)
 
