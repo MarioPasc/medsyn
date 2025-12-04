@@ -3,7 +3,7 @@ Cross-validation results aggregator for k-fold experiments.
 """
 
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 import pandas as pd
 import numpy as np
@@ -85,9 +85,9 @@ class CrossValidationAggregator:
         if best_epoch_summary is not None:
             self._log_best_epoch_summary(best_epoch_summary)
 
-    def _aggregate_standard_metrics(self) -> pd.DataFrame:
+    def _aggregate_standard_metrics(self) -> Optional[pd.DataFrame]:
         """
-        Aggregate standard metrics from results.csv across all folds.
+        Aggregate standard metrics from training_log.csv across all folds.
 
         Returns:
             DataFrame with metrics, mean, std, and individual fold values
@@ -95,10 +95,10 @@ class CrossValidationAggregator:
         fold_results = []
 
         for fold_idx, fold_dir in enumerate(self.fold_dirs):
-            results_file = fold_dir / "results.csv"
+            results_file = fold_dir / "logs" / "training_log.csv"
 
             if not results_file.exists():
-                logger.warning(f"results.csv not found in {fold_dir}")
+                logger.warning(f"training_log.csv not found in {fold_dir}")
                 continue
 
             try:
@@ -106,9 +106,9 @@ class CrossValidationAggregator:
                 # Strip whitespace from column names
                 df.columns = df.columns.str.strip()
 
-                # Get best epoch (lowest validation loss or highest accuracy)
-                if 'metrics/accuracy_top1' in df.columns:
-                    best_idx = df['metrics/accuracy_top1'].idxmax()
+                # Get best epoch (highest validation accuracy)
+                if 'val_accuracy' in df.columns:
+                    best_idx = df['val_accuracy'].idxmax()
                 else:
                     best_idx = len(df) - 1  # Use last epoch as fallback
 
@@ -121,7 +121,7 @@ class CrossValidationAggregator:
                 continue
 
         if not fold_results:
-            logger.warning("No valid results.csv files found")
+            logger.warning("No valid training_log.csv files found")
             return None
 
         # Convert to DataFrame
@@ -129,7 +129,7 @@ class CrossValidationAggregator:
 
         # Select metrics to aggregate (exclude epoch, fold columns)
         metric_cols = [col for col in results_df.columns
-                      if col not in ['epoch', 'fold'] and not col.startswith('lr/')]
+                      if col not in ['epoch', 'fold', 'lr']]
 
         # Compute statistics
         summary_data = []
@@ -155,7 +155,7 @@ class CrossValidationAggregator:
 
         return pd.DataFrame(summary_data)
 
-    def _aggregate_per_class_auc(self) -> pd.DataFrame:
+    def _aggregate_per_class_auc(self) -> Optional[pd.DataFrame]:
         """
         Aggregate per-class AUC metrics across all folds.
 
@@ -165,10 +165,10 @@ class CrossValidationAggregator:
         fold_auc_results = []
 
         for fold_idx, fold_dir in enumerate(self.fold_dirs):
-            auc_file = fold_dir / "per_class_auc.csv"
+            auc_file = fold_dir / "logs" / "val_per_class_metrics.csv"
 
             if not auc_file.exists():
-                logger.warning(f"per_class_auc.csv not found in {fold_dir}")
+                logger.warning(f"val_per_class_metrics.csv not found in {fold_dir}")
                 continue
 
             try:
@@ -187,7 +187,7 @@ class CrossValidationAggregator:
                 continue
 
         if not fold_auc_results:
-            logger.warning("No valid per_class_auc.csv files found")
+            logger.warning("No valid val_per_class_metrics.csv files found")
             return None
 
         # Convert to DataFrame
@@ -195,7 +195,7 @@ class CrossValidationAggregator:
 
         # Select AUC columns
         auc_cols = [col for col in auc_df.columns
-                   if col.startswith('auc_') and col != 'fold']
+                   if col.endswith('_auc') and col != 'fold']
 
         # Compute statistics
         summary_data = []
@@ -222,7 +222,7 @@ class CrossValidationAggregator:
         return pd.DataFrame(summary_data)
 
     def _create_cv_summary(self, standard_df: pd.DataFrame,
-                           auc_df: pd.DataFrame) -> pd.DataFrame:
+                           auc_df: pd.DataFrame) -> Optional[pd.DataFrame]:
         """
         Create a combined cross-validation summary.
 
@@ -237,17 +237,11 @@ class CrossValidationAggregator:
 
         # Add key standard metrics
         if standard_df is not None:
-            key_metrics = ['metrics/accuracy_top1', 'metrics/accuracy_top5']
+            key_metrics = ['val_accuracy', 'val_auc_macro', 'val_f1', 'val_loss']
             for metric in key_metrics:
                 row_data = standard_df[standard_df['metric'] == metric]
                 if not row_data.empty:
                     summary_rows.append(row_data.iloc[0].to_dict())
-
-        # Add macro-average AUC
-        if auc_df is not None:
-            macro_auc = auc_df[auc_df['metric'] == 'auc_macro']
-            if not macro_auc.empty:
-                summary_rows.append(macro_auc.iloc[0].to_dict())
 
         if not summary_rows:
             return None
@@ -284,7 +278,7 @@ class CrossValidationAggregator:
 
         logger.info("="*80)
 
-    def _aggregate_best_epoch_metrics(self) -> Dict:
+    def _aggregate_best_epoch_metrics(self) -> Optional[Dict]:
         """
         Aggregate best-epoch per-class metrics (F1 and AUC) across all folds.
 

@@ -67,11 +67,13 @@ class CSVLogger:
 
         # Add training metrics
         for key, value in train_metrics.items():
-            row[f"train_{key}"] = value
+            if key != "per_class":
+                row[f"train_{key}"] = value
 
         # Add validation metrics
         for key, value in val_metrics.items():
-            row[f"val_{key}"] = value
+            if key != "per_class":
+                row[f"val_{key}"] = value
 
         # Write to CSV
         with open(self.csv_path, "a", newline="") as f:

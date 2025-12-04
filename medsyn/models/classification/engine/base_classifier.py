@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 from ..config import ClassificationConfig
 from ..dataloaders import build_classification_dataloader
-from ..metrics import ClassificationMetrics, compute_per_class_metrics
+from ..metrics import ClassificationMetrics
 from ..logging_utils import (
     CSVLogger, PerClassCSVLogger, BestEpochMetricsSaver,
     save_checkpoint, load_checkpoint
