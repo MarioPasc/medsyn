@@ -57,7 +57,7 @@ class ClassificationMetrics:
 
         # Convert to numpy
         preds = logits.argmax(dim=1).cpu().numpy()
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
+        probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
         labels_np = labels.cpu().numpy()
 
         self.all_labels.append(labels_np)
