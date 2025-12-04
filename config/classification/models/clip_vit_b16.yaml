@@ -1,0 +1,43 @@
+# CLIP ViT-B/16 Model Configuration
+# Reusable across all datasets and training regimes
+#
+# Uses OpenCLIP for vision-language pretraining
+# Classification via image-text similarity with learnable text embeddings
+
+model:
+  name: "clip_vit_b16"
+  pretrained: true  # Load OpenAI pretrained CLIP weights
+  # num_classes: Set by experiment YAML based on dataset
+  freeze_backbone: false  # If true, only train text embeddings + logit_scale
+  dropout: 0.0  # Not used (CLIP has internal dropout)
+
+  # CLIP-specific settings (optional, accessed via getattr with defaults)
+  clip_pretrained: "openai"  # Options: "openai", "laion2b_s34b_b88k", "laion400m_e32"
+  prompt_template: "A histopathological image of {}"  # Format string for class prompts
+  # class_names: Optional, defaults to PathMNIST class names from build_pathmnist_class_map()
+
+optimization:
+  optimizer: "adamw"
+  lr: 0.00005  # 5e-5 (half of ResNet50's 1e-4) - CLIP needs smaller updates
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+
+  # Note: Differential learning rates applied in build_optimizer():
+  # - vision_encoder: lr * 0.1 (pretrained, needs smaller updates)
+  # - text_embeddings: lr * 0.5 (pretrained but class-specific)
+  # - logit_scale: lr * 1.0 (temperature parameter, quick adaptation)
+
+scheduler:
+  scheduler: "cosine"
+  warmup_epochs: 10  # Longer warmup than ResNet50 (10 vs 5)
+  eta_min: 0.000001  # 1e-6
+  step_size: 30  # For step scheduler
+  gamma: 0.1  # LR decay factor
+
+training:
+  max_epochs: 50  # Fewer epochs than ResNet50 (50 vs 100) - better initialization
+  early_stopping_patience: 10  # Shorter patience (10 vs 15) - faster convergence
+  grad_clip_norm: 1.0  # Gradient clipping
+  mixed_precision: true  # torch.cuda.amp for memory efficiency
+  checkpoint_every: 5  # Save checkpoint every 5 epochs
+  log_every: 1  # Log metrics every epoch
