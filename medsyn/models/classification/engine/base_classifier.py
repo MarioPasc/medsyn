@@ -69,7 +69,7 @@ class BaseClassifier(ABC):
         self.model: Optional[nn.Module] = None
         self.optimizer: Optional[Optimizer] = None
         self.scheduler: Optional[_LRScheduler] = None
-        self.scaler: Optional[torch.cuda.amp.GradScaler] = None
+        self.scaler: Optional[torch.amp.GradScaler] = None
         self.augmentation_pipeline: Optional[Any] = None
 
         # Training state
@@ -159,7 +159,7 @@ class BaseClassifier(ABC):
 
         # Setup mixed precision training
         if self.config.training.mixed_precision and torch.cuda.is_available():
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler()
             logger.info("Mixed precision training enabled")
 
         # Setup augmentation pipeline for real_plus_trad_aug regime
@@ -278,7 +278,7 @@ class BaseClassifier(ABC):
             labels = batch["cls"].to(self.device)
 
             # Forward pass with mixed precision
-            with torch.cuda.amp.autocast(enabled=self.scaler is not None):
+            with torch.amp.autocast('cuda', enabled=self.scaler is not None):
                 logits = self.model(images)
                 loss = nn.functional.cross_entropy(logits, labels)
 
@@ -337,7 +337,7 @@ class BaseClassifier(ABC):
                 labels = batch["cls"].to(self.device)
 
                 # Forward pass
-                with torch.cuda.amp.autocast(enabled=self.scaler is not None):
+                with torch.amp.autocast('cuda', enabled=self.scaler is not None):
                     logits = self.model(images)
                     loss = nn.functional.cross_entropy(logits, labels)
 
