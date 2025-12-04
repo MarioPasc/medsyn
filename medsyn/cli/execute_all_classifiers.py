@@ -80,6 +80,12 @@ def main():
         default=[],
         help="List of experiment folders to skip (e.g., cfg_medsyn distdiff)"
     )
+
+    parser.add_argument(
+        "--device",
+        type=str,
+        help="Override device for all experiments (e.g., cuda:0)"
+    )
     
     args = parser.parse_args()
     
@@ -134,6 +140,9 @@ def main():
                     "--model", model
                 ]
                 
+                if args.device:
+                    cmd.extend(["--device", args.device])
+
                 if model == "clip_vit_b16":
                     cmd.extend(["--image_size", str(CLIP_IMAGE_SIZE)])
                 
