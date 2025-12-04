@@ -1,0 +1,27 @@
+# PathMNIST Classification - Real + DistDiff Synthetic Images
+# Uses real PathMNIST images combined with synthetic images from DistDiff
+
+# Reference to model configuration
+model_config: "../../models/resnet50.yaml"
+
+experiment:
+  name: "pathmnist_resnet50_real_plus_synth_distdiff"
+  output_dir: "/media/hddb/mario/results/medsyn/experiments/classification/resnet50_real_plus_synth_distdiff"
+  seed: 42
+  device: "cuda:1"
+
+data:
+  npz_path: "/media/hddb/mario/data/medsyn/merged_datasets/distdiff_synth.npz"
+  regime: "real_plus_synth"  # Real + synthetic images
+  num_folds: 5               # 5-fold cross-validation
+  num_workers: 4
+  batch_size: 64
+  image_size: 64
+
+model:
+  name: "resnet50"  # Model architecture to use
+  num_classes: 9    # PathMNIST has 9 classes
+
+# No augmentation for real_plus_synth regime
+augmentation:
+  enabled: false

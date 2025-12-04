@@ -5,7 +5,7 @@ Configuration dataclasses and YAML loading for classification training.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Dict, Any, List
+from typing import Literal, Dict, Any, List, Optional, Tuple
 import yaml
 import os
 import logging
@@ -97,6 +97,9 @@ class ClassificationConfig:
     scheduler: SchedulerCfg
     training: TrainingCfg
     augmentation: AugmentationCfg = field(default_factory=lambda: AugmentationCfg(enabled=False))
+    # Track source config files for debugging/logging
+    experiment_config_path: Optional[Path] = None
+    model_config_path: Optional[Path] = None
 
 
 def _expand_env(obj):
@@ -108,6 +111,87 @@ def _expand_env(obj):
     elif isinstance(obj, list):
         return [_expand_env(item) for item in obj]
     return obj
+
+
+def load_model_config(
+    model_config_path: Path,
+    num_classes: int,
+    model_name: str
+) -> Tuple[ModelCfg, OptimizerCfg, SchedulerCfg, TrainingCfg]:
+    """
+    Load model configuration from YAML file.
+
+    Args:
+        model_config_path: Path to model YAML file
+        num_classes: Number of classes (from experiment config)
+        model_name: Model name (from experiment config)
+
+    Returns:
+        Tuple of (model, optimization, scheduler, training) configs
+
+    Raises:
+        FileNotFoundError: If model config file does not exist
+    """
+    if not model_config_path.exists():
+        raise FileNotFoundError(
+            f"Model config file not found: {model_config_path}\n"
+            f"Please ensure the model_config path is correct."
+        )
+
+    if not model_config_path.is_file():
+        raise ValueError(
+            f"model_config must be a file, not a directory: {model_config_path}"
+        )
+
+    with open(model_config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+
+    # Expand environment variables
+    raw = _expand_env(raw)
+
+    # Parse model config (name and num_classes will be overridden by experiment config)
+    model_dict = raw.get("model", {})
+    model = ModelCfg(
+        name=model_name,  # Use name from experiment config
+        pretrained=model_dict.get("pretrained", True),
+        num_classes=num_classes,  # Use num_classes from experiment config
+        freeze_backbone=model_dict.get("freeze_backbone", False),
+        dropout=model_dict.get("dropout", 0.0)
+    )
+
+    # Parse optimization config
+    opt_dict = raw.get("optimization", {})
+    betas_list = opt_dict.get("betas", [0.9, 0.999])
+    optimization = OptimizerCfg(
+        optimizer=opt_dict.get("optimizer", "adamw"),
+        lr=opt_dict.get("lr", 1e-4),
+        weight_decay=opt_dict.get("weight_decay", 1e-2),
+        momentum=opt_dict.get("momentum", 0.9),
+        betas=tuple(betas_list)
+    )
+
+    # Parse scheduler config
+    sched_dict = raw.get("scheduler", {})
+    scheduler = SchedulerCfg(
+        scheduler=sched_dict.get("scheduler", "cosine"),
+        warmup_epochs=sched_dict.get("warmup_epochs", 5),
+        eta_min=sched_dict.get("eta_min", 1e-7),
+        step_size=sched_dict.get("step_size", 30),
+        gamma=sched_dict.get("gamma", 0.1)
+    )
+
+    # Parse training config
+    train_dict = raw.get("training", {})
+    training = TrainingCfg(
+        max_epochs=train_dict.get("max_epochs", 100),
+        early_stopping_patience=train_dict.get("early_stopping_patience", 15),
+        grad_clip_norm=train_dict.get("grad_clip_norm", 0.0),
+        mixed_precision=train_dict.get("mixed_precision", True),
+        checkpoint_every=train_dict.get("checkpoint_every", 10),
+        log_every=train_dict.get("log_every", 10)
+    )
+
+    return model, optimization, scheduler, training
 
 
 def load_classification_config(config_path: str | Path) -> ClassificationConfig:
@@ -169,47 +253,52 @@ def load_classification_config(config_path: str | Path) -> ClassificationConfig:
     if not data.npz_path.exists():
         raise FileNotFoundError(f"NPZ file not found: {data.npz_path}")
 
-    # Parse model config
-    model_dict = raw.get("model", {})
-    model = ModelCfg(
-        name=model_dict.get("name", "resnet50"),
-        pretrained=model_dict.get("pretrained", True),
-        num_classes=model_dict.get("num_classes", 9),
-        freeze_backbone=model_dict.get("freeze_backbone", False),
-        dropout=model_dict.get("dropout", 0.0)
-    )
+    # Check if this is split config (with model_config) or old single-file config
+    if "model_config" in raw:
+        # NEW: Split config format
+        model_config_rel = raw["model_config"]
 
-    # Parse optimization config
-    opt_dict = raw.get("optimization", {})
-    betas_list = opt_dict.get("betas", [0.9, 0.999])
-    optimization = OptimizerCfg(
-        optimizer=opt_dict.get("optimizer", "adamw"),
-        lr=opt_dict.get("lr", 1e-4),
-        weight_decay=opt_dict.get("weight_decay", 1e-2),
-        momentum=opt_dict.get("momentum", 0.9),
-        betas=tuple(betas_list)
-    )
+        # Resolve model_config path
+        if Path(model_config_rel).is_absolute():
+            # Absolute path: expand user/env vars and resolve
+            model_config_path = Path(model_config_rel).expanduser().resolve()
+        else:
+            # Relative path: resolve relative to experiment YAML directory
+            model_config_path = (config_path.parent / model_config_rel).resolve()
 
-    # Parse scheduler config
-    sched_dict = raw.get("scheduler", {})
-    scheduler = SchedulerCfg(
-        scheduler=sched_dict.get("scheduler", "cosine"),
-        warmup_epochs=sched_dict.get("warmup_epochs", 5),
-        eta_min=sched_dict.get("eta_min", 1e-7),
-        step_size=sched_dict.get("step_size", 30),
-        gamma=sched_dict.get("gamma", 0.1)
-    )
+        # Extract model.name and model.num_classes from experiment config
+        model_dict = raw.get("model", {})
+        if "name" not in model_dict:
+            raise ValueError(
+                "Experiment YAML must specify 'model.name'.\n"
+                "Add to your experiment YAML:\n"
+                "  model:\n"
+                "    name: 'resnet50'\n"
+                "    num_classes: 9"
+            )
+        model_name = model_dict["name"]
+        num_classes = model_dict.get("num_classes", 9)
 
-    # Parse training config
-    train_dict = raw.get("training", {})
-    training = TrainingCfg(
-        max_epochs=train_dict.get("max_epochs", 100),
-        early_stopping_patience=train_dict.get("early_stopping_patience", 15),
-        grad_clip_norm=train_dict.get("grad_clip_norm", 0.0),
-        mixed_precision=train_dict.get("mixed_precision", True),
-        checkpoint_every=train_dict.get("checkpoint_every", 10),
-        log_every=train_dict.get("log_every", 10)
-    )
+        # Validate num_classes
+        if num_classes <= 0:
+            raise ValueError(f"model.num_classes must be positive, got {num_classes}")
+
+        # Load model config from separate YAML
+        model, optimization, scheduler, training = load_model_config(
+            model_config_path, num_classes, model_name
+        )
+
+        logger.info(f"Model config loaded from: {model_config_path}")
+
+    else:
+        # OLD: Single-file config format (for backward compatibility during transition)
+        raise ValueError(
+            "Experiment YAML must specify 'model_config' path to model YAML.\n\n"
+            "Add to your experiment YAML:\n"
+            "  model_config: '../../models/resnet50.yaml'\n\n"
+            "See config/classification/experiments/ for examples.\n\n"
+            "The old single-file config format is no longer supported."
+        )
 
     # Parse augmentation config (for real_plus_trad_aug regime)
     aug_dict = raw.get("augmentation", {})
@@ -249,10 +338,12 @@ def load_classification_config(config_path: str | Path) -> ClassificationConfig:
         optimization=optimization,
         scheduler=scheduler,
         training=training,
-        augmentation=augmentation
+        augmentation=augmentation,
+        experiment_config_path=config_path,
+        model_config_path=model_config_path if "model_config" in raw else None
     )
 
-    logger.info(f"Configuration loaded from: {config_path}")
+    logger.info(f"Experiment config loaded from: {config_path}")
     logger.info(f"Experiment: {config.experiment.name}")
     logger.info(f"Regime: {config.data.regime}")
     logger.info(f"Model: {config.model.name}")

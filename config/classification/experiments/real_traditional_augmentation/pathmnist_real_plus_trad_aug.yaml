@@ -1,5 +1,8 @@
-# ResNet50 Classification - Real Images + Traditional Augmentation
-# Configuration using real PathMNIST images with traditional data augmentation
+# PathMNIST Classification - Real Images + Traditional Augmentation
+# Uses real PathMNIST images with traditional data augmentation (no synthetic data)
+
+# Reference to model configuration
+model_config: "/home/mariopascual/projects/diffusion/medsyn/config/classification/models/resnet50.yaml"
 
 experiment:
   name: "pathmnist_resnet50_real_plus_trad_aug"
@@ -16,34 +19,10 @@ data:
   image_size: 64
 
 model:
-  name: "resnet50"
-  pretrained: true
-  num_classes: 9
-  freeze_backbone: false
-  dropout: 0.0
+  name: "resnet50"  # Model architecture to use
+  num_classes: 9    # PathMNIST has 9 classes
 
-optimization:
-  optimizer: "adamw"
-  lr: 1e-4
-  weight_decay: 1e-2
-  betas: [0.9, 0.999]
-
-scheduler:
-  scheduler: "cosine"
-  warmup_epochs: 5
-  eta_min: 1e-7
-  step_size: 30
-  gamma: 0.1
-
-training:
-  max_epochs: 100
-  early_stopping_patience: 15
-  grad_clip_norm: 1.0
-  mixed_precision: true
-  checkpoint_every: 10
-  log_every: 10
-
-# Traditional augmentation for real_plus_trad_aug regime
+# Traditional augmentation enabled for this regime
 augmentation:
   enabled: true
   probability: 0.8

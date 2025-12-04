@@ -1,0 +1,33 @@
+# ResNet50 Model Configuration
+# Reusable across all datasets and training regimes
+#
+# This config defines model architecture, optimization, scheduler, and training settings.
+# Dataset-specific settings (data paths, regime, augmentation) are in experiment YAMLs.
+
+model:
+  name: "resnet50"  # Reference only, overridden by experiment YAML
+  pretrained: true
+  # num_classes: Set by experiment YAML based on dataset
+  freeze_backbone: false
+  dropout: 0.0
+
+optimization:
+  optimizer: "adamw"
+  lr: 1e-4
+  weight_decay: 1e-2
+  betas: [0.9, 0.999]
+
+scheduler:
+  scheduler: "cosine"
+  warmup_epochs: 5
+  eta_min: 1e-7
+  step_size: 30
+  gamma: 0.1
+
+training:
+  max_epochs: 100
+  early_stopping_patience: 15
+  grad_clip_norm: 1.0
+  mixed_precision: true
+  checkpoint_every: 10
+  log_every: 10

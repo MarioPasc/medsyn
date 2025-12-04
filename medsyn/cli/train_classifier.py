@@ -27,17 +27,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Single train/val split
-  train-classifier config/classification/resnet50_pathmnist.yaml
+  # Train with experiment config (references model config internally)
+  train-classifier config/classification/experiments/cfg_medsyn/pathmnist_real_plus_synth.yaml
 
   # 5-fold cross-validation
-  train-classifier config/classification/resnet50_pathmnist.yaml --k_folds 5
+  train-classifier config/classification/experiments/only_real/pathmnist_real_only.yaml --k_folds 5
 
-  # Test evaluation only (requires trained model)
-  train-classifier config/classification/resnet50_pathmnist.yaml --test_only
+  # Different training regime
+  train-classifier config/classification/experiments/real_traditional_augmentation/pathmnist_real_plus_trad_aug.yaml
 
   # Override config parameters
-  train-classifier config.yaml --regime real_plus_synth --batch_size 128 --lr 5e-5
+  train-classifier config/classification/experiments/distdiff/pathmnist_real_plus_synth.yaml --batch_size 128 --lr 5e-5
         """
     )
 
