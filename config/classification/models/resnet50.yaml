@@ -30,4 +30,4 @@ training:
   grad_clip_norm: 1.0
   mixed_precision: true
   checkpoint_every: 10
-  log_every: 10
+  log_every: 1

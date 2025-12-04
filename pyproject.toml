@@ -115,6 +115,7 @@ ccddpm-generate = "medsyn.cli.generate_ccDDPM:main"
 ccddpm-audit = "medsyn.analysis.audit_ccddpm_privacy:cli_main"
 medsyn-analyze-embeddings = "medsyn.analysis.visualize_embedding_evolution:main"
 train-classifier = "medsyn.cli.train_classifier:main"
+execute-all-classifiers = "medsyn.cli.execute_all_classifiers:main"
 
 [tool.setuptools]
 packages = [

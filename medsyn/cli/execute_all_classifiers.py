@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""
+CLI script to execute all classification experiments for a list of models.
+"""
+
+import argparse
+import logging
+import subprocess
+import sys
+from pathlib import Path
+from typing import List
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s - %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+EXPERIMENT_FOLDERS = [
+    "cfg_medsyn",
+    "distdiff",
+    "only_real",
+    "real_traditional_augmentation"
+]
+
+def run_command(command: List[str]):
+    """Run a shell command and stream output."""
+    logger.info(f"Running command: {' '.join(command)}")
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        if process.stdout:
+            for line in process.stdout:
+                print(line, end='')
+            
+        process.wait()
+        
+        if process.returncode != 0:
+            logger.error(f"Command failed with return code {process.returncode}")
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to execute command: {e}")
+        return False
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Execute all classification experiments for given models"
+    )
+    
+    parser.add_argument(
+        "--config_root",
+        type=str,
+        default="config/classification",
+        help="Root directory for classification configs"
+    )
+    
+    parser.add_argument(
+        "--models",
+        type=str,
+        nargs="+",
+        required=True,
+        help="List of models to run (e.g., resnet50 clip_vit_b16)"
+    )
+    
+    parser.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Print commands without executing them"
+    )
+    
+    args = parser.parse_args()
+    
+    config_root = Path(args.config_root).resolve()
+    if not config_root.exists():
+        logger.error(f"Config root not found: {config_root}")
+        sys.exit(1)
+        
+    models_dir = config_root / "models"
+    experiments_dir = config_root / "experiments"
+    
+    # Validate models
+    for model in args.models:
+        model_config = models_dir / f"{model}.yaml"
+        if not model_config.exists():
+            logger.error(f"Model config not found: {model_config}")
+            sys.exit(1)
+            
+    # Execute experiments
+    failed_experiments = []
+    
+    for model in args.models:
+        logger.info(f"\n{'='*80}")
+        logger.info(f"Running experiments for model: {model}")
+        logger.info(f"{'='*80}")
+        
+        for folder in EXPERIMENT_FOLDERS:
+            folder_path = experiments_dir / folder
+            if not folder_path.exists():
+                logger.warning(f"Experiment folder not found: {folder_path}")
+                continue
+                
+            # Find all YAML files in the folder
+            yaml_files = sorted(list(folder_path.glob("*.yaml")))
+            
+            if not yaml_files:
+                logger.warning(f"No YAML files found in {folder_path}")
+                continue
+                
+            for yaml_file in yaml_files:
+                logger.info(f"\nRunning experiment: {folder}/{yaml_file.name}")
+                
+                # Construct command
+                cmd = [
+                    sys.executable,
+                    "-m", "medsyn.cli.train_classifier",
+                    str(yaml_file),
+                    "--model", model
+                ]
+                
+                if args.dry_run:
+                    print(f"Would run: {' '.join(cmd)}")
+                else:
+                    success = run_command(cmd)
+                    if not success:
+                        failed_experiments.append(f"{model} - {folder}/{yaml_file.name}")
+                        
+    if failed_experiments:
+        logger.error("\nThe following experiments failed:")
+        for exp in failed_experiments:
+            logger.error(f"  - {exp}")
+        sys.exit(1)
+    else:
+        logger.info("\nAll experiments completed successfully!")
+
+if __name__ == "__main__":
+    main()

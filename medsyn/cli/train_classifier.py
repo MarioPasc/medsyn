@@ -92,6 +92,11 @@ Examples:
         type=str,
         help="Override output directory"
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        help="Override model name (e.g., 'resnet50', 'clip_vit_b16')"
+    )
 
     # Logging
     parser.add_argument(
@@ -173,6 +178,14 @@ Examples:
             config = dataclasses.replace(
                 config,
                 experiment=dataclasses.replace(config.experiment, **experiment_overrides)
+            )
+
+        # Override model config
+        if args.model:
+            logger.info(f"Overriding model name: {config.model.name} -> {args.model}")
+            config = dataclasses.replace(
+                config,
+                model=dataclasses.replace(config.model, name=args.model)
             )
 
         # Print configuration summary
