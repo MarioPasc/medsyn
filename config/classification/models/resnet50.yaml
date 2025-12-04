@@ -25,8 +25,8 @@ scheduler:
   gamma: 0.1
 
 training:
-  max_epochs: 100
-  early_stopping_patience: 15
+  max_epochs: 50
+  early_stopping_patience: 10
   grad_clip_norm: 1.0
   mixed_precision: true
   checkpoint_every: 10
