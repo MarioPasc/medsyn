@@ -85,6 +85,26 @@ class StratifiedKFoldSplitter:
         for fold_idx, (train_idx, val_idx) in enumerate(
             self.skf.split(combined_images, combined_labels)
         ):
+            # IMPORTANT: Filter validation fold to exclude synthetic images
+            # Only real images should be in validation/test sets for proper evaluation
+            val_is_synth_flags = combined_is_synth[val_idx]
+            val_real_mask = ~val_is_synth_flags  # Keep only real images
+
+            # Get indices of real images in validation fold
+            val_real_indices = val_idx[val_real_mask]
+
+            # Count synthetic images that were excluded from validation
+            n_synth_excluded = val_is_synth_flags.sum()
+
+            # Log warning if synthetic images were in validation fold
+            if n_synth_excluded > 0:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(
+                    f"Fold {fold_idx}: Excluded {n_synth_excluded} synthetic images "
+                    f"from validation set (validation now has {len(val_real_indices)} real images only)"
+                )
+
             train_fold = {
                 'images': combined_images[train_idx],
                 'labels': combined_labels[train_idx],
@@ -93,10 +113,10 @@ class StratifiedKFoldSplitter:
             }
 
             val_fold = {
-                'images': combined_images[val_idx],
-                'labels': combined_labels[val_idx],
-                'is_synth': combined_is_synth[val_idx],
-                'indices': val_idx
+                'images': combined_images[val_real_indices],
+                'labels': combined_labels[val_real_indices],
+                'is_synth': combined_is_synth[val_real_indices],  # Should all be False
+                'indices': val_real_indices
             }
 
             folds.append((train_fold, val_fold))
@@ -114,6 +134,9 @@ class StratifiedKFoldSplitter:
             Formatted string with fold statistics
         """
         info_lines = [f"\nStratified {self.k}-Fold Cross-Validation (seed={self.seed})"]
+        info_lines.append("=" * 60)
+        info_lines.append("NOTE: Validation folds contain ONLY real images (is_synth=False)")
+        info_lines.append("      Synthetic images are excluded from validation for proper evaluation")
         info_lines.append("=" * 60)
 
         for fold_idx, (train_fold, val_fold) in enumerate(folds):
@@ -137,10 +160,26 @@ class StratifiedKFoldSplitter:
             # Check for synthetic data distribution
             if 'is_synth' in train_fold:
                 n_train_synth = train_fold['is_synth'].sum()
+                n_train_real = n_train - n_train_synth
                 n_val_synth = val_fold['is_synth'].sum()
+                n_val_real = n_val - n_val_synth
+
                 info_lines.append(
-                    f"  Synth: {n_train_synth}/{n_train} (train), "
-                    f"{n_val_synth}/{n_val} (val)"
+                    f"  Train: {n_train_real} real, {n_train_synth} synthetic"
                 )
+                info_lines.append(
+                    f"  Val:   {n_val_real} real, {n_val_synth} synthetic"
+                )
+
+                # Verification: validation should have NO synthetic images
+                if n_val_synth > 0:
+                    info_lines.append(
+                        f"  ⚠ WARNING: Validation fold has {n_val_synth} synthetic images! "
+                        f"This should not happen."
+                    )
+                else:
+                    info_lines.append(
+                        f"  ✓ Validation fold verified: contains only real images"
+                    )
 
         return "\n".join(info_lines)

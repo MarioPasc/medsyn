@@ -102,10 +102,33 @@ class ClassificationDataset(Dataset):
                 y = data[f"{self.split}_labels"].reshape(-1).astype(np.int64)
                 is_synth = data.get(f"{self.split}_is_synth", np.zeros(len(y), dtype=bool))
 
-        # Apply regime-based filtering
-        keep = select_indices_by_regime(is_synth, self.regime)
-        X = X[keep]
-        y = y[keep]
+        # IMPORTANT: Test and validation sets should NEVER contain synthetic images
+        # They are used for evaluation and must only contain real data
+        if self.split in ["test", "val"]:
+            import logging
+            logger = logging.getLogger(__name__)
+
+            n_synth = is_synth.sum()
+            if n_synth > 0:
+                logger.warning(
+                    f"Found {n_synth} synthetic images in {self.split} set! "
+                    f"These will be excluded for proper evaluation."
+                )
+            # Force exclusion of synthetic images for test/val splits
+            keep = ~is_synth.astype(bool)
+            X = X[keep]
+            y = y[keep]
+
+            if n_synth > 0:
+                logger.info(
+                    f"{self.split.capitalize()} set: {len(X)} real images "
+                    f"(excluded {n_synth} synthetic images)"
+                )
+        else:
+            # For training split, apply regime-based filtering
+            keep = select_indices_by_regime(is_synth, self.regime)
+            X = X[keep]
+            y = y[keep]
 
         # Remap labels to contiguous [0, K-1]
         unique_labels = np.unique(y)
