@@ -73,6 +73,11 @@ Examples:
         help="Override batch size"
     )
     parser.add_argument(
+        "--image_size",
+        type=int,
+        help="Override image size"
+    )
+    parser.add_argument(
         "--lr",
         type=float,
         help="Override learning rate"
@@ -142,6 +147,9 @@ Examples:
         if args.batch_size:
             logger.info(f"Overriding batch_size: {config.data.batch_size} -> {args.batch_size}")
             data_overrides["batch_size"] = args.batch_size
+        if args.image_size:
+            logger.info(f"Overriding image_size: {config.data.image_size} -> {args.image_size}")
+            data_overrides["image_size"] = args.image_size
 
         if data_overrides:
             config = dataclasses.replace(

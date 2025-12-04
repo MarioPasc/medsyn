@@ -25,6 +25,8 @@ EXPERIMENT_FOLDERS = [
     "real_traditional_augmentation"
 ]
 
+CLIP_IMAGE_SIZE = 224
+
 def run_command(command: List[str]):
     """Run a shell command and stream output."""
     logger.info(f"Running command: {' '.join(command)}")
@@ -126,6 +128,9 @@ def main():
                     str(yaml_file),
                     "--model", model
                 ]
+                
+                if model == "clip_vit_b16":
+                    cmd.extend(["--image_size", str(CLIP_IMAGE_SIZE)])
                 
                 if args.dry_run:
                     print(f"Would run: {' '.join(cmd)}")
