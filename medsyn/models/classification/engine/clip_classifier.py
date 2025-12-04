@@ -181,7 +181,7 @@ class CLIPViTB16Classifier(BaseClassifier):
 
         # Tokenize and encode text
         tokenizer = open_clip.get_tokenizer('ViT-B-16')
-        text_tokens = tokenizer(prompts).to(self.device)
+        text_tokens = tokenizer(prompts)  # Keep on CPU for encoding (model is on CPU)
 
         logger.info("Generating text embeddings...")
         with torch.no_grad():
