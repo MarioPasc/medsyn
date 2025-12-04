@@ -72,6 +72,14 @@ def main():
         action="store_true",
         help="Print commands without executing them"
     )
+
+    parser.add_argument(
+        "--skip_experiments",
+        type=str,
+        nargs="+",
+        default=[],
+        help="List of experiment folders to skip (e.g., cfg_medsyn distdiff)"
+    )
     
     args = parser.parse_args()
     
@@ -99,6 +107,10 @@ def main():
         logger.info(f"{'='*80}")
         
         for folder in EXPERIMENT_FOLDERS:
+            if folder in args.skip_experiments:
+                logger.info(f"Skipping experiment folder: {folder}")
+                continue
+
             folder_path = experiments_dir / folder
             if not folder_path.exists():
                 logger.warning(f"Experiment folder not found: {folder_path}")
