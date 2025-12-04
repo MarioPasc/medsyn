@@ -2,7 +2,7 @@
 K-Fold Cross-Validation utilities for classification training.
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 
@@ -35,30 +35,46 @@ class StratifiedKFoldSplitter:
         self,
         train_images: np.ndarray,
         train_labels: np.ndarray,
-        val_images: np.ndarray,
-        val_labels: np.ndarray,
+        val_images: Optional[np.ndarray],
+        val_labels: Optional[np.ndarray],
         train_is_synth: np.ndarray,
-        val_is_synth: np.ndarray
+        val_is_synth: Optional[np.ndarray]
     ) -> List[Tuple[dict, dict]]:
         """
-        Create k-fold splits from combined train and validation data.
+        Create k-fold splits from train data (and optionally validation data).
+
+        If validation data is provided, it will be combined with training data
+        before splitting into k folds. Otherwise, only training data is used.
 
         Args:
             train_images: Training images from NPZ
             train_labels: Training labels from NPZ
-            val_images: Validation images from NPZ
-            val_labels: Validation labels from NPZ
+            val_images: Validation images from NPZ (optional, can be None)
+            val_labels: Validation labels from NPZ (optional, can be None)
             train_is_synth: Training synthetic flags from NPZ
-            val_is_synth: Validation synthetic flags from NPZ
+            val_is_synth: Validation synthetic flags from NPZ (optional, can be None)
 
         Returns:
             List of (train_data_dict, val_data_dict) tuples, one per fold.
             Each dict contains: 'images', 'labels', 'is_synth', 'indices'
         """
-        # Combine train and validation data
-        combined_images = np.concatenate([train_images, val_images], axis=0)
-        combined_labels = np.concatenate([train_labels, val_labels], axis=0)
-        combined_is_synth = np.concatenate([train_is_synth, val_is_synth], axis=0)
+        # Combine train and validation data (if validation data exists)
+        if val_images is not None and val_labels is not None:
+            combined_images = np.concatenate([train_images, val_images], axis=0)
+            combined_labels = np.concatenate([train_labels, val_labels], axis=0)
+            if val_is_synth is not None:
+                combined_is_synth = np.concatenate([train_is_synth, val_is_synth], axis=0)
+            else:
+                # If val_is_synth not provided, assume all val images are real
+                combined_is_synth = np.concatenate([
+                    train_is_synth,
+                    np.zeros(len(val_labels), dtype=bool)
+                ], axis=0)
+        else:
+            # No validation data - use only training data for k-fold CV
+            combined_images = train_images
+            combined_labels = train_labels
+            combined_is_synth = train_is_synth
 
         # Create indices array for tracking
         n_total = len(combined_images)

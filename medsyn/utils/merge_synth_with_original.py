@@ -429,7 +429,25 @@ def merge_npz_files(
             # Check if split exists in synthetic NPZ
             images_key = f"{split_name}_images"
             if images_key not in synth_data:
-                logger.warning(f"Split '{split_name}' not found in synthetic NPZ, skipping...")
+                logger.warning(f"Split '{split_name}' not found in synthetic NPZ")
+
+                # Check if original data has this split
+                if images_key in original_data:
+                    logger.info(f"Preserving original '{split_name}' split without synthetic data...")
+
+                    # Copy original data for this split
+                    orig_images = original_data[images_key]
+                    orig_labels = original_data[f"{split_name}_labels"]
+                    orig_is_synth = original_data.get(f"{split_name}_is_synth", np.zeros(len(orig_images), dtype=bool))
+
+                    logger.info(f"  Original: {len(orig_images)} samples (all real)")
+
+                    # Add to merged data
+                    merged_data[images_key] = orig_images
+                    merged_data[f"{split_name}_labels"] = orig_labels
+                    merged_data[f"{split_name}_is_synth"] = orig_is_synth
+                else:
+                    logger.warning(f"Split '{split_name}' not found in original dataset either, skipping...")
                 continue
 
             # Merge this split
@@ -452,7 +470,25 @@ def merge_npz_files(
 
             if not synth_npz_path.exists():
                 logger.warning(f"Synthetic NPZ not found for split '{split_name}': {synth_npz_path}")
-                logger.warning(f"Skipping split '{split_name}'...")
+
+                # Check if original data has this split
+                images_key = f"{split_name}_images"
+                if images_key in original_data:
+                    logger.info(f"Preserving original '{split_name}' split without synthetic data...")
+
+                    # Copy original data for this split
+                    orig_images = original_data[images_key]
+                    orig_labels = original_data[f"{split_name}_labels"]
+                    orig_is_synth = original_data.get(f"{split_name}_is_synth", np.zeros(len(orig_images), dtype=bool))
+
+                    logger.info(f"  Original: {len(orig_images)} samples (all real)")
+
+                    # Add to merged data
+                    merged_data[images_key] = orig_images
+                    merged_data[f"{split_name}_labels"] = orig_labels
+                    merged_data[f"{split_name}_is_synth"] = orig_is_synth
+                else:
+                    logger.warning(f"Split '{split_name}' not found in original dataset either, skipping...")
                 continue
 
             # Load synthetic NPZ for this split

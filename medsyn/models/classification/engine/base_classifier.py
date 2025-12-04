@@ -548,9 +548,17 @@ class BaseClassifier(ABC):
             train_labels = data["train_labels"]
             train_is_synth = data.get("train_is_synth", np.zeros(len(train_labels), dtype=bool))
 
-            val_images = data["val_images"]
-            val_labels = data["val_labels"]
-            val_is_synth = data.get("val_is_synth", np.zeros(len(val_labels), dtype=bool))
+            # Check if validation data exists in NPZ file
+            # If not, k-fold will only use training data
+            if "val_images" in data:
+                val_images = data["val_images"]
+                val_labels = data["val_labels"]
+                val_is_synth = data.get("val_is_synth", np.zeros(len(val_labels), dtype=bool))
+            else:
+                # No separate validation set - k-fold will split training data only
+                val_images = None
+                val_labels = None
+                val_is_synth = None
 
         # Create k-fold splits
         splitter = StratifiedKFoldSplitter(
