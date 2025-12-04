@@ -69,7 +69,7 @@ class ClassificationMetrics:
             # Compute per-sample losses
             per_sample_losses = torch.nn.functional.cross_entropy(
                 logits, labels, reduction='none'
-            ).cpu().numpy()
+            ).detach().cpu().numpy()
 
             # Accumulate losses per class
             for class_idx in range(self.num_classes):
