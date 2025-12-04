@@ -8,7 +8,7 @@ experiment:
   name: "pathmnist_clip_vit_b16_real_only"
   output_dir: "/media/hddb/mario/results/medsyn/experiments/classification/clip_vit_b16_real_only"
   seed: 42
-  device: "cuda:1"
+  device: "cuda:0"
 
 data:
   npz_path: "/media/hddb/mario/data/medsyn/merged_datasets/cfg_medsyn_synth.npz"
