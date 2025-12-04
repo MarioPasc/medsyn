@@ -464,6 +464,9 @@ class BaseClassifier(ABC):
         logger.info("Training completed!")
         logger.info(f"Best validation accuracy: {self.best_val_acc:.4f} at epoch {self.best_epoch}")
 
+        # Run test evaluation
+        self.test()
+
     def test(self) -> Dict[str, float]:
         """
         Evaluate model on test set.
@@ -659,6 +662,9 @@ class BaseClassifier(ABC):
 
             fold_dirs.append(fold_output_dir)
             logger.info(f"Fold {fold_idx + 1} completed! Best Val Acc: {fold_classifier.best_val_acc:.4f}")
+
+            # Run test evaluation for this fold
+            fold_classifier.test()
 
         # Aggregate results across folds
         logger.info(f"\n{'='*80}")

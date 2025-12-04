@@ -69,6 +69,22 @@ class CrossValidationAggregator:
             # Also save as CSV for easier analysis
             self._save_best_epoch_as_csv(best_epoch_summary)
 
+        # Aggregate test results
+        logger.info("Aggregating test results...")
+        test_summary = self._aggregate_test_results()
+
+        if test_summary is not None:
+            test_output = self.output_dir / "cv_test_results_summary.yaml"
+            with open(test_output, "w") as f:
+                yaml.safe_dump(test_summary, f, default_flow_style=False)
+            logger.info(f"Test results summary saved to: {test_output}")
+
+            # Save as CSV
+            self._save_test_results_as_csv(test_summary)
+
+            # Log summary
+            self._log_test_summary(test_summary)
+
         # Create combined summary of best epoch results
         logger.info("Creating combined cross-validation summary...")
         cv_summary_df = self._create_cv_summary(standard_metrics_df, auc_metrics_df)
@@ -451,6 +467,103 @@ class CrossValidationAggregator:
                 output_path = self.output_dir / f"cv_best_epoch_{split}_per_class.csv"
                 df.to_csv(output_path, index=False)
                 logger.info(f"Best-epoch {split} per-class metrics saved to: {output_path}")
+
+    def _aggregate_test_results(self) -> Optional[Dict]:
+        """
+        Aggregate test results (F1, AUC, etc.) across all folds.
+
+        Returns:
+            Dictionary with aggregated statistics
+        """
+        fold_test_results = []
+
+        for fold_idx, fold_dir in enumerate(self.fold_dirs):
+            test_results_file = fold_dir / "logs" / "test_results.yaml"
+
+            if not test_results_file.exists():
+                logger.warning(f"test_results.yaml not found in {fold_dir}")
+                continue
+
+            try:
+                with open(test_results_file, "r") as f:
+                    test_results = yaml.safe_load(f)
+                fold_test_results.append({
+                    "fold": fold_idx,
+                    "data": test_results
+                })
+            except Exception as e:
+                logger.error(f"Error reading test results from {test_results_file}: {e}")
+                continue
+
+        if not fold_test_results:
+            logger.warning("No valid test_results.yaml files found")
+            return None
+
+        # Aggregate across folds
+        # Since test_results.yaml is flat (not split by train/val), we treat it as one split
+        data_list = [d["data"] for d in fold_test_results]
+        summary = self._compute_per_class_statistics(data_list)
+
+        # Add metadata
+        summary["metadata"] = {
+            "num_folds": self.k_folds,
+            "num_folds_with_data": len(fold_test_results),
+            "description": "Aggregated test results across k-fold CV"
+        }
+
+        return summary
+
+    def _save_test_results_as_csv(self, test_summary: Dict):
+        """
+        Save test results summary as CSV.
+        """
+        if "per_class" not in test_summary:
+            return
+
+        # Create CSV rows
+        rows = []
+        for class_name, metrics in test_summary["per_class"].items():
+            row = {"class": class_name}
+            for metric_name, metric_data in metrics.items():
+                row[f"{metric_name}_mean"] = metric_data.get("mean", 0.0)
+                row[f"{metric_name}_std"] = metric_data.get("std", 0.0)
+            rows.append(row)
+
+        # Save to CSV
+        if rows:
+            df = pd.DataFrame(rows)
+            output_path = self.output_dir / "cv_test_per_class.csv"
+            df.to_csv(output_path, index=False)
+            logger.info(f"Test per-class metrics saved to: {output_path}")
+
+    def _log_test_summary(self, test_summary: Dict):
+        """
+        Log test summary to console.
+        """
+        logger.info("="*80)
+        logger.info("Test Results Summary (Aggregated across folds)")
+        logger.info("="*80)
+
+        # Log overall metrics
+        if "overall" in test_summary:
+            logger.info("Overall Metrics:")
+            for metric_name, metric_data in test_summary["overall"].items():
+                mean = metric_data.get("mean", 0.0)
+                std = metric_data.get("std", 0.0)
+                logger.info(f"  {metric_name:20s}: {mean:.4f} ± {std:.4f}")
+
+        # Log per-class metrics
+        if "per_class" in test_summary:
+            logger.info("\nPer-Class Metrics:")
+            for class_name, metrics in sorted(test_summary["per_class"].items()):
+                logger.info(f"  {class_name}:")
+                for metric_name in ["f1", "auc", "precision", "recall", "loss"]:
+                    if metric_name in metrics:
+                        mean = metrics[metric_name].get("mean", 0.0)
+                        std = metrics[metric_name].get("std", 0.0)
+                        logger.info(f"    {metric_name:15s}: {mean:.4f} ± {std:.4f}")
+
+        logger.info("="*80)
 
     def _log_best_epoch_summary(self, best_epoch_summary: Dict):
         """
