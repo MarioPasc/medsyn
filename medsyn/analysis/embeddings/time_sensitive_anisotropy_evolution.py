@@ -15,12 +15,12 @@ For each diffusion timestep T (e.g., 100, 500, 900):
   - All subplots share a common legend placed at the bottom center
 
 Usage example:
-  python time_sensitive_anisotropy_evolution.py \
-      --features_path /path/to/embeddings \
-      --output_path /path/to/output \
-      --feature_layer unet.mid_block \
-      --max_epoch 100 \
-      --num_epochs_to_plot 10
+    python medsyn/analysis/embeddings/time_sensitive_anisotropy_evolution.py \
+    --features_path /media/mpascual/Sandisk2TB1/research/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings \
+    --output_path /media/mpascual/Sandisk2TB1/research/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings \
+    --max_epoch 60 \
+    --num_epochs_to_plot 5 \
+    --dim_reduction tsne
 """
 
 from __future__ import annotations
@@ -56,71 +56,122 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 PLOT_SETTINGS = {
-    # Font settings
-    "font_family": "sans-serif",
-    "font_sans_serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
-    "font_size": 10,
+    # ------------------------------------------------------------------
+    # Font and general figure settings
+    # ------------------------------------------------------------------
+    "font_family": "serif",                    # more "paper-like"
+    "font_serif": ["Times New Roman", "DejaVu Serif"],
+    "font_size": 9,                            # base size for rcParams
 
-    # Axis label font sizes
+    # Axis label / title sizes (aiming for journal-ready when shrunk)
     "axes_labelsize": 8,
-    "axes_titlesize": 10,
+    "axes_titlesize": 9,
+
+    # Axis spines
+    "axes_spine_width": 0.8,                   # you can loop over spines and set this
+    "axes_spine_color": "0.2",
 
     # Tick settings
-    "tick_labelsize": 6,
-    "tick_major_width": 0.8,
-    "tick_minor_width": 0.5,
+    "tick_labelsize": 7,
+    "tick_major_width": 0.6,
+    "tick_minor_width": 0.4,
+    "tick_direction": "in",                    # ticks pointing inward looks cleaner
+    "tick_length_major": 3.5,
+    "tick_length_minor": 2.0,
 
     # Legend settings
-    "legend_fontsize": 5,
-    "legend_framealpha": 0.8,
+    "legend_fontsize": 6.5,
+    "legend_framealpha": 0.9,
+    "legend_frameon": False,
+    "legend_edgecolor": "0.8",
 
-    # Grid settings
-    "grid_linestyle": "--",
-    "grid_alpha": 0.3,
-    "grid_linewidth": 0.5,
+    # Grid settings (lighter and only major grid)
+    "grid_linestyle": ":",
+    "grid_alpha": 0.15,
+    "grid_linewidth": 0.4,
 
     # Line settings
-    "line_width": 1.2,
-    "kde_line_width": 1.5,
-    "contour_line_width": 0.8,
+    "line_width": 0.9,
+    "kde_line_width": 1.0,
+    "contour_line_width": 0.7,
     "ellipse_line_width": 1.0,
+    "ellipse_alpha": 0.7,                       # set on the artists
 
     # Scatter settings
-    "scatter_size_outside": 2,
-    "scatter_size_inside": 5,
-    "scatter_alpha_outside": 0.2,
-    "scatter_alpha_inside": 0.6,
+    "scatter_size_outside": 3,                  # small, unobtrusive
+    "scatter_size_inside": 8,                   # enough to see colors
+    "scatter_alpha_outside": 0.15,
+    "scatter_alpha_inside": 0.7,
+    "scatter_edgecolor": "none",                # avoids busy outlines
 
-    # Histogram settings
-    "hist_bins": 30,
-    "hist_edgecolor": "black",
-    "hist_linewidth": 0.6,
-    "hist_color": "lightgray",
+    # Histogram settings (supporting, not dominating)
+    "hist_bins": 25,                            # slightly fewer bins
+    "hist_edgecolor": "0.5",
+    "hist_linewidth": 0.4,
+    "hist_color": "0.85",                       # light gray background bars
+    "hist_alpha": 0.9,
 
-    # KDE settings
+    # KDE settings for marginals
     "kde_resolution": 200,
-    "kde_color": "black",
+    "kde_color": "0.2",
+    "kde_alpha": 0.9,
 
     # Marginal histogram settings
-    "marginal_bins": 30,
+    "marginal_bins": 25,
+
+    # Figure-level settings (use when building the figure)
+    "figure_facecolor": "white",
+    "axes_facecolor": "white",
+    "figure_dpi": 300,
 }
 
+
+LABELS_SHORT = {
+    0: "Adipose",
+    1: "Background",
+    2: "Debris",
+    3: "Lymphocytes",
+    4: "Mucus",
+    5: "Smooth\nMuscle",
+    6: "Normal\nMucosa",
+    7: "Cancer\nStroma",
+    8: "Colorectal\nEpithelium"
+}
 
 def apply_plot_settings():
     """Apply global matplotlib settings from PLOT_SETTINGS dictionary."""
     plt.rcParams.update({
         'font.family': PLOT_SETTINGS['font_family'],
-        'font.sans-serif': PLOT_SETTINGS['font_sans_serif'],
+        'font.serif': PLOT_SETTINGS['font_serif'],
         'font.size': PLOT_SETTINGS['font_size'],
         'axes.labelsize': PLOT_SETTINGS['axes_labelsize'],
         'axes.titlesize': PLOT_SETTINGS['axes_titlesize'],
+        'axes.linewidth': PLOT_SETTINGS['axes_spine_width'],
+        'axes.edgecolor': PLOT_SETTINGS['axes_spine_color'],
+        'axes.facecolor': PLOT_SETTINGS['axes_facecolor'],
         'xtick.labelsize': PLOT_SETTINGS['tick_labelsize'],
         'ytick.labelsize': PLOT_SETTINGS['tick_labelsize'],
+        'xtick.major.width': PLOT_SETTINGS['tick_major_width'],
+        'xtick.minor.width': PLOT_SETTINGS['tick_minor_width'],
+        'xtick.major.size': PLOT_SETTINGS['tick_length_major'],
+        'xtick.minor.size': PLOT_SETTINGS['tick_length_minor'],
+        'xtick.direction': PLOT_SETTINGS['tick_direction'],
+        'ytick.major.width': PLOT_SETTINGS['tick_major_width'],
+        'ytick.minor.width': PLOT_SETTINGS['tick_minor_width'],
+        'ytick.major.size': PLOT_SETTINGS['tick_length_major'],
+        'ytick.minor.size': PLOT_SETTINGS['tick_length_minor'],
+        'ytick.direction': PLOT_SETTINGS['tick_direction'],
         'legend.fontsize': PLOT_SETTINGS['legend_fontsize'],
+        'legend.framealpha': PLOT_SETTINGS['legend_framealpha'],
+        'legend.frameon': PLOT_SETTINGS['legend_frameon'],
+        'legend.edgecolor': PLOT_SETTINGS['legend_edgecolor'],
         'lines.linewidth': PLOT_SETTINGS['line_width'],
         'grid.linestyle': PLOT_SETTINGS['grid_linestyle'],
         'grid.alpha': PLOT_SETTINGS['grid_alpha'],
         'grid.linewidth': PLOT_SETTINGS['grid_linewidth'],
+        'figure.facecolor': PLOT_SETTINGS['figure_facecolor'],
+        'figure.dpi': PLOT_SETTINGS['figure_dpi'],
+        'savefig.dpi': PLOT_SETTINGS['figure_dpi'],
     })
 
 
@@ -387,6 +438,7 @@ def plot_anisotropy_with_marginals(
             s=PLOT_SETTINGS["scatter_size_outside"],
             color="black",
             alpha=PLOT_SETTINGS["scatter_alpha_outside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
             label="Sample",
         )
         ax_main.scatter(
@@ -394,6 +446,7 @@ def plot_anisotropy_with_marginals(
             s=PLOT_SETTINGS["scatter_size_inside"],
             color="blue",
             alpha=PLOT_SETTINGS["scatter_alpha_inside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
             label=f"{int(100 * conf_level)}% high-density",
         )
     else:
@@ -402,6 +455,7 @@ def plot_anisotropy_with_marginals(
             s=PLOT_SETTINGS["scatter_size_outside"],
             color="lightgray",
             alpha=PLOT_SETTINGS["scatter_alpha_outside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
             label="Outside high-density",
         )
         cmap = plt.get_cmap("tab10")
@@ -410,12 +464,19 @@ def plot_anisotropy_with_marginals(
             mask = (class_ids == cls) & high_idx
             if not np.any(mask):
                 continue
+            
+            # Use short label if available
+            label_text = LABELS_SHORT.get(cls, f"class {cls}")
+            # Replace newlines with spaces for legend
+            label_text = label_text.replace("\n", " ")
+            
             ax_main.scatter(
                 x[mask], y[mask],
                 s=PLOT_SETTINGS["scatter_size_inside"],
                 alpha=PLOT_SETTINGS["scatter_alpha_inside"],
                 color=cmap(i % 10),
-                label=f"class {cls}",
+                edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
+                label=label_text,
             )
 
     # KDE contours
@@ -451,6 +512,7 @@ def plot_anisotropy_with_marginals(
             xy=center, width=width, height=height, angle=angle,
             edgecolor="red", facecolor="none",
             lw=PLOT_SETTINGS["ellipse_line_width"],
+            alpha=PLOT_SETTINGS["ellipse_alpha"],
         )
         ax_main.add_patch(ell)
 
@@ -519,7 +581,8 @@ def plot_anisotropy_with_marginals(
         density=False,
         color=PLOT_SETTINGS["hist_color"],
         edgecolor=PLOT_SETTINGS["hist_edgecolor"],
-        linewidth=PLOT_SETTINGS["hist_linewidth"]
+        linewidth=PLOT_SETTINGS["hist_linewidth"],
+        alpha=PLOT_SETTINGS["hist_alpha"],
     )
     # KDE overlay on histogram
     kde_x = gaussian_kde(x)
@@ -530,7 +593,8 @@ def plot_anisotropy_with_marginals(
         xs,
         kde_x(xs) * len(x) * bin_width_x,
         color=PLOT_SETTINGS["kde_color"],
-        linewidth=PLOT_SETTINGS["kde_line_width"]
+        linewidth=PLOT_SETTINGS["kde_line_width"],
+        alpha=PLOT_SETTINGS["kde_alpha"],
     )
     ax_top.set_ylabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
     ax_top.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelbottom=False)
@@ -549,7 +613,8 @@ def plot_anisotropy_with_marginals(
         orientation="horizontal",
         color=PLOT_SETTINGS["hist_color"],
         edgecolor=PLOT_SETTINGS["hist_edgecolor"],
-        linewidth=PLOT_SETTINGS["hist_linewidth"]
+        linewidth=PLOT_SETTINGS["hist_linewidth"],
+        alpha=PLOT_SETTINGS["hist_alpha"],
     )
     # KDE overlay on histogram
     kde_y = gaussian_kde(y)
@@ -560,7 +625,8 @@ def plot_anisotropy_with_marginals(
         kde_y(ys) * len(y) * bin_width_y,
         ys,
         color=PLOT_SETTINGS["kde_color"],
-        linewidth=PLOT_SETTINGS["kde_line_width"]
+        linewidth=PLOT_SETTINGS["kde_line_width"],
+        alpha=PLOT_SETTINGS["kde_alpha"],
     )
     ax_right.set_xlabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
     ax_right.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelleft=False)
@@ -751,10 +817,10 @@ def plot_timestep_evolution(
             all_handles,
             all_labels,
             loc='lower center',
-            ncol=min(len(all_labels), 6),
+            ncol=min(len(all_labels), 5),
             fontsize=PLOT_SETTINGS["legend_fontsize"] + 2,
             bbox_to_anchor=(0.5, -0.01),
-            frameon=True,
+            frameon=PLOT_SETTINGS["legend_frameon"],
             framealpha=PLOT_SETTINGS["legend_framealpha"],
         )
 
@@ -768,7 +834,7 @@ def plot_timestep_evolution(
 
     # Save figure
     output_file = output_path / f"anisotropy_evolution_t{timestep}_{feature_layer.replace('.', '_')}.png"
-    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    fig.savefig(output_file, dpi=PLOT_SETTINGS["figure_dpi"], bbox_inches='tight')
     plt.close(fig)
     logging.info(f"Saved: {output_file}")
 
@@ -778,8 +844,6 @@ def plot_timestep_evolution(
 # ---------------------------------------------------------------------------
 
 def main():
-    #  python medsyn/analysis/embeddings/time_sensitive_anisotropy_evolution.py --features_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings --output_path /media/mpascual/PortableSSD/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings --max_epoch 10 --num_epochs_to_plot 10
-
     # Apply global plot settings
     apply_plot_settings()
 
