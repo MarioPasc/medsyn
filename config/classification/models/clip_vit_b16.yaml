@@ -35,7 +35,7 @@ scheduler:
   gamma: 0.1  # LR decay factor
 
 training:
-  max_epochs: 50  # Fewer epochs than ResNet50 (50 vs 100) - better initialization
+  max_epochs: 25  
   early_stopping_patience: 10  # Shorter patience (10 vs 15) - faster convergence
   grad_clip_norm: 1.0  # Gradient clipping
   mixed_precision: true  # torch.cuda.amp for memory efficiency
