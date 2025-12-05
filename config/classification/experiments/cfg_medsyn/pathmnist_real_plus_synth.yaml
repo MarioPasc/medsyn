@@ -5,8 +5,8 @@
 model_config: "/home/mariopascual/projects/diffusion/medsyn/config/classification/models/resnet50.yaml"
 
 experiment:
-  name: "pathmnist_resnet50_real_plus_synth_cfgmedsyn"
-  output_dir: "/media/hddb/mario/results/medsyn/experiments/classification/resnet50_real_plus_synth_cfgmedsyn"
+  name: "pathmnist_{classifier}_real_plus_synth_cfgmedsyn"
+  output_dir: "/media/hddb/mario/results/medsyn/experiments/classification/{experiment_name}"
   seed: 42
   device: "cuda:1"
 

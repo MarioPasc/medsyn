@@ -98,6 +98,11 @@ Examples:
         help="Override output directory"
     )
     parser.add_argument(
+        "--experiment_name",
+        type=str,
+        help="Override experiment name"
+    )
+    parser.add_argument(
         "--model",
         type=str,
         help="Override model name (e.g., 'resnet50', 'clip_vit_b16')"
@@ -181,6 +186,9 @@ Examples:
         if args.output_dir:
             logger.info(f"Overriding output_dir: {config.experiment.output_dir} -> {args.output_dir}")
             experiment_overrides["output_dir"] = Path(args.output_dir)
+        if args.experiment_name:
+            logger.info(f"Overriding experiment name: {config.experiment.name} -> {args.experiment_name}")
+            experiment_overrides["name"] = args.experiment_name
 
         if experiment_overrides:
             config = dataclasses.replace(

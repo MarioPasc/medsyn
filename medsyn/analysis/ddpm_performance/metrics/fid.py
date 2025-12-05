@@ -39,7 +39,7 @@ Usage:
     --model CFG_MedMNIST /media/hddb/mario/data/medsyn/pathmnist_train_synth.npz \
     --model DistDiff /media/hddb/mario/data/medsyn/split_0_64x64_balanced.npz \
     --output /media/hddb/mario/results/medsyn/fid_results.csv \
-    --counts 100 \
+    --counts 1000 \
     --weights-dir /media/hddb/mario/data/medsyn/pretrained/fid/ \
     --verbose \
     --device cuda:1

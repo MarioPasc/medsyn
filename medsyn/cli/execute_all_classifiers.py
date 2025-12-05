@@ -7,6 +7,7 @@ import argparse
 import logging
 import subprocess
 import sys
+import yaml
 from pathlib import Path
 from typing import List
 
@@ -132,6 +133,27 @@ def main():
             for yaml_file in yaml_files:
                 logger.info(f"\nRunning experiment: {folder}/{yaml_file.name}")
                 
+                # Read YAML to determine experiment name and output dir
+                try:
+                    with open(yaml_file, 'r') as f:
+                        config = yaml.safe_load(f)
+                    
+                    exp_config = config.get('experiment', {})
+                    exp_name = exp_config.get('name', '')
+                    output_dir = exp_config.get('output_dir', '')
+                    
+                    # Dynamic replacement
+                    if "{classifier}" in exp_name:
+                        exp_name = exp_name.replace("{classifier}", model)
+                    
+                    if "{experiment_name}" in output_dir:
+                        output_dir = output_dir.replace("{experiment_name}", exp_name)
+                        
+                except Exception as e:
+                    logger.warning(f"Could not parse YAML for dynamic naming: {e}")
+                    exp_name = None
+                    output_dir = None
+
                 # Construct command
                 cmd = [
                     sys.executable,
@@ -139,6 +161,12 @@ def main():
                     str(yaml_file),
                     "--model", model
                 ]
+                
+                if exp_name:
+                    cmd.extend(["--experiment_name", exp_name])
+                
+                if output_dir:
+                    cmd.extend(["--output_dir", output_dir])
                 
                 if args.device:
                     cmd.extend(["--device", args.device])
