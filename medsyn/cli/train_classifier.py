@@ -247,6 +247,9 @@ Examples:
         elif config.model.name == "clip_vit_b16":
             from medsyn.models.classification.engine.clip_classifier import CLIPViTB16Classifier
             classifier = CLIPViTB16Classifier(config)
+        elif config.model.name == "wideresnet28_10":
+            from medsyn.models.classification.engine.wideresnet_classifier import WideResNet28_10Classifier
+            classifier = WideResNet28_10Classifier(config)
         else:
             logger.error(f"Unknown model: {config.model.name}")
             sys.exit(1)

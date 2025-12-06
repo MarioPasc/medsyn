@@ -166,18 +166,42 @@ class BaseClassifier(ABC):
         if self.config.data.regime == "real_plus_trad_aug" and self.config.augmentation.enabled:
             logger.info("Setting up augmentation pipeline...")
             from medsyn.models.ccDDPM.augmentation.transforms import AugmentationPipeline
-            from medsyn.models.ccDDPM.augmentation.config import AugmentationConfig
+            from medsyn.models.ccDDPM.augmentation.config import AugmentationConfig, TransformConfig, StatisticsConfig
+
+            # Convert transform dicts to TransformConfig objects
+            transform_configs = []
+            for tf_dict in self.config.augmentation.transforms:
+                name = tf_dict.get('name')
+                p = tf_dict.get('p', 0.5)
+                # All other keys are parameters
+                params = {k: v for k, v in tf_dict.items() if k not in ['name', 'p']}
+                transform_configs.append(TransformConfig(name=name, p=p, params=params))
+
+            # Setup statistics config to track augmented images per class
+            stats_config = StatisticsConfig(
+                enabled=True,
+                output_path=self.output_dir / "logs" / "augmentation_stats.csv",
+                save_every_n_epochs=1  # Save stats every epoch
+            )
 
             # Convert AugmentationCfg to ccDDPM AugmentationConfig
             aug_config = AugmentationConfig(
                 enabled=self.config.augmentation.enabled,
                 probability=self.config.augmentation.probability,
-                transforms=self.config.augmentation.transforms,
+                transforms=transform_configs,
                 preserve_range=self.config.augmentation.preserve_range,
                 normalize_after_augment=self.config.augmentation.normalize_after_augment,
-                statistics={"enabled": False}  # Disable statistics tracking
+                statistics=stats_config
             )
             self.augmentation_pipeline = AugmentationPipeline(aug_config)
+
+            # Initialize augmentation statistics tracker
+            self.augmentation_stats = {
+                'total_images': 0,
+                'augmented_images': 0,
+                'per_class_total': {},
+                'per_class_augmented': {}
+            }
 
         # Setup CSV loggers
         log_file = self.output_dir / "logs" / "training_log.csv"
@@ -271,11 +295,43 @@ class BaseClassifier(ABC):
         self.model.train()
         self.train_metrics.reset()
 
+        # Reset epoch-level augmentation statistics
+        if hasattr(self, 'augmentation_stats'):
+            epoch_stats = {
+                'total_images': 0,
+                'augmented_images': 0,
+                'per_class_total': {},
+                'per_class_augmented': {}
+            }
+
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{self.config.training.max_epochs} [Train]", leave=False)
 
         for batch_idx, batch in enumerate(pbar):
             images = batch["img"].to(self.device)
             labels = batch["cls"].to(self.device)
+
+            # Track augmentation statistics if available
+            if hasattr(self, 'augmentation_stats') and 'was_augmented' in batch:
+                was_augmented = batch['was_augmented']
+                batch_size = len(labels)
+
+                epoch_stats['total_images'] += batch_size
+                epoch_stats['augmented_images'] += was_augmented.sum().item()
+
+                # Track per-class statistics
+                for class_idx in range(self.config.model.num_classes):
+                    class_mask = (labels.cpu() == class_idx)
+                    class_count = class_mask.sum().item()
+
+                    if class_count > 0:
+                        if class_idx not in epoch_stats['per_class_total']:
+                            epoch_stats['per_class_total'][class_idx] = 0
+                            epoch_stats['per_class_augmented'][class_idx] = 0
+
+                        epoch_stats['per_class_total'][class_idx] += class_count
+                        epoch_stats['per_class_augmented'][class_idx] += (
+                            was_augmented[class_mask].sum().item()
+                        )
 
             # Forward pass with mixed precision
             with torch.amp.autocast('cuda', enabled=self.scaler is not None):
@@ -312,6 +368,10 @@ class BaseClassifier(ABC):
                     "loss": f"{loss.item():.4f}",
                     "acc": f"{self.train_metrics.accuracy():.4f}"
                 })
+
+        # Save augmentation statistics for this epoch
+        if hasattr(self, 'augmentation_stats'):
+            self._save_augmentation_stats(epoch, epoch_stats)
 
         return self.train_metrics.compute()
 
@@ -466,6 +526,63 @@ class BaseClassifier(ABC):
 
         # Run test evaluation
         self.test()
+
+    def _save_augmentation_stats(self, epoch: int, epoch_stats: Dict):
+        """
+        Save augmentation statistics to CSV file.
+
+        Args:
+            epoch: Current epoch number
+            epoch_stats: Dictionary containing augmentation statistics for this epoch
+        """
+        import csv
+        from pathlib import Path
+
+        # Create logs directory if it doesn't exist
+        logs_dir = self.output_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        csv_path = logs_dir / "augmentation_stats.csv"
+
+        # Check if file exists to determine if we need to write headers
+        file_exists = csv_path.exists()
+
+        # Prepare row data
+        total_images = epoch_stats['total_images']
+        augmented_images = epoch_stats['augmented_images']
+        aug_percentage = (augmented_images / total_images * 100) if total_images > 0 else 0.0
+
+        row_data = {
+            'epoch': epoch,
+            'total_images': total_images,
+            'augmented_images': augmented_images,
+            'augmentation_percentage': f"{aug_percentage:.2f}"
+        }
+
+        # Add per-class statistics
+        for class_idx in range(self.config.model.num_classes):
+            class_total = epoch_stats['per_class_total'].get(class_idx, 0)
+            class_augmented = epoch_stats['per_class_augmented'].get(class_idx, 0)
+            class_aug_pct = (class_augmented / class_total * 100) if class_total > 0 else 0.0
+
+            row_data[f'class_{class_idx}_total'] = class_total
+            row_data[f'class_{class_idx}_augmented'] = class_augmented
+            row_data[f'class_{class_idx}_aug_pct'] = f"{class_aug_pct:.2f}"
+
+        # Write to CSV
+        with open(csv_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=row_data.keys())
+
+            # Write header if file is new
+            if not file_exists:
+                writer.writeheader()
+
+            writer.writerow(row_data)
+
+        logger.info(
+            f"Augmentation stats (Epoch {epoch}): "
+            f"{augmented_images}/{total_images} images augmented ({aug_percentage:.2f}%)"
+        )
 
     def test(self) -> Dict[str, float]:
         """
