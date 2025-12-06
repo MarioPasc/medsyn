@@ -27,7 +27,7 @@ scheduler:
 
 training:
   max_epochs: 100
-  early_stopping_patience: 50
+  early_stopping_patience: 8
   grad_clip_norm: 0.0  # No gradient clipping for WideResNet
   mixed_precision: true
   checkpoint_every: 25
