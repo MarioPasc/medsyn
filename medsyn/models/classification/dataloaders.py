@@ -167,6 +167,9 @@ class ClassificationDataset(Dataset):
         # Convert to albumentations format [H, W, C] uint8
         image = _numpy_to_albumentations_format(image)
 
+        # Track whether augmentation was applied
+        was_augmented = False
+
         # Apply augmentation if regime is real_plus_trad_aug and we're training
         if (self.regime == "real_plus_trad_aug" and
             self.split == "train" and
@@ -177,7 +180,10 @@ class ClassificationDataset(Dataset):
             image_tensor = (image_tensor - 0.5) / 0.5
 
             # Apply augmentation
-            augmented_tensor, _ = self.augmentation_pipeline(image_tensor)
+            augmented_tensor, applied_transforms = self.augmentation_pipeline(image_tensor)
+
+            # Check if any augmentation was applied
+            was_augmented = len(applied_transforms) > 0
 
             # Convert back to [H, W, C] uint8 for albumentations normalization
             augmented_tensor = (augmented_tensor * 0.5 + 0.5).clamp(0, 1)  # [-1, 1] -> [0, 1]
@@ -189,7 +195,8 @@ class ClassificationDataset(Dataset):
 
         return {
             "img": image_tensor,
-            "cls": torch.tensor(label, dtype=torch.long)
+            "cls": torch.tensor(label, dtype=torch.long),
+            "was_augmented": torch.tensor(was_augmented, dtype=torch.bool)
         }
 
 
