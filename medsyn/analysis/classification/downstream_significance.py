@@ -12,14 +12,14 @@ Statistical methods:
 - Q2: One-sample t-tests aggregated across backbones with Benjamini-Hochberg FDR correction
 
 Usage:
-    python -m medsyn.analysis.classification.downstream_significance \\
-        --root-results-dir /path/to/results/classification \\
-        --dataset pathmnist \\
-        --primary-metric f1 \\
-        --backbones resnet50 clip_vit_b16 wideresnet28_10 \\
-        --experiments real_only real_plus_trad_aug real_plus_synth_cfgmedsyn real_plus_synth_distdiff \\
-        --our-experiment real_plus_synth_cfgmedsyn \\
-        --output-dir /path/to/output
+    python -m medsyn.analysis.classification.downstream_significance \
+        --root-results-dir /media/mpascual/Sandisk2TB1/research/medsyn/results/classification \
+        --dataset pathmnist \
+        --primary-metric f1 \
+        --backbones resnet50 clip_vit_b16 wideresnet28_10 \
+        --experiments real_only real_plus_trad_aug real_plus_synth_cfgmedsyn real_plus_synth_distdiff \
+        --our-experiment real_plus_synth_cfgmedsyn \
+        --output-dir /media/mpascual/Sandisk2TB1/research/medsyn/results/downstream_analysis_test
 """
 
 from __future__ import annotations
@@ -29,8 +29,7 @@ import json
 import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-import math
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,7 +42,29 @@ matplotlib.use('Agg')
 
 logger = logging.getLogger(__name__)
 
+from medsyn.analysis.embeddings.time_sensitive_anisotropy_evolution import PLOT_SETTINGS, apply_plot_settings
+PLOT_SETTINGS["tick_labelsize"] = 12
+PLOT_SETTINGS["axis_labelsize"] = 14
+PLOT_SETTINGS["xtick_fontsize"] = 12
+PLOT_SETTINGS["ytick_fontsize"] = 12
+PLOT_SETTINGS["xlabel_fontsize"] = 14
+PLOT_SETTINGS["ylabel_fontsize"] = 14
+PLOT_SETTINGS["title_fontsize"] = 16
+PLOT_SETTINGS["grid_alpha"] = 0.7
+PLOT_SETTINGS["grid_linewidth"] = 0.6
+apply_plot_settings()
 
+LABELS_SHORT = {
+    0: "Adipose",
+    1: "Background",
+    2: "Debris",
+    3: "Lymphocytes",
+    4: "Mucus",
+    5: "Smooth Muscle",
+    6: "Normal Mucosa",
+    7: "Cancer Stroma",
+    8: "Colorectal Epithelium"
+}
 # ============================================================================
 # Custom Exceptions
 # ============================================================================
@@ -781,17 +802,23 @@ def plot_global_metric(
     backbones = config.backbones
     experiments = config.experiments
 
-    fig, axes = plt.subplots(1, len(backbones), figsize=(5 * len(backbones), 5))
+    fig, axes = plt.subplots(1, len(backbones), figsize=(6 * len(backbones), 6), sharey=True)
     if len(backbones) == 1:
         axes = [axes]
 
     # Define experiment display order and labels
     exp_order = experiments
     exp_labels = {
-        "real_only": "M0: Real only",
-        "real_plus_trad_aug": "M1: Real+TradAug",
-        "real_plus_synth_cfgmedsyn": "M2: Real+cfg-MedSyn",
-        "real_plus_synth_distdiff": "M3: Real+DistDiff"
+        "real_only": r"$M_0$",
+        "real_plus_trad_aug": r"$M_1$",
+        "real_plus_synth_cfgmedsyn": r"$M_2$",
+        "real_plus_synth_distdiff": r"$M_3$"
+    }
+
+    backbone_names = {
+        "resnet50": "ResNet-50",
+        "clip_vit_b16": "CLIP-ViT-B16",
+        "wideresnet28_10": "WideResNet28-10"
     }
 
     for ax_idx, backbone in enumerate(backbones):
@@ -808,6 +835,10 @@ def plot_global_metric(
         cis_lower = []
         cis_upper = []
         colors = []
+        
+        # Map experiment to its upper/lower CI for placement
+        exp_ci_upper = {}
+        exp_ci_lower = {}
 
         for i, exp in enumerate(exp_order):
             exp_data = summary_subset[summary_subset["experiment"] == exp]
@@ -818,6 +849,9 @@ def plot_global_metric(
             means.append(exp_data["mean_value"].values[0])
             cis_lower.append(exp_data["ci_lower"].values[0])
             cis_upper.append(exp_data["ci_upper"].values[0])
+            
+            exp_ci_upper[exp] = exp_data["ci_upper"].values[0]
+            exp_ci_lower[exp] = exp_data["ci_lower"].values[0]
 
             # Highlight cfg-MedSyn
             if exp == config.our_experiment_name:
@@ -845,45 +879,65 @@ def plot_global_metric(
         # Annotate significance
         diff_subset = pairwise_diff_df[pairwise_diff_df["backbone"] == backbone]
 
+        y_min = min(cis_lower) if cis_lower else 0.0
         y_max = max(cis_upper) if cis_upper else 1.0
-        y_offset = (y_max - min(cis_lower if cis_lower else [0])) * 0.05
-        y_text = y_max + y_offset
+        y_range = y_max - y_min
+        
+        star_offset = y_range * 0.05
+        text_offset = y_range * 0.06
+        
+        # Map experiment to x-index
+        exp_to_x = {exp: i for i, exp in enumerate(exp_order)}
 
-        annotation_lines = []
         for _, row in diff_subset.iterrows():
             baseline = row["baseline_experiment"]
-            mean_diff = row["mean_diff"]
-            ci_l = row["ci_lower"]
-            ci_u = row["ci_upper"]
             p_holm = row["p_value_holm"]
             cohens_d = row["cohens_d"]
 
-            sig_marker = "***" if p_holm < 0.001 else "**" if p_holm < 0.01 else "*" if p_holm < 0.05 else "ns"
+            sig_marker = "***" if p_holm <= 0.001 else "**" if p_holm <= 0.01 else "*" if p_holm <= 0.05 else ""
 
-            baseline_label = exp_labels.get(baseline, baseline)
-            annotation_lines.append(
-                f"vs {baseline_label}: Δ={mean_diff:.3f} [{ci_l:.3f}, {ci_u:.3f}], "
-                f"p={p_holm:.4f} ({sig_marker}), d={cohens_d:.2f}"
-            )
-
-        if annotation_lines:
-            annotation_text = "\n".join(annotation_lines)
-            ax.text(
-                0.5, 0.98,
-                annotation_text,
-                transform=ax.transAxes,
-                fontsize=7,
-                verticalalignment='top',
-                horizontalalignment='center',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3)
-            )
+            if baseline in exp_to_x:
+                x_pos = exp_to_x[baseline]
+                
+                # Add star
+                if sig_marker and baseline in exp_ci_upper:
+                    y_pos_star = exp_ci_upper[baseline] + star_offset
+                    ax.text(x_pos, y_pos_star, sig_marker, ha='center', va='bottom', fontsize=14, fontweight='bold')
+                
+                # Add effect size
+                if baseline in exp_ci_lower:
+                    y_pos_text = exp_ci_lower[baseline] - text_offset
+                    ax.text(
+                        x_pos, y_pos_text, 
+                        f"$d={cohens_d:.2f}$", 
+                        ha='center', va='top', 
+                        fontsize=10,
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3)
+                    )
 
         # Formatting
         ax.set_xticks(range(len(exp_order)))
-        ax.set_xticklabels([exp_labels.get(e, e) for e in exp_order], rotation=45, ha='right')
-        ax.set_ylabel(f"Test {config.primary_metric.upper()} (mean ± 95% CI)")
-        ax.set_title(f"{backbone}")
-        ax.grid(axis='y', alpha=0.3)
+        ax.set_xticklabels([exp_labels.get(e, e) for e in exp_order], rotation=0, fontsize=PLOT_SETTINGS["xtick_fontsize"])
+        
+        # Add padding to x-axis to prevent text clipping
+        ax.set_xlim(-0.5, len(exp_order) - 0.5)
+        
+        if ax_idx == 0:
+            ax.set_ylabel(f"Test {config.primary_metric.upper()} (mean ± 95% CI)", fontsize=PLOT_SETTINGS["ylabel_fontsize"])
+        else:
+            ax.set_ylabel("")
+            
+        ax.set_title(backbone_names.get(backbone, backbone), fontsize=PLOT_SETTINGS["title_fontsize"])
+        ax.grid(True, alpha=PLOT_SETTINGS["grid_alpha"])
+
+    # Adjust global y-limits to accommodate annotations
+    if not experiment_summary_df.empty:
+        global_min = experiment_summary_df["ci_lower"].min()
+        global_max = experiment_summary_df["ci_upper"].max()
+        global_range = global_max - global_min
+        
+        # Add padding: 20% bottom for text, 15% top for stars
+        axes[0].set_ylim(global_min - global_range * 0.2, global_max + global_range * 0.15)
 
     fig.suptitle(
         f"Q1: Global {config.primary_metric.upper()} Comparison\n"
@@ -920,8 +974,7 @@ def plot_per_class_improvement(
     logger.info("Creating Figure 2 (per-class F1 improvement)...")
 
     baselines = [exp for exp in config.experiments if exp != config.our_experiment_name]
-    num_classes = per_class_stats_df["class_index"].nunique()
-
+    
     # Create pivot table: rows = classes, columns = baselines, values = mean_diff
     pivot_data = per_class_stats_df.pivot_table(
         index="class_index",
@@ -937,12 +990,28 @@ def plot_per_class_improvement(
         aggfunc="first"
     )
 
+    pivot_std = per_class_stats_df.pivot_table(
+        index="class_index",
+        columns="baseline_experiment",
+        values="std_diff",
+        aggfunc="first"
+    )
+
     # Reorder columns
     pivot_data = pivot_data[baselines]
     pivot_sig = pivot_sig[baselines]
+    pivot_std = pivot_std[baselines]
+
+    # Order classes from best-performing overall (highest mean improvement) to worst
+    class_mean_improvement = pivot_data.mean(axis=1)
+    sorted_classes = class_mean_improvement.sort_values(ascending=False).index
+    
+    pivot_data = pivot_data.reindex(sorted_classes)
+    pivot_sig = pivot_sig.reindex(sorted_classes)
+    pivot_std = pivot_std.reindex(sorted_classes)
 
     # Create heatmap
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(10, 8))
 
     # Determine color scale limits (symmetric around 0)
     vmax = np.abs(pivot_data.values).max()
@@ -950,62 +1019,75 @@ def plot_per_class_improvement(
 
     im = ax.imshow(
         pivot_data.values,
-        cmap='RdBu_r',
+        cmap='viridis',
         aspect='auto',
         vmin=vmin,
         vmax=vmax
     )
 
-    # Add colorbar
+    # Add colorbar (vertical)
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Mean ΔF1 (cfg-MedSyn - baseline)", rotation=270, labelpad=20)
+    cbar.set_label(r"Mean $\Delta$F1 ($M_2$ - baseline)", fontsize=PLOT_SETTINGS["axis_labelsize"], rotation=270, labelpad=20)
+    cbar.ax.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
 
     # Set ticks and labels
     ax.set_xticks(range(len(baselines)))
-    baseline_labels = {
-        "real_only": "M0: Real only",
-        "real_plus_trad_aug": "M1: Real+TradAug",
-        "real_plus_synth_distdiff": "M3: Real+DistDiff"
+    baseline_labels_map = {
+        "real_only": r"$M_0$",
+        "real_plus_trad_aug": r"$M_1$",
+        "real_plus_synth_distdiff": r"$M_3$"
     }
-    ax.set_xticklabels([baseline_labels.get(b, b) for b in baselines], rotation=45, ha='right')
+    ax.set_xticklabels([baseline_labels_map.get(b, b) for b in baselines], rotation=0, ha='center', fontsize=PLOT_SETTINGS["xtick_fontsize"])
 
-    ax.set_yticks(range(num_classes))
-    ax.set_yticklabels([f"Class {i}" for i in pivot_data.index])
+    ax.set_yticks(range(len(sorted_classes)))
+    ax.set_yticklabels([LABELS_SHORT.get(i, f"Class {i}") for i in sorted_classes], fontsize=PLOT_SETTINGS["ytick_fontsize"])
 
     # Annotate cells with mean_diff and significance stars
-    for i, class_idx in enumerate(pivot_data.index):
+    for i, class_idx in enumerate(sorted_classes):
         for j, baseline in enumerate(baselines):
             mean_diff = pivot_data.loc[class_idx, baseline]
+            std_diff = pivot_std.loc[class_idx, baseline]
             p_fdr = pivot_sig.loc[class_idx, baseline]
 
             if pd.notna(mean_diff):
                 # Determine text color based on background
-                text_color = 'white' if abs(mean_diff) > vmax * 0.5 else 'black'
+                # Viridis is dark at low values, light at high values.
+                norm_val = (mean_diff - vmin) / (vmax - vmin)
+                text_color = 'white' if norm_val < 0.6 else 'black'
 
                 # Add value
                 ax.text(
-                    j, i, f"{mean_diff:.3f}",
+                    j, i, f"{mean_diff:.3f}\n±{std_diff:.3f}",
                     ha='center', va='center',
                     color=text_color,
-                    fontsize=9
+                    fontsize=9,
+                    fontweight='bold'
                 )
 
                 # Add significance marker
-                if pd.notna(p_fdr) and p_fdr < 0.05:
-                    ax.text(
-                        j, i - 0.3, '*',
-                        ha='center', va='center',
-                        color='yellow',
-                        fontsize=16,
-                        fontweight='bold'
-                    )
+                if pd.notna(p_fdr):
+                    sig_marker = ""
+                    if p_fdr <= 0.001:
+                        sig_marker = "***"
+                    elif p_fdr <= 0.01:
+                        sig_marker = "**"
+                    elif p_fdr <= 0.05:
+                        sig_marker = "*"
+                    
+                    if sig_marker:
+                        ax.text(
+                            j, i - 0.35, sig_marker,
+                            ha='center', va='center',
+                            color=text_color,
+                            fontsize=14,
+                            fontweight='bold'
+                        )
 
-    ax.set_xlabel("Baseline regime compared to cfg-MedSyn")
-    ax.set_ylabel("PathMNIST class index")
+    ax.set_xlabel("Baseline regime", fontsize=PLOT_SETTINGS["xlabel_fontsize"])
     ax.set_title(
-        "Q2: Per-class F1 Improvement (cfg-MedSyn vs Baselines)\n"
-        "* indicates p_FDR < 0.05 (one-sample t-test, BH correction)",
-        fontsize=12,
+        r"Q2: Per-class F1 Improvement ($M_2$ vs Baselines)" + "\n" +
+        r"(* $p \leq 0.05$, ** $p \leq 0.01$, *** $p \leq 0.001$; FDR corrected)",
+        fontsize=PLOT_SETTINGS["title_fontsize"],
         fontweight='bold'
     )
 
