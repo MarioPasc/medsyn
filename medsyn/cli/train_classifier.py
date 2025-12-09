@@ -117,10 +117,27 @@ Examples:
         help="Logging level"
     )
 
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        help="Hugging Face token for authentication"
+    )
+
     args = parser.parse_args()
 
     # Set logging level
     logging.getLogger().setLevel(getattr(logging, args.log_level))
+
+    # Authenticate with Hugging Face if token provided
+    if args.hf_token:
+        try:
+            from huggingface_hub import login
+            login(token=args.hf_token)
+            logger.info("Successfully logged in to Hugging Face Hub")
+        except ImportError:
+            logger.error("huggingface_hub not installed. Cannot log in.")
+        except Exception as e:
+            logger.error(f"Failed to log in to Hugging Face Hub: {e}")
 
     # Check config file exists
     config_path = Path(args.config)

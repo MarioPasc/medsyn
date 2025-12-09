@@ -87,6 +87,12 @@ def main():
         type=str,
         help="Override device for all experiments (e.g., cuda:0)"
     )
+
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        help="Hugging Face token for authentication"
+    )
     
     args = parser.parse_args()
     
@@ -170,6 +176,9 @@ def main():
                 
                 if args.device:
                     cmd.extend(["--device", args.device])
+
+                if args.hf_token:
+                    cmd.extend(["--hf-token", args.hf_token])
 
                 if model == "clip_vit_b16" or model == "dinov3_vitb16":
                     cmd.extend(["--image_size", str(CLIP_IMAGE_SIZE)])
