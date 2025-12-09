@@ -134,7 +134,7 @@ class DINOv3ViTB16Classifier(BaseClassifier):
         logger.info("=" * 60)
 
         # Get DINOv3 configuration
-        dinov3_variant = getattr(self.config.model, 'dinov3_variant', 'dinov3_vitb14')
+        dinov3_variant = getattr(self.config.model, 'dinov3_variant', 'dinov3_vitb16')
         dinov3_repo = getattr(self.config.model, 'dinov3_repo', 'facebookresearch/dinov3')
 
         logger.info(f"Loading DINOv3 from PyTorch Hub...")

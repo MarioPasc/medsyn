@@ -12,7 +12,7 @@ model:
   dropout: 0.0  # Dropout before classification layer
 
   # DINOv3-specific settings (optional, accessed via getattr with defaults)
-  dinov3_variant: "dinov3_vitb14"  # PyTorch Hub model name
+  dinov3_variant: "dinov3_vitb16"  # PyTorch Hub model name
   dinov3_repo: "facebookresearch/dinov3"  # PyTorch Hub repo
 
 optimization:
