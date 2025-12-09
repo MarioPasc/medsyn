@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH -J log_Lion_Batch64
+#SBATCH -J log_gamma5_temp20
 #SBATCH --time=1-12:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
 #SBATCH --constraint=dgx
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --output=%x.%j.out
 #SBATCH --error=%x.%j.err
 
@@ -16,24 +16,24 @@ set -euo pipefail
 # ========================================================================
 
 # ---------- Inputs ----------
-EXPERIMENT_NAME="Lion_Batch64"
+EXPERIMENT_NAME="gamma5_temp20_training"
 
 DATA_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/pathmnist/PathMNIST.npz"
 REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/medsyn"
 RESULTS_DST="/mnt/home/users/tic_163_uma/mpascual/fscratch/results/${EXPERIMENT_NAME}"
 
 # Relative to REPO_SRC
-CONFIG_FILE="experiments/Lion_Batch64/config_Lion_Batch64.yaml"
-CONFIG_BACKUP="experiments/Lion_Batch64/config_Lion_Batch64.yaml.backup"
+CONFIG_FILE="experiments/gamma5_temp20/gamma5_temp20.yaml"
+CONFIG_BACKUP="experiments/gamma5_temp20/gamma5_temp20.yaml.backup"
 
 # Supercomputer mode: Disable tqdm, use structured logging for .out/.err files
 export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs
 
 # Important: Set CUDA environment variables for multi-GPU
 # Hardcoded number of GPUs for this job (must match --gres=gpu:N above)
-NUM_GPUS=2
+NUM_GPUS=1
 MEDSYN_DEBUG_DATALOADER=1
-export CUDA_VISIBLE_DEVICES=0,1  # Assuming 2 GPUs allocated by SLURM
+export CUDA_VISIBLE_DEVICES=0  # Assuming 1 GPU allocated by SLURM
 export NCCL_DEBUG=INFO  # For debugging distributed training (optional)
 
 echo "================================================================================"
