@@ -250,6 +250,9 @@ Examples:
         elif config.model.name == "wideresnet28_10":
             from medsyn.models.classification.engine.wideresnet_classifier import WideResNet28_10Classifier
             classifier = WideResNet28_10Classifier(config)
+        elif config.model.name == "dinov3_vitb16":
+            from medsyn.models.classification.engine.dinov3_classifier import DINOv3ViTB16Classifier
+            classifier = DINOv3ViTB16Classifier(config)
         else:
             logger.error(f"Unknown model: {config.model.name}")
             sys.exit(1)

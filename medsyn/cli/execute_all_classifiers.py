@@ -171,7 +171,7 @@ def main():
                 if args.device:
                     cmd.extend(["--device", args.device])
 
-                if model == "clip_vit_b16":
+                if model == "clip_vit_b16" or model == "dinov3_vitb16":
                     cmd.extend(["--image_size", str(CLIP_IMAGE_SIZE)])
                 
                 if args.dry_run:
