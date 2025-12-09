@@ -33,7 +33,15 @@ export IS_SUPERCOMPUTER=1  # Enables clean logging optimized for batch jobs
 # Hardcoded number of GPUs for this job (must match --gres=gpu:N above)
 NUM_GPUS=1
 MEDSYN_DEBUG_DATALOADER=1
-export CUDA_VISIBLE_DEVICES=0  # Assuming 1 GPU allocated by SLURM
+# Dynamic GPU assignment
+export CUDA_VISIBLE_DEVICES=0
+for i in {0..7}; do
+  if [[ -z $(nvidia-smi -i $i --query-compute-apps=pid --format=csv,noheader 2>/dev/null) ]] && nvidia-smi -i $i &>/dev/null; then
+    export CUDA_VISIBLE_DEVICES=$i
+    echo "✅ Auto-assigned to available GPU: $i"
+    break
+  fi
+done
 export NCCL_DEBUG=INFO  # For debugging distributed training (optional)
 
 echo "================================================================================"
