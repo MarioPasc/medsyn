@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Optimizer, AdamW, Adam, SGD
 from torch.optim.lr_scheduler import _LRScheduler, CosineAnnealingLR, StepLR
+from transformers import AutoModel
 
 from .base_classifier import BaseClassifier
 from ..config import ClassificationConfig
@@ -71,7 +72,17 @@ class DINOv3ClassificationWrapper(nn.Module):
             logits: [B, num_classes] classification logits
         """
         # Extract features from backbone
-        features = self.backbone(images)
+        outputs = self.backbone(images)
+
+        # Handle Hugging Face model output
+        if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+            features = outputs.pooler_output
+        elif hasattr(outputs, 'last_hidden_state'):
+            # Use CLS token (index 0) if pooler_output is not available
+            features = outputs.last_hidden_state[:, 0]
+        else:
+            # Assume it's a raw tensor (e.g. from torch.hub or timm)
+            features = outputs
 
         # Pass through classification head
         logits = self.head(features)
@@ -135,41 +146,40 @@ class DINOv3ViTB16Classifier(BaseClassifier):
 
         # Get DINOv3 configuration
         dinov3_variant = getattr(self.config.model, 'dinov3_variant', 'dinov3_vitb16')
-        dinov3_repo = getattr(self.config.model, 'dinov3_repo', 'facebookresearch/dinov3')
-
-        logger.info(f"Loading DINOv3 from PyTorch Hub...")
-        logger.info(f"  Repository: {dinov3_repo}")
-        logger.info(f"  Variant: {dinov3_variant}")
+        
+        # Map variant to HF model name
+        hf_model_name = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+        if dinov3_variant == "dinov3_vitb16":
+             hf_model_name = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+        
+        logger.info(f"Loading DINOv3 from Hugging Face Transformers...")
+        logger.info(f"  Model: {hf_model_name}")
         logger.info(f"  Pretrained: {self.config.model.pretrained}")
 
-        # Load pretrained DINOv3 model from PyTorch Hub
+        # Load pretrained DINOv3 model from Hugging Face
         try:
-            model = torch.hub.load(
-                dinov3_repo,
-                dinov3_variant,
-                pretrained=self.config.model.pretrained,
-                trust_repo=True
-            )
-            logger.info("DINOv3 model loaded successfully from PyTorch Hub")
+            model = AutoModel.from_pretrained(hf_model_name)
+            logger.info("DINOv3 model loaded successfully from Hugging Face")
         except Exception as e:
-            logger.error(f"Failed to load DINOv3 from PyTorch Hub: {e}")
+            logger.error(f"Failed to load DINOv3 from Hugging Face: {e}")
             raise RuntimeError(
-                f"Failed to load DINOv3 from PyTorch Hub.\n"
-                f"Repository: {dinov3_repo}\n"
-                f"Variant: {dinov3_variant}\n"
+                f"Failed to load DINOv3 from Hugging Face.\n"
+                f"Model: {hf_model_name}\n"
                 f"Error: {e}\n\n"
                 f"Troubleshooting:\n"
-                f"1. Check internet connection (PyTorch Hub downloads from GitHub)\n"
-                f"2. Try: torch.hub.list('{dinov3_repo}') to see available models\n"
-                f"3. Ensure timm is installed: pip install -e '.[distdiff]'\n"
-                f"4. Check https://github.com/facebookresearch/dinov3 for latest info"
+                f"1. Check internet connection\n"
+                f"2. Ensure transformers is installed: pip install transformers\n"
+                f"3. Check https://huggingface.co/{hf_model_name}"
             )
 
         # Inspect model structure to find embedding dimension
         logger.info("\nInspecting DINOv3 model structure...")
 
         # DINOv3 models typically have embed_dim attribute or can be inferred
-        if hasattr(model, 'embed_dim'):
+        if hasattr(model.config, 'hidden_size'):
+            embed_dim = model.config.hidden_size
+            logger.info(f"  Found hidden_size in config: {embed_dim}")
+        elif hasattr(model, 'embed_dim'):
             embed_dim = model.embed_dim
             logger.info(f"  Found embed_dim attribute: {embed_dim}")
         elif hasattr(model, 'num_features'):
