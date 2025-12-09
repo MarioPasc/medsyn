@@ -33,7 +33,7 @@ scheduler:
   gamma: 0.1  # LR decay factor
 
 training:
-  max_epochs: 25  # Same as ResNet50 and CLIP
+  max_epochs: 15  # Same as ResNet50 and CLIP
   early_stopping_patience: 10  # Same as CLIP
   grad_clip_norm: 1.0  # Gradient clipping
   mixed_precision: true  # torch.cuda.amp for memory efficiency
