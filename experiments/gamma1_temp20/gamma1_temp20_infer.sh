@@ -51,7 +51,7 @@ WORKDIR="${MYLOCALSCRATCH}/work"
 REPO_DIR="${WORKDIR}/medsyn"
 CKPT_DIR="${WORKDIR}/checkpoints"
 OUT_DIR="${WORKDIR}/generated"
-CONFIG_TEMP="${REPO_DIR}/experiments/AdamW_Batch64_lowt_enhancement_gamma5/config_AdamW_Batch64_lowt_enhancement_gamma5.yaml"
+CONFIG_TEMP="${REPO_DIR}/experiments/gamma1_temp20/gamma1_temp20.yaml"
 
 mkdir -p "${WORKDIR}" "${CKPT_DIR}" "${OUT_DIR}"
 
@@ -125,6 +125,36 @@ echo "==========================================================================
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader,nounits | \
   awk -F', ' 'NR<='"${NUM_GPUS}"' {printf "GPU %s: %s (%s MB total, %s MB free)\n", $1, $2, $3, $4}'
 echo "================================================================================"
+
+# ---------- Verify GPU Availability ----------
+echo ""
+echo "[→] Verifying allocated GPUs are available..."
+MIN_FREE_MEMORY_MB=8000  # Minimum 8GB free memory required per GPU
+GPU_CHECK_FAILED=0
+
+while IFS=', ' read -r gpu_idx gpu_name mem_total mem_free; do
+  if [ "$gpu_idx" -lt "$NUM_GPUS" ]; then
+    if [ "$mem_free" -lt "$MIN_FREE_MEMORY_MB" ]; then
+      echo "[⚠] GPU $gpu_idx: Only ${mem_free}MB free (need ${MIN_FREE_MEMORY_MB}MB minimum)"
+      GPU_CHECK_FAILED=1
+    else
+      echo "[✓] GPU $gpu_idx: ${mem_free}MB free - OK"
+    fi
+  fi
+done < <(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader,nounits)
+
+if [ "$GPU_CHECK_FAILED" -eq 1 ]; then
+  echo ""
+  echo "[ERROR] One or more GPUs do not have sufficient free memory!"
+  echo "        This may indicate GPUs are being used by other processes."
+  echo "        Consider:"
+  echo "          - Waiting for current jobs to complete"
+  echo "          - Requesting different GPU resources"
+  echo "          - Checking with 'nvidia-smi' for running processes"
+  echo ""
+  echo "Proceeding anyway (SLURM should have allocated dedicated GPUs)..."
+fi
+echo ""
 
 # ---------- Prepare Configuration ----------
 cd "${REPO_DIR}"
