@@ -1,0 +1,1108 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Animated anisotropy evolution visualization for ccDDPM latent spaces.
+
+This script creates animated GIF and MP4 visualizations showing how local anisotropy
+evolves across training epochs for different branches (unconditional, conditional, both).
+
+For each diffusion timestep T (e.g., 100, 500, 900):
+  - Creates an animation where each frame represents one epoch
+  - Each frame shows 1 row x 3 columns: uncond, cond, both branches
+  - The animation loops through epochs, showing temporal evolution
+  - Outputs both GIF and MP4 formats
+
+Usage example:
+    python medsyn/analysis/embeddings/anisotropy_evolution_animation.py \
+    --features_path /media/mpascual/Sandisk2TB1/research/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/embeddings \
+    --output_path /media/mpascual/Sandisk2TB1/research/medsyn/experiments/AdamW_Batch64_lowt_enhancement_gamma5/analysis/embeddings \
+    --max_epoch 60 \
+    --num_epochs_to_plot  \
+    --dim_reduction tsne \
+    --fps 1
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+from typing import Any, Optional, Tuple, List
+import tempfile
+import shutil
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from matplotlib.patches import Ellipse
+from scipy.stats import gaussian_kde
+import imageio.v2 as imageio
+from PIL import Image
+
+# Import functions from the single visualization script
+from medsyn.analysis.embeddings.anisotropy_single_visualization import (
+    compute_local_anisotropy,
+)
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+try:
+    import umap
+    UMAP_AVAILABLE = True
+except ImportError:
+    UMAP_AVAILABLE = False
+    logging.warning("UMAP not available. Install with: pip install umap-learn")
+
+
+# ---------------------------------------------------------------------------
+# Global plot settings
+# ---------------------------------------------------------------------------
+
+PLOT_SETTINGS = {
+    # ------------------------------------------------------------------
+    # Font and general figure settings
+    # ------------------------------------------------------------------
+    "font_family": "serif",                    # more "paper-like"
+    "font_serif": ["Times New Roman", "DejaVu Serif"],
+    "font_size": 9,                            # base size for rcParams
+
+    # Axis label / title sizes (aiming for journal-ready when shrunk)
+    "axes_labelsize": 8,
+    "axes_titlesize": 9,
+
+    # Axis spines
+    "axes_spine_width": 0.8,                   # you can loop over spines and set this
+    "axes_spine_color": "0.2",
+
+    # Tick settings
+    "tick_labelsize": 7,
+    "tick_major_width": 0.6,
+    "tick_minor_width": 0.4,
+    "tick_direction": "in",                    # ticks pointing inward looks cleaner
+    "tick_length_major": 3.5,
+    "tick_length_minor": 2.0,
+
+    # Legend settings
+    "legend_fontsize": 6.5,
+    "legend_framealpha": 0.9,
+    "legend_frameon": False,
+    "legend_edgecolor": "0.8",
+
+    # Grid settings (lighter and only major grid)
+    "grid_linestyle": ":",
+    "grid_alpha": 0.15,
+    "grid_linewidth": 0.4,
+
+    # Line settings
+    "line_width": 0.9,
+    "kde_line_width": 1.0,
+    "contour_line_width": 0.7,
+    "ellipse_line_width": 1.0,
+    "ellipse_alpha": 0.7,                       # set on the artists
+
+    # Scatter settings
+    "scatter_size_outside": 3,                  # small, unobtrusive
+    "scatter_size_inside": 8,                   # enough to see colors
+    "scatter_alpha_outside": 0.15,
+    "scatter_alpha_inside": 0.7,
+    "scatter_edgecolor": "none",                # avoids busy outlines
+
+    # Histogram settings (supporting, not dominating)
+    "hist_bins": 25,                            # slightly fewer bins
+    "hist_edgecolor": "0.5",
+    "hist_linewidth": 0.4,
+    "hist_color": "0.85",                       # light gray background bars
+    "hist_alpha": 0.9,
+
+    # KDE settings for marginals
+    "kde_resolution": 200,
+    "kde_color": "0.2",
+    "kde_alpha": 0.9,
+
+    # Marginal histogram settings
+    "marginal_bins": 25,
+
+    # Figure-level settings (use when building the figure)
+    "figure_facecolor": "white",
+    "axes_facecolor": "white",
+    "figure_dpi": 300,
+}
+
+
+LABELS_SHORT = {
+    0: "Adipose",
+    1: "Background",
+    2: "Debris",
+    3: "Lymphocytes",
+    4: "Mucus",
+    5: "Smooth\nMuscle",
+    6: "Normal\nMucosa",
+    7: "Cancer\nStroma",
+    8: "Colorectal\nEpithelium"
+}
+
+def apply_plot_settings():
+    """Apply global matplotlib settings from PLOT_SETTINGS dictionary."""
+    plt.rcParams.update({
+        'font.family': PLOT_SETTINGS['font_family'],
+        'font.serif': PLOT_SETTINGS['font_serif'],
+        'font.size': PLOT_SETTINGS['font_size'],
+        'axes.labelsize': PLOT_SETTINGS['axes_labelsize'],
+        'axes.titlesize': PLOT_SETTINGS['axes_titlesize'],
+        'axes.linewidth': PLOT_SETTINGS['axes_spine_width'],
+        'axes.edgecolor': PLOT_SETTINGS['axes_spine_color'],
+        'axes.facecolor': PLOT_SETTINGS['axes_facecolor'],
+        'xtick.labelsize': PLOT_SETTINGS['tick_labelsize'],
+        'ytick.labelsize': PLOT_SETTINGS['tick_labelsize'],
+        'xtick.major.width': PLOT_SETTINGS['tick_major_width'],
+        'xtick.minor.width': PLOT_SETTINGS['tick_minor_width'],
+        'xtick.major.size': PLOT_SETTINGS['tick_length_major'],
+        'xtick.minor.size': PLOT_SETTINGS['tick_length_minor'],
+        'xtick.direction': PLOT_SETTINGS['tick_direction'],
+        'ytick.major.width': PLOT_SETTINGS['tick_major_width'],
+        'ytick.minor.width': PLOT_SETTINGS['tick_minor_width'],
+        'ytick.major.size': PLOT_SETTINGS['tick_length_major'],
+        'ytick.minor.size': PLOT_SETTINGS['tick_length_minor'],
+        'ytick.direction': PLOT_SETTINGS['tick_direction'],
+        'legend.fontsize': PLOT_SETTINGS['legend_fontsize'],
+        'legend.framealpha': PLOT_SETTINGS['legend_framealpha'],
+        'legend.frameon': PLOT_SETTINGS['legend_frameon'],
+        'legend.edgecolor': PLOT_SETTINGS['legend_edgecolor'],
+        'lines.linewidth': PLOT_SETTINGS['line_width'],
+        'grid.linestyle': PLOT_SETTINGS['grid_linestyle'],
+        'grid.alpha': PLOT_SETTINGS['grid_alpha'],
+        'grid.linewidth': PLOT_SETTINGS['grid_linewidth'],
+        'figure.facecolor': PLOT_SETTINGS['figure_facecolor'],
+        'figure.dpi': PLOT_SETTINGS['figure_dpi'],
+        'savefig.dpi': PLOT_SETTINGS['figure_dpi'],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Utility functions
+# ---------------------------------------------------------------------------
+
+def get_available_epochs(features_path: Path) -> List[int]:
+    """
+    Scan the features_path directory for probe_features_epoch_XXXX.npz files
+    and extract the list of available epochs.
+
+    Parameters
+    ----------
+    features_path : Path
+        Directory containing probe_features_epoch_*.npz files.
+
+    Returns
+    -------
+    epochs : List[int]
+        Sorted list of available epoch numbers.
+    """
+    npz_files = list(features_path.glob("probe_features_epoch_*.npz"))
+    epochs = []
+    for f in npz_files:
+        try:
+            # Extract epoch number from filename: probe_features_epoch_0031.npz -> 31
+            epoch_str = f.stem.split("_")[-1]
+            epochs.append(int(epoch_str))
+        except (ValueError, IndexError):
+            logging.warning(f"Could not parse epoch from filename: {f.name}")
+            continue
+    return sorted(epochs)
+
+
+def get_available_timesteps(npz_path: Path) -> List[int]:
+    """
+    Load an NPZ file and extract the unique timesteps present.
+
+    Parameters
+    ----------
+    npz_path : Path
+        Path to a probe_features_epoch_*.npz file.
+
+    Returns
+    -------
+    timesteps : List[int]
+        Sorted list of unique timesteps.
+    """
+    data = np.load(npz_path, allow_pickle=True)
+    timesteps = data["timesteps"]
+    return sorted(np.unique(timesteps).tolist())
+
+
+def load_probe_features_2d_with_variance(
+    npz_path: str,
+    feature_layer: str,
+    feature_timestep: Optional[int],
+    feature_branch: str = "cond",
+    random_state: int = 42,
+    max_samples: Optional[int] = None,
+    dim_reduction: str = "pca",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load probe feature vectors from NPZ and reduce to 2D with specified method.
+    Returns variance explained ratios.
+
+    Parameters
+    ----------
+    npz_path : str
+        Path to probe_features_epoch_XXXX.npz.
+    feature_layer : str
+        Layer name to select.
+    feature_timestep : int or None
+        Timestep to select. If None, use median timestep.
+    feature_branch : {"cond", "uncond", "both"}, default "cond"
+        Which CFG branch to include.
+    random_state : int
+        Random seed for reproducibility.
+    max_samples : int or None
+        Optional maximum number of feature vectors to subsample.
+    dim_reduction : {"pca", "tsne", "umap"}, default "pca"
+        Dimensionality reduction method to use.
+
+    Returns
+    -------
+    Z : ndarray of shape (N, 2)
+        2D projection of selected features.
+    class_ids : ndarray of shape (N,)
+        Class IDs corresponding to each feature vector.
+    variance_ratio : ndarray of shape (2,)
+        Variance explained ratio for each component.
+    """
+    data = np.load(npz_path, allow_pickle=True)
+
+    features = data["features"]
+    class_ids = data["class_ids"]
+    timesteps = data["timesteps"]
+    layer_names = data["layer_names"]
+    branches = data["branches"]
+    feature_lengths = data.get("feature_lengths", None)
+
+    # Ensure string comparison works
+    layer_names = layer_names.astype(str)
+    branches = branches.astype(str)
+
+    # Decide timestep if not provided
+    unique_t = np.unique(timesteps)
+    if feature_timestep is None:
+        feature_timestep = int(np.median(unique_t))
+
+    # Build mask
+    mask = (layer_names == feature_layer) & (timesteps == feature_timestep)
+    if feature_branch.lower() in {"cond", "uncond"}:
+        mask &= (branches == feature_branch.lower())
+
+    if not np.any(mask):
+        raise ValueError(
+            f"No features found in {npz_path} for "
+            f"layer={feature_layer}, timestep={feature_timestep}, branch={feature_branch}."
+        )
+
+    sel_features = features[mask]
+    sel_class_ids = class_ids[mask]
+
+    # Recover original dimensionality if padded
+    if feature_lengths is not None:
+        sel_lengths = feature_lengths[mask]
+        d_orig = int(sel_lengths.max())
+        sel_features = sel_features[:, :d_orig]
+
+    # Optional subsampling
+    N = sel_features.shape[0]
+    if max_samples is not None and N > max_samples:
+        rng = np.random.default_rng(seed=random_state)
+        idx = rng.choice(N, size=max_samples, replace=False)
+        sel_features = sel_features[idx]
+        sel_class_ids = sel_class_ids[idx]
+
+    # Dimensionality reduction to 2D
+    if dim_reduction.lower() == "pca":
+        reducer = PCA(n_components=2, random_state=random_state)
+        Z = reducer.fit_transform(sel_features)
+        variance_ratio = reducer.explained_variance_ratio_
+
+    elif dim_reduction.lower() == "tsne":
+        reducer = TSNE(n_components=2, random_state=random_state, perplexity=30, max_iter=1000)
+        Z = reducer.fit_transform(sel_features)
+        # Calculate variance for each dimension
+        var_per_dim = np.var(Z, axis=0)
+        total_var = np.sum(var_per_dim)
+        variance_ratio = var_per_dim / total_var
+
+    elif dim_reduction.lower() == "umap":
+        if not UMAP_AVAILABLE:
+            raise ImportError("UMAP is not available. Install with: pip install umap-learn")
+        reducer = umap.UMAP(n_components=2, random_state=random_state, n_neighbors=15, min_dist=0.1)
+        Z = reducer.fit_transform(sel_features)
+        # Calculate variance for each dimension
+        var_per_dim = np.var(Z, axis=0)
+        total_var = np.sum(var_per_dim)
+        variance_ratio = var_per_dim / total_var
+
+    else:
+        raise ValueError(f"Unknown dimensionality reduction method: {dim_reduction}")
+
+    return Z, sel_class_ids, variance_ratio
+
+
+# ---------------------------------------------------------------------------
+# Plotting function with marginal distributions
+# ---------------------------------------------------------------------------
+
+def plot_anisotropy_with_marginals(
+    fig: plt.Figure,
+    position: gridspec.SubplotSpec,
+    Z: np.ndarray,
+    anisotropy_result: dict[str, Any],
+    xlim: Tuple[float, float],
+    ylim: Tuple[float, float],
+    pca_var: np.ndarray,
+    conf_level: float = 0.95,
+    class_ids: Optional[np.ndarray] = None,
+    grid_res: int = 80,
+    show_legend: bool = False,
+    dim_reduction: str = "pca",
+) -> Tuple[plt.Axes, plt.Axes, plt.Axes]:
+    """
+    Plot anisotropy visualization with marginal distributions in a jointplot style.
+
+    Parameters
+    ----------
+    fig : matplotlib Figure
+        The figure to plot on.
+    position : gridspec.SubplotSpec
+        The position in the parent gridspec.
+    Z : ndarray of shape (N, 2)
+        2D latent coordinates.
+    anisotropy_result : dict
+        Output of compute_local_anisotropy.
+    xlim : tuple of (xmin, xmax)
+        X-axis limits (fixed for all subplots).
+    ylim : tuple of (ymin, ymax)
+        Y-axis limits (fixed for all subplots).
+    pca_var : ndarray of shape (2,)
+        Variance explained ratios for each component.
+    conf_level : float, default 0.95
+        Confidence level for high-density region.
+    class_ids : ndarray or None
+        Optional class labels for coloring.
+    grid_res : int, default 80
+        Resolution of KDE grid for contours.
+    show_legend : bool, default False
+        Whether to show legend on this subplot.
+    dim_reduction : str, default "pca"
+        Dimensionality reduction method used.
+
+    Returns
+    -------
+    ax_main, ax_top, ax_right : matplotlib Axes
+        The three axes created.
+    """
+    # Create sub-gridspec for this subplot
+    gs = gridspec.GridSpecFromSubplotSpec(
+        2, 2,
+        subplot_spec=position,
+        width_ratios=[4, 1],
+        height_ratios=[1, 4],
+        hspace=0.02,
+        wspace=0.02,
+    )
+
+    ax_main = fig.add_subplot(gs[1, 0])
+    ax_top = fig.add_subplot(gs[0, 0], sharex=ax_main)
+    ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
+    ax_corner = fig.add_subplot(gs[0, 1])
+    ax_corner.axis("off")
+
+    kde = anisotropy_result["kde"]
+    density = anisotropy_result["density"]
+    thr = anisotropy_result["threshold"]
+    high_idx = anisotropy_result["high_idx"]
+    regions = anisotropy_result["regions"]
+
+    x = Z[:, 0]
+    y = Z[:, 1]
+
+    # Use fixed limits
+    x_min, x_max = xlim
+    y_min, y_max = ylim
+
+    # Grid for contours
+    xx, yy = np.meshgrid(
+        np.linspace(x_min, x_max, grid_res),
+        np.linspace(y_min, y_max, grid_res),
+    )
+    grid_points = np.vstack([xx.ravel(), yy.ravel()])
+    zz = kde(grid_points).reshape(xx.shape)
+
+    # Main plot: Scatter
+    if class_ids is None:
+        ax_main.scatter(
+            x[~high_idx], y[~high_idx],
+            s=PLOT_SETTINGS["scatter_size_outside"],
+            color="black",
+            alpha=PLOT_SETTINGS["scatter_alpha_outside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
+            label="Sample",
+        )
+        ax_main.scatter(
+            x[high_idx], y[high_idx],
+            s=PLOT_SETTINGS["scatter_size_inside"],
+            color="blue",
+            alpha=PLOT_SETTINGS["scatter_alpha_inside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
+            label=f"{int(100 * conf_level)}% high-density",
+        )
+    else:
+        ax_main.scatter(
+            x[~high_idx], y[~high_idx],
+            s=PLOT_SETTINGS["scatter_size_outside"],
+            color="lightgray",
+            alpha=PLOT_SETTINGS["scatter_alpha_outside"],
+            edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
+            label="Outside high-density",
+        )
+        cmap = plt.get_cmap("tab10")
+        unique_classes = np.unique(class_ids)
+        for i, cls in enumerate(unique_classes):
+            mask = (class_ids == cls) & high_idx
+            if not np.any(mask):
+                continue
+            
+            # Use short label if available
+            label_text = LABELS_SHORT.get(cls, f"class {cls}")
+            # Replace newlines with spaces for legend
+            label_text = label_text.replace("\n", " ")
+            
+            ax_main.scatter(
+                x[mask], y[mask],
+                s=PLOT_SETTINGS["scatter_size_inside"],
+                alpha=PLOT_SETTINGS["scatter_alpha_inside"],
+                color=cmap(i % 10),
+                edgecolors=PLOT_SETTINGS["scatter_edgecolor"],
+                label=label_text,
+            )
+
+    # KDE contours
+    levels = np.linspace(zz.min(), zz.max(), 4)[1:]
+    ax_main.contour(
+        xx, yy, zz,
+        levels=levels,
+        colors="black",
+        linewidths=PLOT_SETTINGS["contour_line_width"],
+        alpha=0.4
+    )
+
+    # High-density contour
+    ax_main.contour(
+        xx, yy, zz,
+        levels=[thr],
+        colors="blue",
+        linestyles="--",
+        linewidths=PLOT_SETTINGS["contour_line_width"],
+    )
+
+    # Anisotropy ellipses and arrows
+    for i, reg in enumerate(regions, start=1):
+        center = reg["center"]
+        eigvals = reg["eigvals"]
+        eigvecs = reg["eigvecs"]
+        beta = reg["beta"]
+
+        width = 2.0 * np.sqrt(eigvals[0])
+        height = 2.0 * np.sqrt(eigvals[1])
+        angle = np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0]))
+        ell = Ellipse(
+            xy=center, width=width, height=height, angle=angle,
+            edgecolor="red", facecolor="none",
+            lw=PLOT_SETTINGS["ellipse_line_width"],
+            alpha=PLOT_SETTINGS["ellipse_alpha"],
+        )
+        ax_main.add_patch(ell)
+
+        direction = eigvecs[:, 0]
+        ax_main.arrow(
+            center[0], center[1],
+            direction[0] * width * 0.5, direction[1] * width * 0.5,
+            head_width=0.06 * width, head_length=0.06 * width,
+            fc="red", ec="red", length_includes_head=True,
+        )
+        ax_main.text(
+            center[0], center[1],
+            rf"$\beta_{{{i}}}={beta:.1f}$",
+            color="red", fontsize=PLOT_SETTINGS["legend_fontsize"],
+            ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.7),
+        )
+
+    # Set axis labels with variance explained
+    # Create appropriate labels based on dimensionality reduction method
+    method_prefix = dim_reduction.upper()
+    if dim_reduction.lower() == "pca":
+        xlabel = f"PC1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"PC2 ({pca_var[1]*100:.1f}%)"
+    elif dim_reduction.lower() == "tsne":
+        xlabel = f"t-SNE 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"t-SNE 2 ({pca_var[1]*100:.1f}%)"
+    elif dim_reduction.lower() == "umap":
+        xlabel = f"UMAP 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"UMAP 2 ({pca_var[1]*100:.1f}%)"
+    else:
+        xlabel = f"Dim 1 ({pca_var[0]*100:.1f}%)"
+        ylabel = f"Dim 2 ({pca_var[1]*100:.1f}%)"
+
+    ax_main.set_xlabel(
+        xlabel,
+        fontsize=PLOT_SETTINGS["axes_labelsize"],
+        fontweight='bold'
+    )
+    ax_main.set_ylabel(
+        ylabel,
+        fontsize=PLOT_SETTINGS["axes_labelsize"],
+        fontweight='bold'
+    )
+    ax_main.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
+    ax_main.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
+    ax_main.set_xlim(x_min, x_max)
+    ax_main.set_ylim(y_min, y_max)
+
+    if show_legend:
+        ax_main.legend(
+            loc="upper right",
+            fontsize=PLOT_SETTINGS["legend_fontsize"],
+            ncol=2
+        )
+
+    # Top histogram (x marginal)
+    ax_top.hist(
+        x,
+        bins=PLOT_SETTINGS["marginal_bins"],
+        density=False,
+        color=PLOT_SETTINGS["hist_color"],
+        edgecolor=PLOT_SETTINGS["hist_edgecolor"],
+        linewidth=PLOT_SETTINGS["hist_linewidth"],
+        alpha=PLOT_SETTINGS["hist_alpha"],
+    )
+    # KDE overlay on histogram
+    kde_x = gaussian_kde(x)
+    xs = np.linspace(x_min, x_max, PLOT_SETTINGS["kde_resolution"])
+    # Calculate bin width for proper scaling
+    bin_width_x = (x_max - x_min) / PLOT_SETTINGS["marginal_bins"]
+    ax_top.plot(
+        xs,
+        kde_x(xs) * len(x) * bin_width_x,
+        color=PLOT_SETTINGS["kde_color"],
+        linewidth=PLOT_SETTINGS["kde_line_width"],
+        alpha=PLOT_SETTINGS["kde_alpha"],
+    )
+    ax_top.set_ylabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
+    ax_top.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelbottom=False)
+    ax_top.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
+
+    # Right histogram (y marginal)
+    ax_right.hist(
+        y,
+        bins=PLOT_SETTINGS["marginal_bins"],
+        density=False,
+        orientation="horizontal",
+        color=PLOT_SETTINGS["hist_color"],
+        edgecolor=PLOT_SETTINGS["hist_edgecolor"],
+        linewidth=PLOT_SETTINGS["hist_linewidth"],
+        alpha=PLOT_SETTINGS["hist_alpha"],
+    )
+    # KDE overlay on histogram
+    kde_y = gaussian_kde(y)
+    ys = np.linspace(y_min, y_max, PLOT_SETTINGS["kde_resolution"])
+    # Calculate bin width for proper scaling
+    bin_width_y = (y_max - y_min) / PLOT_SETTINGS["marginal_bins"]
+    ax_right.plot(
+        kde_y(ys) * len(y) * bin_width_y,
+        ys,
+        color=PLOT_SETTINGS["kde_color"],
+        linewidth=PLOT_SETTINGS["kde_line_width"],
+        alpha=PLOT_SETTINGS["kde_alpha"],
+    )
+    ax_right.set_xlabel("Count", fontsize=PLOT_SETTINGS["axes_labelsize"], fontweight='bold')
+    ax_right.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"], labelleft=False)
+    ax_right.grid(
+        True,
+        linestyle=PLOT_SETTINGS["grid_linestyle"],
+        alpha=PLOT_SETTINGS["grid_alpha"],
+        linewidth=PLOT_SETTINGS["grid_linewidth"]
+    )
+
+    return ax_main, ax_top, ax_right
+
+
+# ---------------------------------------------------------------------------
+# Main plotting functions for animation
+# ---------------------------------------------------------------------------
+
+def plot_single_epoch_frame(
+    all_data: dict,
+    epoch: int,
+    feature_layer: str,
+    timestep: int,
+    xlim: Tuple[float, float],
+    ylim: Tuple[float, float],
+    conf_level: float,
+    dim_reduction: str,
+) -> Tuple[plt.Figure, list, list]:
+    """
+    Create a single frame showing three branches horizontally for one epoch.
+
+    Parameters
+    ----------
+    all_data : dict
+        Dictionary with (branch, epoch) keys containing (Z, class_ids, pca_var, result) tuples.
+    epoch : int
+        Epoch number for this frame.
+    feature_layer : str
+        Layer name being visualized.
+    timestep : int
+        Diffusion timestep being visualized.
+    xlim : tuple of (xmin, xmax)
+        X-axis limits (fixed for all subplots).
+    ylim : tuple of (ymin, ymax)
+        Y-axis limits (fixed for all subplots).
+    conf_level : float
+        Confidence level for high-density region.
+    dim_reduction : str
+        Dimensionality reduction method used.
+
+    Returns
+    -------
+    fig : matplotlib Figure
+        The created figure.
+    handles : list
+        Legend handles from the first subplot.
+    labels : list
+        Legend labels from the first subplot.
+    """
+    branches = ["uncond", "cond", "both"]
+    n_branches = len(branches)
+
+    # Create figure with 1 row x 3 columns
+    fig = plt.figure(figsize=(15, 5))  # Wide figure for horizontal layout
+    gs = gridspec.GridSpec(
+        1,  # 1 row
+        n_branches,  # 3 columns
+        figure=fig,
+        hspace=0.25,
+        wspace=0.25,
+    )
+
+    # Track handles and labels for shared legend
+    all_handles = []
+    all_labels = []
+
+    for col_idx, branch in enumerate(branches):
+        key = (branch, epoch)
+        if key not in all_data:
+            logging.warning(f"Missing data for branch={branch}, epoch={epoch}")
+            continue
+
+        Z, class_ids, pca_var, result = all_data[key]
+
+        # Create subplot with marginals
+        try:
+            ax_main, ax_top, ax_right = plot_anisotropy_with_marginals(
+                fig=fig,
+                position=gs[0, col_idx],
+                Z=Z,
+                anisotropy_result=result,
+                xlim=xlim,
+                ylim=ylim,
+                pca_var=pca_var,
+                conf_level=conf_level,
+                class_ids=class_ids,
+                show_legend=False,
+                dim_reduction=dim_reduction,
+            )
+
+            # Collect legend info from first subplot only
+            if col_idx == 0 and not all_handles:
+                handles, labels = ax_main.get_legend_handles_labels()
+                all_handles = handles
+                all_labels = labels
+
+            # Set branch title on top of each column
+            ax_top.set_title(
+                f"{branch.capitalize()}",
+                fontsize=PLOT_SETTINGS["axes_titlesize"] + 2,
+                fontweight='bold',
+                pad=5
+            )
+
+        except Exception as e:
+            logging.error(
+                f"Error plotting epoch={epoch}, branch={branch}, timestep={timestep}: {e}"
+            )
+            continue
+
+    # Add shared legend at the bottom center
+    if all_handles:
+        fig.legend(
+            all_handles,
+            all_labels,
+            loc='lower center',
+            ncol=min(len(all_labels), 5),
+            fontsize=PLOT_SETTINGS["legend_fontsize"] + 2,
+            bbox_to_anchor=(0.5, -0.02),
+            frameon=PLOT_SETTINGS["legend_frameon"],
+            framealpha=PLOT_SETTINGS["legend_framealpha"],
+        )
+
+    # Overall title with epoch number
+    fig.suptitle(
+        f"Epoch {epoch} | Layer={feature_layer}, Timestep={timestep}",
+        fontsize=PLOT_SETTINGS["font_size"] + 4,
+        fontweight='bold',
+        y=0.98,
+    )
+
+    return fig, all_handles, all_labels
+
+
+def create_animation_from_frames(
+    features_path: Path,
+    output_path: Path,
+    feature_layer: str,
+    timestep: int,
+    epochs_to_plot: List[int],
+    conf_level: float = 0.95,
+    eps: float = 0.2,
+    min_samples: int = 10,
+    random_state: int = 42,
+    max_features: Optional[int] = None,
+    dim_reduction: str = "pca",
+    fps: float = 1.0,
+) -> None:
+    """
+    Create animated GIF and MP4 showing anisotropy evolution across epochs.
+
+    Parameters
+    ----------
+    features_path : Path
+        Directory containing probe_features_epoch_*.npz files.
+    output_path : Path
+        Output directory for animations.
+    feature_layer : str
+        Layer name to visualize.
+    timestep : int
+        Diffusion timestep to visualize.
+    epochs_to_plot : List[int]
+        List of epoch numbers to plot (frames).
+    conf_level : float, default 0.95
+        High-density probability mass.
+    eps : float, default 0.2
+        DBSCAN eps parameter.
+    min_samples : int, default 10
+        DBSCAN min_samples parameter.
+    random_state : int, default 42
+        Random seed.
+    max_features : int or None
+        Optional cap on number of feature vectors.
+    dim_reduction : str, default "pca"
+        Dimensionality reduction method ("pca", "tsne", or "umap").
+    fps : float, default 1.0
+        Frames per second for the animation.
+    """
+    branches = ["uncond", "cond", "both"]
+
+    # FIRST PASS: Load all data and compute global limits
+    logging.info(f"First pass: loading all data to compute global limits...")
+    all_data = {}
+    x_min_global, x_max_global = np.inf, -np.inf
+    y_min_global, y_max_global = np.inf, -np.inf
+
+    for branch in branches:
+        for epoch in epochs_to_plot:
+            npz_file = features_path / f"probe_features_epoch_{epoch:04d}.npz"
+            if not npz_file.exists():
+                logging.warning(f"File not found: {npz_file}, skipping...")
+                continue
+
+            try:
+                Z, class_ids, pca_var = load_probe_features_2d_with_variance(
+                    npz_path=str(npz_file),
+                    feature_layer=feature_layer,
+                    feature_timestep=timestep,
+                    feature_branch=branch,
+                    random_state=random_state,
+                    max_samples=max_features,
+                    dim_reduction=dim_reduction,
+                )
+
+                result = compute_local_anisotropy(
+                    Z,
+                    conf_level=conf_level,
+                    eps=eps,
+                    min_samples=min_samples,
+                )
+
+                # Store for later
+                all_data[(branch, epoch)] = (Z, class_ids, pca_var, result)
+
+                # Update global limits
+                x_min_global = min(x_min_global, Z[:, 0].min())
+                x_max_global = max(x_max_global, Z[:, 0].max())
+                y_min_global = min(y_min_global, Z[:, 1].min())
+                y_max_global = max(y_max_global, Z[:, 1].max())
+
+            except Exception as e:
+                logging.error(
+                    f"Error loading epoch={epoch}, branch={branch}, timestep={timestep}: {e}"
+                )
+                continue
+
+    if not all_data:
+        logging.error("No data loaded successfully. Cannot create animation.")
+        return
+
+    # Add margin to global limits
+    margin = 0.1
+    dx = x_max_global - x_min_global
+    dy = y_max_global - y_min_global
+    x_min_global -= margin * dx
+    x_max_global += margin * dx
+    y_min_global -= margin * dy
+    y_max_global += margin * dy
+
+    logging.info(f"Global limits: x=[{x_min_global:.2f}, {x_max_global:.2f}], y=[{y_min_global:.2f}, {y_max_global:.2f}]")
+
+    # SECOND PASS: Create frames
+    logging.info(f"Creating {len(epochs_to_plot)} frames...")
+    temp_dir = tempfile.mkdtemp()
+    frame_files = []
+
+    try:
+        for frame_idx, epoch in enumerate(epochs_to_plot):
+            logging.info(f"  Creating frame {frame_idx + 1}/{len(epochs_to_plot)} (epoch {epoch})...")
+
+            fig, handles, labels = plot_single_epoch_frame(
+                all_data=all_data,
+                epoch=epoch,
+                feature_layer=feature_layer,
+                timestep=timestep,
+                xlim=(x_min_global, x_max_global),
+                ylim=(y_min_global, y_max_global),
+                conf_level=conf_level,
+                dim_reduction=dim_reduction,
+            )
+
+            # Save frame
+            frame_file = Path(temp_dir) / f"frame_{frame_idx:04d}.png"
+            fig.savefig(frame_file, dpi=PLOT_SETTINGS["figure_dpi"], bbox_inches='tight')
+            plt.close(fig)
+            frame_files.append(str(frame_file))
+
+        # Load images and resize to consistent dimensions
+        logging.info("Loading and normalizing frame sizes...")
+        images = [imageio.imread(f) for f in frame_files]
+
+        # Find maximum dimensions
+        max_height = max(img.shape[0] for img in images)
+        max_width = max(img.shape[1] for img in images)
+        logging.info(f"Target dimensions: {max_width}x{max_height}")
+
+        # Resize all images to the same dimensions
+        normalized_images = []
+        for img in images:
+            if img.shape[0] != max_height or img.shape[1] != max_width:
+                # Use PIL to resize
+                pil_img = Image.fromarray(img)
+                pil_img = pil_img.resize((max_width, max_height), Image.LANCZOS)
+                normalized_images.append(np.array(pil_img))
+            else:
+                normalized_images.append(img)
+
+        # Create GIF
+        logging.info("Creating GIF animation...")
+        gif_output = output_path / f"anisotropy_animation_t{timestep}_{feature_layer.replace('.', '_')}.gif"
+
+        duration = 1.0 / fps  # Duration per frame in seconds
+        imageio.mimsave(gif_output, normalized_images, duration=duration, loop=0)  # loop=0 means infinite loop
+        logging.info(f"Saved GIF: {gif_output}")
+
+        # Create MP4
+        logging.info("Creating MP4 video...")
+        mp4_output = output_path / f"anisotropy_animation_t{timestep}_{feature_layer.replace('.', '_')}.mp4"
+
+        imageio.mimsave(mp4_output, normalized_images, fps=fps, codec='libx264', quality=8)
+        logging.info(f"Saved MP4: {mp4_output}")
+
+    finally:
+        # Clean up temporary files
+        logging.info("Cleaning up temporary files...")
+        shutil.rmtree(temp_dir)
+
+
+# ---------------------------------------------------------------------------
+# Main function
+# ---------------------------------------------------------------------------
+
+def main():
+    # Apply global plot settings
+    apply_plot_settings()
+
+    parser = argparse.ArgumentParser(
+        description="Animated anisotropy evolution visualization for ccDDPM latent spaces."
+    )
+    parser.add_argument(
+        "--features_path",
+        type=str,
+        required=True,
+        help="Directory containing probe_features_epoch_*.npz files.",
+    )
+    parser.add_argument(
+        "--output_path",
+        type=str,
+        required=True,
+        help="Output directory for figures.",
+    )
+    parser.add_argument(
+        "--feature_layer",
+        type=str,
+        default="unet.mid_block",
+        help="Layer name to visualize (e.g., 'class_embed', 'unet.mid_block').",
+    )
+    parser.add_argument(
+        "--max_epoch",
+        type=int,
+        default=None,
+        help="Maximum epoch to consider. If None, use the highest available epoch.",
+    )
+    parser.add_argument(
+        "--num_epochs_to_plot",
+        type=int,
+        default=10,
+        help="Number of epochs to plot (will be evenly spaced from 0 to max_epoch).",
+    )
+    parser.add_argument(
+        "--timesteps",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Specific timesteps to plot (e.g., 100 500 900). If None, auto-detect from first NPZ.",
+    )
+    parser.add_argument(
+        "--conf_level",
+        type=float,
+        default=0.95,
+        help="High-density probability mass (default 0.95).",
+    )
+    parser.add_argument(
+        "--eps",
+        type=float,
+        default=0.2,
+        help="DBSCAN eps parameter.",
+    )
+    parser.add_argument(
+        "--min_samples",
+        type=int,
+        default=10,
+        help="DBSCAN min_samples parameter.",
+    )
+    parser.add_argument(
+        "--random_state",
+        type=int,
+        default=42,
+        help="Random seed.",
+    )
+    parser.add_argument(
+        "--max_features",
+        type=int,
+        default=None,
+        help="Optional cap on number of feature vectors (for speed).",
+    )
+    parser.add_argument(
+        "--dim_reduction",
+        type=str,
+        default="pca",
+        choices=["pca", "tsne", "umap"],
+        help="Dimensionality reduction method to use (default: pca).",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=1.0,
+        help="Frames per second for the animation (default: 1.0 = 1 second per frame).",
+    )
+
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s - %(message)s",
+    )
+
+    features_path = Path(args.features_path)
+    output_path = Path(args.output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Get available epochs
+    available_epochs = get_available_epochs(features_path)
+    if not available_epochs:
+        raise ValueError(f"No probe_features_epoch_*.npz files found in {features_path}")
+
+    logging.info(f"Found {len(available_epochs)} epochs: {available_epochs}")
+
+    # Determine max epoch
+    if args.max_epoch is None:
+        max_epoch = max(available_epochs)
+    else:
+        max_epoch = args.max_epoch
+
+    # Select epochs to plot (evenly spaced from 0 to max_epoch)
+    epochs_to_plot = np.linspace(0, max_epoch, args.num_epochs_to_plot, dtype=int).tolist()
+    # Filter to only include available epochs
+    epochs_to_plot = [e for e in epochs_to_plot if e in available_epochs]
+
+    if not epochs_to_plot:
+        raise ValueError("No valid epochs to plot after filtering.")
+
+    logging.info(f"Epochs to plot: {epochs_to_plot}")
+
+    # Determine timesteps
+    if args.timesteps is None:
+        # Auto-detect from first available NPZ
+        first_npz = features_path / f"probe_features_epoch_{available_epochs[0]:04d}.npz"
+        timesteps = get_available_timesteps(first_npz)
+        logging.info(f"Auto-detected timesteps: {timesteps}")
+    else:
+        timesteps = args.timesteps
+        logging.info(f"Using specified timesteps: {timesteps}")
+
+    # Generate animations for each timestep
+    for timestep in timesteps:
+        logging.info(f"Processing timestep {timestep}...")
+        create_animation_from_frames(
+            features_path=features_path,
+            output_path=output_path,
+            feature_layer=args.feature_layer,
+            timestep=timestep,
+            epochs_to_plot=epochs_to_plot,
+            conf_level=args.conf_level,
+            eps=args.eps,
+            min_samples=args.min_samples,
+            random_state=args.random_state,
+            max_features=args.max_features,
+            dim_reduction=args.dim_reduction,
+            fps=args.fps,
+        )
+
+    logging.info("Done! Animations saved.")
+
+
+if __name__ == "__main__":
+    main()

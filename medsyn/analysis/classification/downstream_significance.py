@@ -29,7 +29,7 @@ import json
 import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,7 @@ from scipy.stats import ttest_rel, ttest_1samp, t as t_dist
 from statsmodels.stats.multitest import multipletests
 import matplotlib.pyplot as plt
 import matplotlib
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 matplotlib.use('Agg')
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,12 @@ PLOT_SETTINGS["grid_alpha"] = 0.7
 PLOT_SETTINGS["grid_linewidth"] = 0.6
 apply_plot_settings()
 
+IMG_SETTINGS = {
+    "zoom": 0.75,
+    "pad": 60,
+    "x_offset": -0.02
+}
+
 LABELS_SHORT = {
     0: "Adipose",
     1: "Background",
@@ -65,6 +72,48 @@ LABELS_SHORT = {
     7: "Cancer Stroma",
     8: "Colorectal Epithelium"
 }
+
+# ============================================================================
+# Image Helpers
+# ============================================================================
+
+def load_npz_images(npz_path: Path) -> Dict:
+    """Load images and labels from custom NPZ."""
+    data = np.load(str(npz_path))
+    result = {}
+    for split in ['train', 'val', 'test']:
+        imgs = data[f"{split}_images"]
+        lbls = data[f"{split}_labels"].astype(np.int64).reshape(-1)
+        if imgs.ndim == 3:  # [N,H,W] -> [N,H,W,1]
+            imgs = imgs[..., np.newaxis]
+        result[split] = {'images': imgs, 'labels': lbls}
+    return result
+
+def ensure_rgb(img: np.ndarray) -> np.ndarray:
+    """Convert [H,W,1] to RGB by replication; pass [H,W,3] through."""
+    if img.ndim != 3:
+        raise ValueError(f"Expected [H,W,C], got {img.shape}")
+    if img.shape[2] == 1:
+        return np.repeat(img, 3, axis=2)
+    if img.shape[2] == 3:
+        return img
+    raise ValueError(f"Unsupported channels: {img.shape[2]}")
+
+def pick_random_image(npz_data: Dict, cls: int, rng: np.random.RandomState) -> np.ndarray:
+    """Pick a random image belonging to class cls from train, then val, then test."""
+    pools = []
+    for split in ['train', 'val', 'test']:
+        split_data = npz_data[split]
+        idx = np.where(split_data['labels'] == cls)[0]
+        if idx.size:
+            pools.append(split_data['images'][idx])
+    if not pools:
+        logger.warning(f"No images found for class {cls}. Using zero placeholder.")
+        return np.zeros((28, 28, 3), dtype=np.uint8)
+    pool = np.concatenate(pools, axis=0)
+    img = pool[rng.randint(0, pool.shape[0])]
+    return ensure_rgb(img)
+
 # ============================================================================
 # Custom Exceptions
 # ============================================================================
@@ -98,6 +147,7 @@ class DownstreamAnalysisConfig:
     experiments: List[str]
     our_experiment_name: str
     output_dir: Path
+    dataset_npz: Optional[Path] = None
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -1030,6 +1080,15 @@ def plot_per_class_improvement(
     cbar.set_label(r"Mean $\Delta$F1 ($M_2$ - baseline)", fontsize=PLOT_SETTINGS["axis_labelsize"], rotation=270, labelpad=20)
     cbar.ax.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
 
+    # Load images if available
+    npz_data = None
+    if config.dataset_npz and config.dataset_npz.exists():
+        try:
+            npz_data = load_npz_images(config.dataset_npz)
+            logger.info(f"Loaded images from {config.dataset_npz}")
+        except Exception as e:
+            logger.warning(f"Failed to load NPZ images: {e}")
+
     # Set ticks and labels
     ax.set_xticks(range(len(baselines)))
     baseline_labels_map = {
@@ -1041,6 +1100,23 @@ def plot_per_class_improvement(
 
     ax.set_yticks(range(len(sorted_classes)))
     ax.set_yticklabels([LABELS_SHORT.get(i, f"Class {i}") for i in sorted_classes], fontsize=PLOT_SETTINGS["ytick_fontsize"])
+
+    if npz_data:
+        ax.tick_params(axis='y', pad=IMG_SETTINGS["pad"])
+        rng = np.random.RandomState(42)
+        
+        for i, class_idx in enumerate(sorted_classes):
+            img = pick_random_image(npz_data, class_idx, rng)
+            imagebox = OffsetImage(img, zoom=IMG_SETTINGS["zoom"])
+            ab = AnnotationBbox(
+                imagebox, 
+                (IMG_SETTINGS["x_offset"], i),
+                xycoords=('axes fraction', 'data'),
+                box_alignment=(1, 0.5),
+                frameon=False,
+                pad=0
+            )
+            ax.add_artist(ab)
 
     # Annotate cells with mean_diff and significance stars
     for i, class_idx in enumerate(sorted_classes):
@@ -1290,6 +1366,12 @@ Example:
         help="Output directory for saving results"
     )
     parser.add_argument(
+        "--dataset-npz",
+        type=Path,
+        default=None,
+        help="Path to NPZ dataset for class images"
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -1314,7 +1396,8 @@ Example:
         backbones=args.backbones,
         experiments=args.experiments,
         our_experiment_name=args.our_experiment,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        dataset_npz=args.dataset_npz
     )
 
     # Run analysis
