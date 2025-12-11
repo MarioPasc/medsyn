@@ -20,6 +20,15 @@ Usage:
         --experiments real_only real_plus_trad_aug real_plus_synth_cfgmedsyn real_plus_synth_distdiff \
         --our-experiment real_plus_synth_cfgmedsyn \
         --output-dir /media/mpascual/Sandisk2TB1/research/medsyn/results/downstream_analysis_test
+        
+    python -m medsyn.analysis.classification.downstream_significance \
+        --root-results-dir /media/mpascual/Sandisk2TB/research/medsyn/results/classification \
+        --dataset pathmnist \
+        --primary-metric f1 \
+        --backbones resnet50 clip_vit_b16 dinov3 \
+        --experiments real_only real_plus_trad_aug real_plus_synth_distdiff real_plus_synth_cfgmedsyn \
+        --our-experiment real_plus_synth_cfgmedsyn \
+        --output-dir /media/mpascual/Sandisk2TB/research/medsyn/results/downstream_analysis_test
 """
 
 from __future__ import annotations
@@ -861,14 +870,15 @@ def plot_global_metric(
     exp_labels = {
         "real_only": r"$M_0$",
         "real_plus_trad_aug": r"$M_1$",
-        "real_plus_synth_cfgmedsyn": r"$M_2$",
-        "real_plus_synth_distdiff": r"$M_3$"
+        "real_plus_synth_distdiff": r"$M_2$",
+        "real_plus_synth_cfgmedsyn": r"$M_3$"
     }
 
     backbone_names = {
         "resnet50": "ResNet-50",
         "clip_vit_b16": "CLIP-ViT-B16",
-        "wideresnet28_10": "WideResNet28-10"
+        "wideresnet28_10": "WideResNet28-10",
+        "dinov3": "DINOv3"
     }
 
     for ax_idx, backbone in enumerate(backbones):
@@ -1077,7 +1087,7 @@ def plot_per_class_improvement(
 
     # Add colorbar (vertical)
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label(r"Mean $\Delta$F1 ($M_2$ - baseline)", fontsize=PLOT_SETTINGS["axis_labelsize"], rotation=270, labelpad=20)
+    cbar.set_label(r"Mean $\Delta$F1 ($M_3$ - baseline)", fontsize=PLOT_SETTINGS["axis_labelsize"], rotation=270, labelpad=20)
     cbar.ax.tick_params(labelsize=PLOT_SETTINGS["tick_labelsize"])
 
     # Load images if available
@@ -1094,7 +1104,7 @@ def plot_per_class_improvement(
     baseline_labels_map = {
         "real_only": r"$M_0$",
         "real_plus_trad_aug": r"$M_1$",
-        "real_plus_synth_distdiff": r"$M_3$"
+        "real_plus_synth_distdiff": r"$M_2$"
     }
     ax.set_xticklabels([baseline_labels_map.get(b, b) for b in baselines], rotation=0, ha='center', fontsize=PLOT_SETTINGS["xtick_fontsize"])
 
