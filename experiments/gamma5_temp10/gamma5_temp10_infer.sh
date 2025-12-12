@@ -135,7 +135,7 @@ echo "[→] Scanning all GPUs on node..."
 echo ""
 
 # Scan all 8 GPUs (indices 0-7)
-while IFS=', ' read -r gpu_idx gpu_name mem_total mem_used; do
+while IFS=, read -r gpu_idx gpu_name mem_total mem_used; do
   mem_free=$((mem_total - mem_used))
   
   if [ "$mem_used" -lt "$MAX_USED_MEMORY_MB" ]; then
