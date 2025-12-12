@@ -117,43 +117,63 @@ python -c "import torch; print('[✓] PyTorch:', torch.__version__)"
 python -c "import torch; print('[✓] CUDA available:', torch.cuda.is_available())"
 python -c "import torch; print('[✓] Number of GPUs:', torch.cuda.device_count())"
 
-# ---------- GPU Information ----------
+# ---------- Dynamic GPU Allocation ----------
 echo ""
 echo "================================================================================"
-echo "📊 GPU Information"
-echo "================================================================================"
-nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader,nounits | \
-  awk -F', ' 'NR<='"${NUM_GPUS}"' {printf "GPU %s: %s (%s MB total, %s MB free)\n", $1, $2, $3, $4}'
+echo "📊 Dynamic GPU Allocation (scanning GPUs 0-7)"
 echo "================================================================================"
 
-# ---------- Verify GPU Availability ----------
+# Configuration for dynamic GPU allocation
+MAX_USED_MEMORY_MB=1000  # GPUs with memory usage BELOW this threshold are considered free
+MAX_GPUS_TO_USE=4        # Maximum number of GPUs to allocate
+
+# Arrays to store GPU info
+declare -a FREE_GPUS=()
+declare -a ALL_GPU_INFO=()
+
+echo "[→] Scanning all GPUs on node..."
 echo ""
-echo "[→] Verifying allocated GPUs are available..."
-MIN_FREE_MEMORY_MB=8000  # Minimum 8GB free memory required per GPU
-GPU_CHECK_FAILED=0
 
-while IFS=', ' read -r gpu_idx gpu_name mem_total mem_free; do
-  if [ "$gpu_idx" -lt "$NUM_GPUS" ]; then
-    if [ "$mem_free" -lt "$MIN_FREE_MEMORY_MB" ]; then
-      echo "[⚠] GPU $gpu_idx: Only ${mem_free}MB free (need ${MIN_FREE_MEMORY_MB}MB minimum)"
-      GPU_CHECK_FAILED=1
-    else
-      echo "[✓] GPU $gpu_idx: ${mem_free}MB free - OK"
-    fi
+# Scan all 8 GPUs (indices 0-7)
+while IFS=', ' read -r gpu_idx gpu_name mem_total mem_used; do
+  mem_free=$((mem_total - mem_used))
+  
+  if [ "$mem_used" -lt "$MAX_USED_MEMORY_MB" ]; then
+    status="✓ FREE"
+    FREE_GPUS+=("$gpu_idx")
+  else
+    status="✗ IN USE"
   fi
-done < <(nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader,nounits)
+  
+  printf "GPU %s: %s | Used: %5s MB / %5s MB | %s\n" "$gpu_idx" "$gpu_name" "$mem_used" "$mem_total" "$status"
+done < <(nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null || echo "")
 
-if [ "$GPU_CHECK_FAILED" -eq 1 ]; then
-  echo ""
-  echo "[ERROR] One or more GPUs do not have sufficient free memory!"
-  echo "        This may indicate GPUs are being used by other processes."
-  echo "        Consider:"
-  echo "          - Waiting for current jobs to complete"
-  echo "          - Requesting different GPU resources"
-  echo "          - Checking with 'nvidia-smi' for running processes"
-  echo ""
-  echo "Proceeding anyway (SLURM should have allocated dedicated GPUs)..."
+echo ""
+echo "================================================================================"
+
+# Check if we found any free GPUs
+if [ ${#FREE_GPUS[@]} -eq 0 ]; then
+  echo "[ERROR] No free GPUs found! All GPUs have memory usage >= ${MAX_USED_MEMORY_MB}MB"
+  echo "        Please wait for running jobs to complete or try a different node."
+  exit 1
 fi
+
+# Limit to MAX_GPUS_TO_USE
+if [ ${#FREE_GPUS[@]} -gt $MAX_GPUS_TO_USE ]; then
+  FREE_GPUS=("${FREE_GPUS[@]:0:$MAX_GPUS_TO_USE}")
+fi
+
+# Build CUDA_VISIBLE_DEVICES string
+CUDA_DEVICES=$(IFS=','; echo "${FREE_GPUS[*]}")
+export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+
+# Update NUM_GPUS to reflect actually allocated GPUs
+NUM_GPUS=${#FREE_GPUS[@]}
+
+echo ""
+echo "[✓] Allocated ${NUM_GPUS} free GPU(s): ${CUDA_DEVICES}"
+echo "    CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "    Memory threshold: < ${MAX_USED_MEMORY_MB}MB used = free"
 echo ""
 
 # ---------- Prepare Configuration ----------
