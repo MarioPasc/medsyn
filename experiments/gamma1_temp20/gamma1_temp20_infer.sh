@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --constraint=dgx
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --output=%x.%j.out
 #SBATCH --error=%x.%j.err
 
@@ -125,7 +125,7 @@ echo "==========================================================================
 
 # Configuration for dynamic GPU allocation
 MAX_USED_MEMORY_MB=1000  # GPUs with memory usage BELOW this threshold are considered free
-MAX_GPUS_TO_USE=4        # Maximum number of GPUs to allocate
+MAX_GPUS_TO_USE=2        # Maximum number of GPUs to allocate
 
 # Arrays to store GPU info
 declare -a FREE_GPUS=()

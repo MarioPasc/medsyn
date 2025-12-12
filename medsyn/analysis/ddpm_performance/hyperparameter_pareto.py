@@ -81,9 +81,9 @@ CLASS_SYMBOLS = {
 
 # Experiment configurations for consistent color mapping
 EXPERIMENT_CONFIGS = [
-    (1, 1.5), (1, 2.0),
+    (1, 1.0), (1, 1.5), (1, 2.0),
     (5, 1.0), (5, 1.5), (5, 2.0),
-    (10, 1.5), (10, 2.0)
+    (10, 1.0), (10, 1.5), (10, 2.0)
 ]
 
 
