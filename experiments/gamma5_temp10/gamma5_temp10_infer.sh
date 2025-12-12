@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH -J log_gamma5_temp10
-#SBATCH --time=16:00:00
+#SBATCH --time=23:59:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
