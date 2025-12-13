@@ -1,0 +1,185 @@
+\documentclass{article}
+
+% ---------- Packages ----------
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}   % \toprule, \midrule, \bottomrule
+\usepackage{multirow}   % \multirow
+\usepackage{graphicx}   % \rotatebox, \resizebox
+\usepackage[dvipsnames]{xcolor} % colors (e.g., ForestGreen, Red)
+\usepackage{array}      % column types
+
+% ---------- Small helpers (avoid repetition) ----------
+\newcommand{\colortext}[2]{\textcolor{#1}{#2}}
+
+% Base cell: "mean ± std"
+\newcommand{\fidbase}[2]{#1 $\pm$ #2}
+
+% Full cell: "mean ± std  (colored arrow + delta)"
+% Args: mean, std, color, arrow (\uparrow or \downarrow), delta
+\newcommand{\fidcell}[5]{#1 $\pm$ #2~\colortext{#3}{$#4$ #5}}
+
+% Rotated group label (consistent spacing)
+\newcommand{\rotgroup}[1]{\rotatebox{90}{\strut #1}}
+
+\begin{document}
+
+\begin{table}[t]
+\centering
+\caption{FID (mean $\pm$ std) per class for CFG-MedMNIST-Syn vs.\ DistDiff on MedMNIST. Lower is better. Colored arrows denote change vs.\ DistDiff (green = improvement, red = degradation) with absolute $\Delta$FID.}
+\label{tab:fid_cfg_medmnist_syn_vs_distdiff}
+
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\scriptsize
+
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{%
+  c!{\hspace{2pt}\vrule\hspace{2pt}} % rotated model name + vertical rule
+  c % rotated gamma group
+  c % tau (not rotated; short)
+  *{9}{c} % Class 0..8
+  c % Avg
+}
+\toprule
+\multirow{2}{*}{\rotgroup{Model}} &
+\multirow{2}{*}{$\gamma$} &
+\multirow{2}{*}{$\tau$} &
+\multicolumn{9}{c}{Classes} &
+\multirow{2}{*}{Avg.} \\
+\cmidrule(lr){4-12}
+& & & Class 0 & Class 1 & Class 2 & Class 3 & Class 4 & Class 5 & Class 6 & Class 7 & Class 8 & \\
+\midrule
+
+% -------- CFG-MedMNIST-Syn block (9 rows) --------
+\multirow{9}{*}{\rotgroup{CFG-MedMNIST-Syn}} &
+\multirow{3}{*}{$10$} &
+10 &
+\fidcell{45.68}{1.11}{Red}{\uparrow}{13.30} &
+\fidcell{69.74}{0.81}{Red}{\uparrow}{14.35} &
+\textbf{\fidcell{30.16}{0.77}{ForestGreen}{\downarrow}{84.96}} &
+\fidcell{62.23}{1.45}{ForestGreen}{\downarrow}{168.74} &
+\fidcell{33.84}{0.80}{ForestGreen}{\downarrow}{134.93} &
+\fidcell{37.93}{1.00}{ForestGreen}{\downarrow}{243.34} &
+\fidcell{35.29}{0.59}{ForestGreen}{\downarrow}{67.25} &
+\fidcell{28.98}{1.08}{ForestGreen}{\downarrow}{127.51} &
+\textbf{\fidcell{39.64}{0.69}{ForestGreen}{\downarrow}{71.26}} &
+\fidcell{42.61}{0.92}{ForestGreen}{\downarrow}{96.70} \\
+& & 15 &
+\fidcell{43.80}{1.22}{Red}{\uparrow}{11.42} &
+\fidcell{65.06}{1.57}{Red}{\uparrow}{9.67} &
+\fidcell{33.21}{1.12}{ForestGreen}{\downarrow}{81.90} &
+\fidcell{61.08}{1.31}{ForestGreen}{\downarrow}{169.89} &
+\fidcell{30.93}{0.91}{ForestGreen}{\downarrow}{137.84} &
+\fidcell{47.35}{1.23}{ForestGreen}{\downarrow}{233.91} &
+\fidcell{36.99}{0.45}{ForestGreen}{\downarrow}{65.55} &
+\fidcell{32.89}{0.66}{ForestGreen}{\downarrow}{123.59} &
+\fidcell{43.18}{0.91}{ForestGreen}{\downarrow}{67.72} &
+\fidcell{43.83}{1.04}{ForestGreen}{\downarrow}{95.48} \\
+& & 20 &
+\fidcell{40.35}{0.92}{Red}{\uparrow}{7.97} &
+\fidcell{60.44}{1.10}{Red}{\uparrow}{5.05} &
+\fidcell{41.76}{1.61}{ForestGreen}{\downarrow}{73.36} &
+\fidcell{42.46}{1.77}{ForestGreen}{\downarrow}{188.51} &
+\fidcell{30.79}{0.67}{ForestGreen}{\downarrow}{137.98} &
+\fidcell{47.00}{1.14}{ForestGreen}{\downarrow}{234.26} &
+\fidcell{34.36}{0.60}{ForestGreen}{\downarrow}{68.18} &
+\fidcell{32.43}{0.87}{ForestGreen}{\downarrow}{124.06} &
+\fidcell{50.15}{0.59}{ForestGreen}{\downarrow}{60.75} &
+\fidcell{42.19}{1.03}{ForestGreen}{\downarrow}{97.12} \\
+\cmidrule(lr){2-13}
+
+& \multirow{3}{*}{$5$} &
+10 &
+\fidcell{35.64}{0.44}{Red}{\uparrow}{3.26} &
+\fidcell{61.20}{1.29}{Red}{\uparrow}{5.81} &
+\fidcell{31.46}{1.24}{ForestGreen}{\downarrow}{83.65} &
+\fidcell{54.63}{1.70}{ForestGreen}{\downarrow}{176.34} &
+\fidcell{32.76}{0.66}{ForestGreen}{\downarrow}{136.01} &
+\fidcell{35.94}{0.71}{ForestGreen}{\downarrow}{245.33} &
+\fidcell{35.60}{0.51}{ForestGreen}{\downarrow}{66.94} &
+\fidcell{20.42}{0.47}{ForestGreen}{\downarrow}{136.06} &
+\fidcell{46.67}{1.17}{ForestGreen}{\downarrow}{64.24} &
+\fidcell{39.37}{0.91}{ForestGreen}{\downarrow}{99.94} \\
+& & 15 &
+\fidcell{39.61}{0.57}{Red}{\uparrow}{7.23} &
+\fidcell{65.19}{1.21}{Red}{\uparrow}{9.80} &
+\fidcell{30.87}{1.47}{ForestGreen}{\downarrow}{84.25} &
+\fidcell{46.81}{1.35}{ForestGreen}{\downarrow}{184.16} &
+\fidcell{27.94}{0.66}{ForestGreen}{\downarrow}{140.83} &
+\fidcell{33.57}{1.20}{ForestGreen}{\downarrow}{247.70} &
+\fidcell{36.45}{0.43}{ForestGreen}{\downarrow}{66.09} &
+\fidcell{21.88}{0.94}{ForestGreen}{\downarrow}{134.60} &
+\fidcell{44.86}{1.05}{ForestGreen}{\downarrow}{66.04} &
+\fidcell{38.58}{0.99}{ForestGreen}{\downarrow}{100.74} \\
+& & 20 &
+\fidcell{37.61}{0.96}{Red}{\uparrow}{5.23} &
+\fidcell{60.36}{1.61}{Red}{\uparrow}{4.96} &
+\fidcell{32.48}{1.34}{ForestGreen}{\downarrow}{82.63} &
+\fidcell{55.05}{1.53}{ForestGreen}{\downarrow}{175.91} &
+\fidcell{29.85}{0.71}{ForestGreen}{\downarrow}{138.92} &
+\fidcell{44.04}{1.46}{ForestGreen}{\downarrow}{237.23} &
+\fidcell{35.43}{0.47}{ForestGreen}{\downarrow}{67.11} &
+\fidcell{27.91}{0.80}{ForestGreen}{\downarrow}{128.57} &
+\fidcell{51.74}{0.96}{ForestGreen}{\downarrow}{59.16} &
+\fidcell{41.61}{1.09}{ForestGreen}{\downarrow}{97.71} \\
+\cmidrule(lr){2-13}
+
+& \multirow{3}{*}{$1$} &
+10 &
+\fidcell{41.63}{0.61}{Red}{\uparrow}{9.25} &
+\fidcell{75.26}{2.03}{Red}{\uparrow}{19.86} &
+\fidcell{35.20}{1.23}{ForestGreen}{\downarrow}{79.92} &
+\fidcell{41.35}{1.39}{ForestGreen}{\downarrow}{189.62} &
+\fidcell{29.67}{0.67}{ForestGreen}{\downarrow}{139.10} &
+\fidcell{34.99}{0.70}{ForestGreen}{\downarrow}{246.28} &
+\fidcell{37.06}{0.89}{ForestGreen}{\downarrow}{65.48} &
+\fidcell{29.95}{1.07}{ForestGreen}{\downarrow}{126.54} &
+\fidcell{45.46}{0.45}{ForestGreen}{\downarrow}{65.44} &
+\fidcell{41.17}{1.00}{ForestGreen}{\downarrow}{98.14} \\
+& & 15 &
+\fidcell{38.03}{0.89}{Red}{\uparrow}{5.65} &
+\fidcell{73.36}{1.68}{Red}{\uparrow}{17.96} &
+\fidcell{52.59}{1.20}{ForestGreen}{\downarrow}{62.53} &
+\fidcell{26.47}{1.50}{ForestGreen}{\downarrow}{204.50} &
+\fidcell{26.18}{0.88}{ForestGreen}{\downarrow}{142.59} &
+\fidcell{38.42}{0.95}{ForestGreen}{\downarrow}{242.85} &
+\fidcell{33.93}{0.83}{ForestGreen}{\downarrow}{68.61} &
+\fidcell{28.02}{1.00}{ForestGreen}{\downarrow}{128.46} &
+\fidcell{50.00}{0.90}{ForestGreen}{\downarrow}{60.91} &
+\fidcell{40.78}{1.09}{ForestGreen}{\downarrow}{98.54} \\
+& & 20 &
+\fidcell{34.91}{0.93}{Red}{\uparrow}{2.53} &
+\textbf{\fidcell{55.02}{1.48}{ForestGreen}{\downarrow}{0.37}} &
+\fidcell{31.31}{1.13}{ForestGreen}{\downarrow}{83.80} &
+\textbf{\fidcell{18.41}{0.67}{ForestGreen}{\downarrow}{212.56}} &
+\textbf{\fidcell{19.66}{0.39}{ForestGreen}{\downarrow}{149.11}} &
+\textbf{\fidcell{32.13}{0.68}{ForestGreen}{\downarrow}{249.14}} &
+\textbf{\fidcell{30.30}{0.52}{ForestGreen}{\downarrow}{72.23}} &
+\textbf{\fidcell{18.28}{0.44}{ForestGreen}{\downarrow}{138.20}} &
+\fidcell{40.27}{0.47}{ForestGreen}{\downarrow}{70.63} &
+\textbf{\fidcell{31.14}{0.75}{ForestGreen}{\downarrow}{108.17}} \\
+
+
+\midrule
+
+% -------- DistDiff row --------
+\multicolumn{2}{c!{\hspace{2pt}\vrule\hspace{2pt}}}{DistDiff} &
+-- &
+\textbf{\fidbase{32.38}{0.60}} &
+\fidbase{55.39}{1.04} &
+\fidbase{115.12}{2.02} &
+\fidbase{230.97}{2.76} &
+\fidbase{168.77}{1.44} &
+\fidbase{281.27}{2.72} &
+\fidbase{102.54}{1.43} &
+\fidbase{156.48}{2.85} &
+\fidbase{110.90}{2.01} &
+\fidbase{139.31}{1.87} \\
+
+
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\end{document}

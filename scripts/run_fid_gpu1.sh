@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Exit on error
-set -e
+set -e<
 
 # GPU 1 - 5 jobs
 

@@ -1,0 +1,185 @@
+\documentclass{article}
+
+% ---------- Packages ----------
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}   % \toprule, \midrule, \bottomrule
+\usepackage{multirow}   % \multirow
+\usepackage{graphicx}   % \rotatebox, \resizebox
+\usepackage[dvipsnames]{xcolor} % colors (e.g., ForestGreen, Red)
+\usepackage{array}      % column types
+
+% ---------- Small helpers (avoid repetition) ----------
+\newcommand{\colortext}[2]{\textcolor{#1}{#2}}
+
+% Base cell: "mean ± std"
+\newcommand{\fidbase}[2]{#1 $\pm$ #2}
+
+% Full cell: "mean ± std  (colored arrow + delta)"
+% Args: mean, std, color, arrow (\uparrow or \downarrow), delta
+\newcommand{\fidcell}[5]{#1 $\pm$ #2~\colortext{#3}{$#4$ #5}}
+
+% Rotated group label (consistent spacing)
+\newcommand{\rotgroup}[1]{\rotatebox{90}{\strut #1}}
+
+\begin{document}
+
+\begin{table}[t]
+\centering
+\caption{FID (mean $\pm$ std) per class for CFG-MedMNIST-Syn vs.\ DistDiff on MedMNIST. Lower is better. Colored arrows denote change vs.\ DistDiff (green = improvement, red = degradation) with absolute $\Delta$FID.}
+\label{tab:fid_cfg_medmnist_syn_vs_distdiff}
+
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\scriptsize
+
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{%
+  c!{\hspace{2pt}\vrule\hspace{2pt}} % rotated model name + vertical rule
+  c % rotated gamma group
+  c % tau (not rotated; short)
+  *{9}{c} % Class 0..8
+  c % Avg
+}
+\toprule
+\multirow{2}{*}{\rotgroup{Model}} &
+\multirow{2}{*}{$\gamma$} &
+\multirow{2}{*}{$\tau$} &
+\multicolumn{9}{c}{Classes} &
+\multirow{2}{*}{Avg.} \\
+\cmidrule(lr){4-12}
+& & & Class 0 & Class 1 & Class 2 & Class 3 & Class 4 & Class 5 & Class 6 & Class 7 & Class 8 & \\
+\midrule
+
+% -------- CFG-MedMNIST-Syn block (9 rows) --------
+\multirow{9}{*}{\rotgroup{CFG-MedMNIST-Syn}} &
+\multirow{3}{*}{$10$} &
+10 &
+{{gamma10_temp10_class0}} &
+{{gamma10_temp10_class1}} &
+{{gamma10_temp10_class2}} &
+{{gamma10_temp10_class3}} &
+{{gamma10_temp10_class4}} &
+{{gamma10_temp10_class5}} &
+{{gamma10_temp10_class6}} &
+{{gamma10_temp10_class7}} &
+{{gamma10_temp10_class8}} &
+{{gamma10_temp10_avg}} \\
+& & 15 &
+{{gamma10_temp15_class0}} &
+{{gamma10_temp15_class1}} &
+{{gamma10_temp15_class2}} &
+{{gamma10_temp15_class3}} &
+{{gamma10_temp15_class4}} &
+{{gamma10_temp15_class5}} &
+{{gamma10_temp15_class6}} &
+{{gamma10_temp15_class7}} &
+{{gamma10_temp15_class8}} &
+{{gamma10_temp15_avg}} \\
+& & 20 &
+{{gamma10_temp20_class0}} &
+{{gamma10_temp20_class1}} &
+{{gamma10_temp20_class2}} &
+{{gamma10_temp20_class3}} &
+{{gamma10_temp20_class4}} &
+{{gamma10_temp20_class5}} &
+{{gamma10_temp20_class6}} &
+{{gamma10_temp20_class7}} &
+{{gamma10_temp20_class8}} &
+{{gamma10_temp20_avg}} \\
+\cmidrule(lr){2-13}
+
+& \multirow{3}{*}{$5$} &
+10 &
+{{gamma5_temp10_class0}} &
+{{gamma5_temp10_class1}} &
+{{gamma5_temp10_class2}} &
+{{gamma5_temp10_class3}} &
+{{gamma5_temp10_class4}} &
+{{gamma5_temp10_class5}} &
+{{gamma5_temp10_class6}} &
+{{gamma5_temp10_class7}} &
+{{gamma5_temp10_class8}} &
+{{gamma5_temp10_avg}} \\
+& & 15 &
+{{gamma5_temp15_class0}} &
+{{gamma5_temp15_class1}} &
+{{gamma5_temp15_class2}} &
+{{gamma5_temp15_class3}} &
+{{gamma5_temp15_class4}} &
+{{gamma5_temp15_class5}} &
+{{gamma5_temp15_class6}} &
+{{gamma5_temp15_class7}} &
+{{gamma5_temp15_class8}} &
+{{gamma5_temp15_avg}} \\
+& & 20 &
+{{gamma5_temp20_class0}} &
+{{gamma5_temp20_class1}} &
+{{gamma5_temp20_class2}} &
+{{gamma5_temp20_class3}} &
+{{gamma5_temp20_class4}} &
+{{gamma5_temp20_class5}} &
+{{gamma5_temp20_class6}} &
+{{gamma5_temp20_class7}} &
+{{gamma5_temp20_class8}} &
+{{gamma5_temp20_avg}} \\
+\cmidrule(lr){2-13}
+
+& \multirow{3}{*}{$1$} &
+10 &
+{{gamma1_temp10_class0}} &
+{{gamma1_temp10_class1}} &
+{{gamma1_temp10_class2}} &
+{{gamma1_temp10_class3}} &
+{{gamma1_temp10_class4}} &
+{{gamma1_temp10_class5}} &
+{{gamma1_temp10_class6}} &
+{{gamma1_temp10_class7}} &
+{{gamma1_temp10_class8}} &
+{{gamma1_temp10_avg}} \\
+& & 15 &
+{{gamma1_temp15_class0}} &
+{{gamma1_temp15_class1}} &
+{{gamma1_temp15_class2}} &
+{{gamma1_temp15_class3}} &
+{{gamma1_temp15_class4}} &
+{{gamma1_temp15_class5}} &
+{{gamma1_temp15_class6}} &
+{{gamma1_temp15_class7}} &
+{{gamma1_temp15_class8}} &
+{{gamma1_temp15_avg}} \\
+& & 20 &
+{{gamma1_temp20_class0}} &
+{{gamma1_temp20_class1}} &
+{{gamma1_temp20_class2}} &
+{{gamma1_temp20_class3}} &
+{{gamma1_temp20_class4}} &
+{{gamma1_temp20_class5}} &
+{{gamma1_temp20_class6}} &
+{{gamma1_temp20_class7}} &
+{{gamma1_temp20_class8}} &
+{{gamma1_temp20_avg}} \\
+
+
+\midrule
+
+% -------- DistDiff row --------
+\multicolumn{2}{c!{\hspace{2pt}\vrule\hspace{2pt}}}{DistDiff} &
+-- &
+{{distdiff_class0}} &
+{{distdiff_class1}} &
+{{distdiff_class2}} &
+{{distdiff_class3}} &
+{{distdiff_class4}} &
+{{distdiff_class5}} &
+{{distdiff_class6}} &
+{{distdiff_class7}} &
+{{distdiff_class8}} &
+{{distdiff_avg}} \\
+
+
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\end{document}
