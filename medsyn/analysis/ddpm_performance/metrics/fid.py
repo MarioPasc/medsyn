@@ -36,7 +36,7 @@ Usage:
     
   python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth /media/hddb/mario/data/medsyn/merged.npz \
-    --model CFG_MedMNIST /media/hddb/mario/data/medsyn/pathmnist_train_synth.npz \
+    --model CFG_MedMNIST /media/hddb/mario/data/medsyn/hyperparameter_synthetic_samples/gamma1_temp10_synth_samples.npz.npz \
     --model DistDiff /media/hddb/mario/data/medsyn/split_0_64x64_balanced.npz \
     --output /media/hddb/mario/results/medsyn/fid_results.csv \
     --counts 1000 \
