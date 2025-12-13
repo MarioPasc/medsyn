@@ -3,9 +3,6 @@
 # Exit on error
 set -e
 
-# Navigate to project root
-cd /home/mpascual/research/code/medsyn
-
 # GPU 0 - 4 jobs
 
 # Common variables
