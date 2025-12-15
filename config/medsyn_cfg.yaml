@@ -26,13 +26,60 @@ ccddpm:
   # To use multi-GPU training, launch with torchrun:
   # torchrun --standalone --nnodes=1 --nproc_per_node=N -m medsyn.cli.train_ccDDPM picasso_cfg.yaml
   dist:
-    enabled: true  # Set to true to enable multi-GPU distributed training
+    enabled: false  # Set to true to enable multi-GPU distributed training
     backend: nccl  # Use 'nccl' for GPU training (fastest), 'gloo' for CPU
     num_gpus: 2  # 'auto' uses all available GPUs (set by torchrun)
     find_unused_parameters: false  # Set to true only if you have conditional/dynamic graph
     broadcast_buffers: true  # Sync batch norm stats across GPUs
-    grad_accum_steps: 4  # Gradient accumulation steps (1 = no accumulation)
+    grad_accum_steps: 1  # Gradient accumulation steps (1 = no accumulation)
     seed_offset: 0  # Offset for per-rank seed decorrelation
+
+  # ========================================================================
+  # LOGGING CONFIGURATION
+  # ========================================================================
+  logging:
+    embeddings:
+      enabled: true
+      log_every_n_epochs: 1  # Log detailed diagnostics every 1 epoch
+      output_dir: embeddings  # Relative to main output_dir
+      save_class_embeddings: true  # Always save class embedding trajectory
+
+      # Option 1: Use preset (uncomment to use)
+      # preset: custom  # Options: minimal, custom, research
+
+      # Option 2: Manual configuration (overrides preset if both specified)
+      probe:
+        enabled: true
+        samples_per_class: 50  # Number of samples per class in probe set
+        timesteps: [100, 500, 900]  # Early, mid, late diffusion
+        layer_names:
+          - unet.down_blocks.1  # Intermediate encoding with attention
+          - unet.mid_block      # Critical bottleneck representation
+          - unet.up_blocks.1    # Intermediate decoding with attention
+
+        save_both_branches: true  # Save both conditional and unconditional
+        pooling_strategy: mean  # mean, max, or flatten
+
+      clustering:
+        enabled: true
+        n_clusters: null  # null = auto-detect from num_classes
+        algorithm: kmeans  # kmeans or gmm
+        random_state: 42
+        compute_scores: true  # Compute silhouette, CH, DB scores
+
+      metadata:
+        save_metadata: true
+        dataset_name: PathMNIST
+        class_names:  # Optional - will be auto-detected for PathMNIST
+          - Adipose
+          - Background
+          - Debris
+          - Lymphocytes
+          - Mucus
+          - Smooth Muscle
+          - Normal Colon Mucosa
+          - Cancer-Associated Stroma
+          - Colorectal Adenocarcinoma Epithelium
 
   dataloader:
     type: npz # Options are JSON, if we are using the index json file or NPZ.
@@ -57,9 +104,9 @@ ccddpm:
         p: 0.5
       # Intensity transforms (careful with medical imaging)
       - name: RandomBrightnessContrast
-        p: 0.1
-        brightness_limit: 0.13
-        contrast_limit: 0.13
+        p: 0.3
+        brightness_limit: 0.1
+        contrast_limit: 0.1
 
     # Statistics tracking (CSV output)
     statistics:
@@ -94,14 +141,14 @@ ccddpm:
       - AttnDownBlock2D               # Level 2: 16->8  (with attention)
       - AttnDownBlock2D               # Level 3: 8->4   (with attention)
     up_block_types:
-      - AttnUpBlock2D             # Level 3: 4->8   (with attention)
-      - UpBlock2D                 # Level 2: 8->16  (no attention)
-      - UpBlock2D                 # Level 1: 16->32 (no attention)
-      - UpBlock2D                 # Level 0: 32->64 (no attention)
+      - AttnUpBlock2D                 # Level 3: 4->8   (with attention)
+      - AttnUpBlock2D                 # Level 2: 8->16  (with attention)
+      - AttnUpBlock2D                 # Level 1: 16->32 (with attention)
+      - UpBlock2D                     # Level 0: 32->64 (no attention)
 
     # Attention configuration
     add_attention: true           # Enable attention blocks (required for AttnDownBlock2D/AttnUpBlock2D)
-    attention_head_dim: 8         # Dimension of attention heads (null for default)
+    attention_head_dim: 32         # Dimension of attention heads (null for default)
 
     # Normalization
     norm_num_groups: 32           # Groups for GroupNorm (model_channels must be divisible by this)
@@ -112,10 +159,11 @@ ccddpm:
     dropout: 0.05                  # Dropout rate (0.0 = no dropout)
 
     # Time embedding
-    time_embedding_type: positional  # "positional" or "fourier"
-    freq_shift: 0                    # Frequency shift for time embedding
-    flip_sin_to_cos: true            # Whether to flip sin to cos in time embedding
-    resnet_time_scale_shift: default # "default", "scale_shift", or "ada_group"
+    time_embedding_type: positional      # "positional" or "fourier"
+    freq_shift: 0                        # Frequency shift for time embedding
+    flip_sin_to_cos: true                # Whether to flip sin to cos in time embedding
+    resnet_time_scale_shift: scale_shift # "default", "scale_shift", or "ada_group"
+    # https://huggingface.co/spaces/QinLei086/Curvilinear_Object_Generation_by_Text_and_Segmap/blob/main/model/blocks/ResnetBlock2D.py 
 
     # Sampling configuration
     center_input_sample: false    # Center input sample (for specific preprocessing)
@@ -134,13 +182,19 @@ ccddpm:
     num_class_embeds: null        # Number of class embeddings (null = use num_classes from train config)
     num_train_timesteps: null     # Number of train timesteps (null = use from scheduler config)
 
+    # Ho, J., Jain, A., & Abbeel, P. (2020). "Denoising Diffusion Probabilistic Models." NeurIPS.
+    # Nichol, A., & Dhariwal, P. (2021). "Improved Denoising Diffusion Probabilistic Models." ICML.
+    # Dhariwal, P., & Nichol, A. (2021). "Diffusion Models Beat GANs on Image Synthesis." NeurIPS.
+    # Karras, T., et al. (2022). "Elucidating the Design Space of Diffusion-Based Generative Models." NeurIPS.
+    # Vaswani, A., et al. (2017). "Attention Is All You Need." NeurIPS.
+
   train:
     image_size: 64
     in_channels: 3
-    class_embed_dim: 32
+    class_embed_dim: 64
     num_classes: 9
     batch_size: 64
-    epochs: 100
+    epochs: 200 # ↑ from 100
 
     # ========================================================================
     # EARLY STOPPING CONFIGURATION
@@ -155,7 +209,7 @@ ccddpm:
     # EMA smoothing: S_ema_t = ema_alpha * S_ema_{t-1} + (1 - ema_alpha) * S_t
     # Higher ema_alpha means more smoothing (less sensitive to single-epoch fluctuations).
     early_stopping:
-      patience: 8              # Stop if no improvement for this many epochs
+      patience: 15              # ↑ from 8
       metric: "psnr_ssim_composite"  # Metric to use: "psnr_ssim_composite", "psnr", "ssim", or "loss"
       psnr_weight: 1.0         # Weight for PSNR in composite score
       ssim_weight: 1.0         # Weight for SSIM in composite score
@@ -172,15 +226,15 @@ ccddpm:
     ema_decay: 0.9999
 
     use_min_snr: true          # Min-SNR weighting
-    min_snr_gamma: 3.0         # Standard value for Min-SNR (can reduce to 3.0 if needed)
+    min_snr_gamma: 1.0         # Standard value for Min-SNR 
     per_class_loss_weighting: true  # Use per-class loss weighting to address class imbalance
-    per_class_weight_temperature: 1.2  # Boost minority classes more aggressively (temp > 1.0)
+    per_class_weight_temperature: 2.0  # Temperature for per-class weighting (higher = more skewed)
 
     ckpt_every_epochs: 10      # Save checkpoint every X epochs (in addition to best and last)
     snapshot_class_embedding_every: 1 # Save class embedding snapshots every X epochs
     use_tqdm: false             # Enable/disable tqdm progress bars (set false for cleaner HPC logs)
     skip_nonfinite_grads: true  # Skip batches with non-finite gradients instead of  aborting
-    output_dir: /media/mpascual/PortableSSD/medsyn/experiments/MinSNR_3Gamma_ccDDPM_parallel
+    output_dir: ${OUTPUT_DIR}
 
     # ========================================================================
     # LEARNING RATE SCHEDULER CONFIGURATION
@@ -199,13 +253,11 @@ ccddpm:
       T_max: null             # Used only for pure "cosine" scheduler; ignored for warmup+cosine
       eta_min: 1.0e-7         # Minimum LR at the end of cosine phase
 
-      warmup_epochs: 10        # Number of *epochs* to warm up (converted to steps internally)
-
+      warmup_epochs: 20         # ↑ from 10 — 10% of 200 epochs
       # New parameters for LinearWarmupCosineAnnealingLR-like schedule
       warmup_start_lr: null   # Absolute LR at the very first step of warmup.
                               # If null, computed as warmup_start_factor * base_lr.
-      warmup_start_factor: 0.01  # Relative factor: start LR = base_lr * warmup_start_factor
-                                # Only used when warmup_start_lr is null.
+      warmup_start_factor: 0.001  # ↓ from 0.01 — gentler warmup start
 
       # Step parameters (used when type == "step")
       step_size: 30
@@ -238,43 +290,31 @@ ccddpm:
     beta_schedule: squaredcos_cap_v2  # Stabilizes SNR across timesteps; improves sample quality
     prediction_type: epsilon  # Standard DDPM prediction (predicts noise ε). DO NOT change without updating loss.py!
   infer:
-    guidance_scale: 7.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
+    guidance_scale: 2.5  # Classifier-free guidance scale (1.0 = no CFG, 1.5-3.0 for enhanced conditioning)
     sampler: ddim        # Sampler type: ddim, ddpm
     
     eta: 0.0            # DDIM eta parameter (0.0 = deterministic, 1.0 = stochastic)
     num_inference_steps: 100
     
-    out_dir: /media/mpascual/PortableSSD/medsyn/experiments/MinSNR_3Gamma_ccDDPM_parallel/samples
-
+    out_dir: ${OUTPUT_DIR}/samples
 
 # Generation configuration 
 generate:
   model_type: ccddpm # use ccDDPM or bVAE, we will call either cli/generate_ccddpm.py or cli/generate_bvae.py bVAE is DEPRECATED at this moment
-  checkpoint: /media/mpascual/PortableSSD/medsyn/experiments/MinSNR_3Gamma_ccDDPM_parallel/ckpts/best.pt  # absolute path to checkpoint
+  checkpoint: /media/mpascual/Sandisk2TB/research/medsyn/experiments/hyperparameter_search/gamma1_temp20_training/ckpts/best.pt  # absolute path to checkpoint
   npz_with_synth_images:
-    save_to: /media/mpascual/PortableSSD/medsyn/experiments/MinSNR_3Gamma_ccDDPM_parallel/ddim_synth_guidance7.5
+    save_to: /media/mpascual/Sandisk2TB/research/medsyn/experiments/hyperparameter_search/gamma1_temp20_training/ddim_synth_guidance2
     train:
       classes:
-        0: 4
-        1: 4
-        2: 4
-        3: 4
-        4: 4
-        5: 4
-        6: 4
-        7: 4
-        8: 4
-    val:
-      classes:
-        0: 4
-        1: 4
-        2: 4
-        3: 4
-        4: 4
-        5: 4
-        6: 4
-        7: 4
-        8: 4  
+        0: 2
+        1: 2
+        2: 2
+        3: 2
+        4: 2
+        5: 2
+        6: 2
+        7: 2
+        8: 2 
 
 yolo:
   # For "data:" we are going to read data/postprocess_npz/npz_path from above, if this path does not exist, 
