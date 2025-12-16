@@ -11,7 +11,7 @@ data:
     yolo_allow_copy_fallback: true    # if symlinks fail, fall back to copying (only if yolo_use_symlinks=true)
   postprocess_npz:
     enabled: true
-    npz_path: /media/mpascual/PortableSSD/medsyn/PathMNIST/merged.npz
+    npz_path: /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_synth.npz
   seed: 23102003
   num_workers: 1
   reduction:
