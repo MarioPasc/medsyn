@@ -25,7 +25,7 @@ Example with PathMNIST class counts:
     python -m medsyn.analysis.ddpm_performance.temperature_weight_visualization \
         --class-counts 10407 10566 8006 6324 8509 13536 11557 14317 6590 \
         --tau-min 0.1 \
-        --tau-max 3.0 \
+        --tau-max 10.0 \
         --tau-points 1.0 1.5 2.0 \
         --output /media/mpascual/Sandisk2TB/research/medsyn/results/temperature_weight_analysis.png
 """
