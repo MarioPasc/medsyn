@@ -20,8 +20,63 @@ echo "==================================================="
 echo "Starting FID jobs for ablation study on $DEVICE"
 echo "==================================================="
 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp05 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp05_inference/train/temp05_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp05_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp10 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp10_inference/train/temp10_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp10_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp15 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp15_inference/train/temp15_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp15_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp20 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp20_inference/train/temp20_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp20_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp25 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp25_inference/train/temp25_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp25_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
+python medsyn/analysis/ddpm_performance/metrics/fid.py \
+    --ground-truth /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --model temp30 "/media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp30_inference/train/temp30_inference.npz" \
+    --output "/media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid/temp30_fid.csv" \
+    --counts 1000 \
+    --weights-dir /media/mpascual/Sandisk2TB/research/medsyn/pretrained/fid \
+    --verbose \
+    --device "cuda:0" 
+
 # Job 1: exp1_no_snr_classweight_temp2
-echo "[1/3] Processing exp1_no_snr_classweight_temp2 on $DEVICE..."
+echo "[1/3] Processing exp1_no_snr_classweight_temp2 on $DEVICE..." 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth "$GT_PATH" \
     --model exp1_no_snr_classweight_temp2 "$SAMPLES_DIR/exp1_no_snr_classweight_temp2.npz" \
