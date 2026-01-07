@@ -15,8 +15,8 @@ Usage:
 
 Example:
     python medsyn/analysis/ddpm_performance/aggregate_fid_results.py \\
-        --input-dir /media/mpascual/Sandisk2TB/research/medsyn/results/fid_results \\
-        --output /media/mpascual/Sandisk2TB/research/medsyn/results/aggregated_fid_comparison.csv \\
+        --input-dir /media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fid \\
+        --output /media/mpascual/Sandisk2TB/research/medsyn/results/not_considering_minSNR/fidaggregated_fid_comparison.csv \\
         --distdiff-path /media/mpascual/Sandisk2TB/research/medsyn/results/fid_distdiff.csv
 
 Output CSV format:
@@ -52,7 +52,9 @@ def extract_config_name(filename: str) -> Optional[str]:
     """
     Extract configuration name from filename.
     
-    Expected format: fid_gamma{X}_temp{Y}.csv -> gamma{X}_temp{Y}
+    Expected format:
+        1. fid_gamma{X}_temp{Y}.csv -> gamma{X}_temp{Y}
+        2. {config}_fid.csv -> {config}
     
     Args:
         filename: Filename to extract config from
@@ -60,12 +62,18 @@ def extract_config_name(filename: str) -> Optional[str]:
     Returns:
         Configuration name or None if not matching pattern
     """
-    if not filename.startswith("fid_") or not filename.endswith(".csv"):
+    if not filename.endswith(".csv"):
         return None
+        
+    # Check for new format: {config}_fid.csv
+    if filename.endswith("_fid.csv"):
+        return filename[:-8]
     
-    # Remove 'fid_' prefix and '.csv' suffix
-    config = filename[4:-4]
-    return config
+    # Check for old format: fid_{config}.csv
+    if filename.startswith("fid_"):
+        return filename[4:-4]
+        
+    return None
 
 
 def load_fid_csv(csv_path: Path) -> Optional[Dict[str, float]]:
@@ -118,7 +126,10 @@ def aggregate_fid_results(
     all_results = []
     
     # Process all FID CSV files in input directory
-    csv_files = sorted(input_dir.glob("fid_*.csv"))
+    # Support both fid_*.csv and *_fid.csv
+    csv_files = sorted(list(input_dir.glob("fid_*.csv")) + list(input_dir.glob("*_fid.csv")))
+    # Remove potentially duplicates if patterns overlap
+    csv_files = sorted(list(set(csv_files)))
     
     if len(csv_files) == 0:
         logger.warning(f"No FID CSV files found in {input_dir}")

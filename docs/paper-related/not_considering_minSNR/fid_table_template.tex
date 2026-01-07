@@ -1,0 +1,141 @@
+\documentclass{article}
+
+% ---------- Packages ----------
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}   % \toprule, \midrule, \bottomrule
+\usepackage{multirow}   % \multirow
+\usepackage{graphicx}   % \rotatebox, \resizebox
+\usepackage[dvipsnames]{xcolor} % colors (e.g., ForestGreen, Red)
+\usepackage{array}      % column types
+
+% ---------- Small helpers (avoid repetition) ----------
+\newcommand{\colortext}[2]{\textcolor{#1}{#2}}
+
+% Base cell: "mean ± std"
+\newcommand{\fidbase}[2]{#1 $\pm$ #2}
+
+% Full cell: "mean ± std  (colored arrow + delta)"
+% Args: mean, std, color, arrow (\uparrow or \downarrow), delta
+\newcommand{\fidcell}[5]{#1 $\pm$ #2~\colortext{#3}{$#4$ #5}}
+
+% Rotated group label (consistent spacing)
+\newcommand{\rotgroup}[1]{\rotatebox{90}{\strut #1}}
+
+\begin{document}
+
+\begin{table}[t]
+\centering
+\caption{FID (mean $\pm$ std) per class for CFG-MedMNIST-Syn vs.\ DistDiff on MedMNIST (Temperature Ablation). Lower is better. Colored arrows denote change vs.\ DistDiff (green = improvement, red = degradation) with absolute $\Delta$FID.}
+\label{tab:fid_cfg_medmnist_syn_vs_distdiff_temp}
+
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\scriptsize
+
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{%
+  c!{\hspace{2pt}\vrule\hspace{2pt}} % rotated model name + vertical rule
+  c % tau (not rotated; short)
+  *{9}{c} % Class 0..8
+  c % Avg
+}
+\toprule
+\multirow{2}{*}{\rotgroup{Model}} &
+\multirow{2}{*}{$\tau$} &
+\multicolumn{9}{c}{Classes} &
+\multirow{2}{*}{Avg.} \\
+\cmidrule(lr){3-11}
+& & Class 0 & Class 1 & Class 2 & Class 3 & Class 4 & Class 5 & Class 6 & Class 7 & Class 8 & \\
+\midrule
+
+% -------- CFG-MedMNIST-Syn block (6 rows) --------
+\multirow{6}{*}{\rotgroup{CFG-MedMNIST-Syn}} &
+0.5 &
+{{temp05_class0}} &
+{{temp05_class1}} &
+{{temp05_class2}} &
+{{temp05_class3}} &
+{{temp05_class4}} &
+{{temp05_class5}} &
+{{temp05_class6}} &
+{{temp05_class7}} &
+{{temp05_class8}} &
+{{temp05_avg}} \\
+& 1.0 &
+{{temp10_class0}} &
+{{temp10_class1}} &
+{{temp10_class2}} &
+{{temp10_class3}} &
+{{temp10_class4}} &
+{{temp10_class5}} &
+{{temp10_class6}} &
+{{temp10_class7}} &
+{{temp10_class8}} &
+{{temp10_avg}} \\
+& 1.5 &
+{{temp15_class0}} &
+{{temp15_class1}} &
+{{temp15_class2}} &
+{{temp15_class3}} &
+{{temp15_class4}} &
+{{temp15_class5}} &
+{{temp15_class6}} &
+{{temp15_class7}} &
+{{temp15_class8}} &
+{{temp15_avg}} \\
+& 2.0 &
+{{temp20_class0}} &
+{{temp20_class1}} &
+{{temp20_class2}} &
+{{temp20_class3}} &
+{{temp20_class4}} &
+{{temp20_class5}} &
+{{temp20_class6}} &
+{{temp20_class7}} &
+{{temp20_class8}} &
+{{temp20_avg}} \\
+& 2.5 &
+{{temp25_class0}} &
+{{temp25_class1}} &
+{{temp25_class2}} &
+{{temp25_class3}} &
+{{temp25_class4}} &
+{{temp25_class5}} &
+{{temp25_class6}} &
+{{temp25_class7}} &
+{{temp25_class8}} &
+{{temp25_avg}} \\
+& 3.0 &
+{{temp30_class0}} &
+{{temp30_class1}} &
+{{temp30_class2}} &
+{{temp30_class3}} &
+{{temp30_class4}} &
+{{temp30_class5}} &
+{{temp30_class6}} &
+{{temp30_class7}} &
+{{temp30_class8}} &
+{{temp30_avg}} \\
+
+\midrule
+
+% -------- DistDiff row --------
+\multicolumn{2}{c!{\hspace{2pt}\vrule\hspace{2pt}}}{DistDiff} &
+{{distdiff_class0}} &
+{{distdiff_class1}} &
+{{distdiff_class2}} &
+{{distdiff_class3}} &
+{{distdiff_class4}} &
+{{distdiff_class5}} &
+{{distdiff_class6}} &
+{{distdiff_class7}} &
+{{distdiff_class8}} &
+{{distdiff_avg}} \\
+
+
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\end{document}

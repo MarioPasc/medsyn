@@ -98,6 +98,7 @@ def format_fidcell(
     mean: float,
     std: float,
     delta: float,
+    bold: bool = False,
     mean_precision: int = 2,
     std_precision: int = 2,
     delta_precision: int = 2,
@@ -109,6 +110,7 @@ def format_fidcell(
         mean: FID mean value
         std: FID standard deviation
         delta: Delta from DistDiff (negative = better)
+        bold: Whether to make the cell bold
         mean_precision: Decimal precision for mean
         std_precision: Decimal precision for std
         delta_precision: Decimal precision for delta
@@ -128,13 +130,17 @@ def format_fidcell(
         arrow = r"\uparrow"
         abs_delta = abs(delta)
     
-    return (
+    base = (
         f"\\fidcell{{{mean:.{mean_precision}f}}}"
         f"{{{std:.{std_precision}f}}}"
         f"{{{color}}}"
         f"{{{arrow}}}"
         f"{{{abs_delta:.{delta_precision}f}}}"
     )
+    
+    if bold:
+        return f"\\textbf{{{base}}}"
+    return base
 
 
 def format_fidbase(
@@ -202,6 +208,7 @@ def generate_placeholder_mapping(
     df: pd.DataFrame,
     num_classes: int = 9,
     bold_best: bool = True,
+    only_temp: bool = False,
 ) -> Dict[str, str]:
     """
     Generate mapping from placeholders to LaTeX cell content.
@@ -210,6 +217,7 @@ def generate_placeholder_mapping(
         df: DataFrame with FID results
         num_classes: Number of classes (default 9)
         bold_best: Whether to bold the best value per class
+        only_temp: Whether to parse configs as 'tempX' instead of 'gammaX_tempY'
         
     Returns:
         Dictionary mapping placeholder names to LaTeX content
@@ -249,32 +257,71 @@ def generate_placeholder_mapping(
         
         else:
             # CFG-MedMNIST-Syn configurations use fidcell format
-            # Parse gamma and temp from config name (e.g., gamma1_temp10)
-            match = re.match(r"gamma(\d+)_temp(\d+)", config)
-            if not match:
-                logger.warning(f"Could not parse config name: {config}")
-                continue
             
-            gamma = match.group(1)
-            temp = match.group(2)
-            
-            for i in range(num_classes):
-                mean = get_column_value(row, f"class_{i}_mean", columns)
-                std = get_column_value(row, f"class_{i}_std", columns)
-                delta = get_column_value(row, f"class_{i}_delta", columns)
+            if only_temp:
+                # Handle only temp parameter: temp{X}
+                match = re.match(r"temp(\d+)", config)
+                if not match:
+                    logger.warning(f"Could not parse config name (expected tempX): {config}")
+                    continue
+
+                temp = match.group(1)
+                
+                for i in range(num_classes):
+                    mean = get_column_value(row, f"class_{i}_mean", columns)
+                    std = get_column_value(row, f"class_{i}_std", columns)
+                    delta = get_column_value(row, f"class_{i}_delta", columns)
+                    
+                    if mean is not None and std is not None and delta is not None:
+                        is_best = best_per_class.get(f"class_{i}") == config
+                        placeholder = f"temp{temp}_class{i}"
+                        placeholders[placeholder] = format_fidcell(mean, std, delta, bold=is_best)
+                
+                # Average column
+                mean = get_column_value(row, "average_mean", columns)
+                std = get_column_value(row, "average_std", columns)
+                delta = get_column_value(row, "average_delta", columns)
                 
                 if mean is not None and std is not None and delta is not None:
-                    placeholder = f"gamma{gamma}_temp{temp}_class{i}"
+                    is_best = best_per_class.get("avg") == config
+                    placeholder = f"temp{temp}_avg"
+                    placeholders[placeholder] = format_fidcell(mean, std, delta, bold=is_best)
+
+            else:
+                # Parse gamma and temp from config name (e.g., gamma1_temp10)
+                match = re.match(r"gamma(\d+)_temp(\d+)", config)
+                if not match:
+                    logger.warning(f"Could not parse config name: {config}")
+                    continue
+                
+                gamma = match.group(1)
+                temp = match.group(2)
+                
+                for i in range(num_classes):
+                    mean = get_column_value(row, f"class_{i}_mean", columns)
+                    std = get_column_value(row, f"class_{i}_std", columns)
+                    delta = get_column_value(row, f"class_{i}_delta", columns)
+                    
+                    if mean is not None and std is not None and delta is not None:
+                        is_best = best_per_class.get(f"class_{i}") == config
+                        placeholder = f"gamma{gamma}_temp{temp}_class{i}"
+                        placeholders[placeholder] = format_fidcell(mean, std, delta, bold=is_best)
+                
+                # Average column
+                mean = get_column_value(row, "average_mean", columns)
+                std = get_column_value(row, "average_std", columns)
+                delta = get_column_value(row, "average_delta", columns)
+                
+                if mean is not None and std is not None and delta is not None:
+                    is_best = best_per_class.get("avg") == config
+                    placeholder = f"gamma{gamma}_temp{temp}_avg"
+                    placeholders[placeholder] = format_fidcell(mean, std, delta, bold=is_best)
+                std = get_column_value(row, "average_std", columns)
+                delta = get_column_value(row, "average_delta", columns)
+                
+                if mean is not None and std is not None and delta is not None:
+                    placeholder = f"gamma{gamma}_temp{temp}_avg"
                     placeholders[placeholder] = format_fidcell(mean, std, delta)
-            
-            # Average column
-            mean = get_column_value(row, "average_mean", columns)
-            std = get_column_value(row, "average_std", columns)
-            delta = get_column_value(row, "average_delta", columns)
-            
-            if mean is not None and std is not None and delta is not None:
-                placeholder = f"gamma{gamma}_temp{temp}_avg"
-                placeholders[placeholder] = format_fidcell(mean, std, delta)
     
     logger.info(f"Generated {len(placeholders)} placeholder mappings")
     return placeholders
@@ -366,6 +413,12 @@ Example usage:
     )
     
     parser.add_argument(
+        "--only-temp",
+        action="store_true",
+        help="Parse configs as 'tempX' instead of 'gammaX_tempY'",
+    )
+
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -412,6 +465,7 @@ def main():
         df,
         num_classes=args.num_classes,
         bold_best=not args.no_bold_best,
+        only_temp=args.only_temp,
     )
     
     # Fill template
