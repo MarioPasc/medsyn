@@ -10,7 +10,7 @@ GT_PATH="/media/hddb/mario/data/medsyn/merged.npz"
 WEIGHTS_DIR="/media/hddb/mario/data/medsyn/pretrained/fid/"
 SAMPLES_DIR="/media/hddb/mario/data/medsyn/ablation_study"
 OUTPUT_DIR="/media/hddb/mario/results/medsyn"
-DEVICE=$DEVICE
+DEVICE="cuda:0"
 COUNTS=1000
 
 # Ensure output directory exists
