@@ -23,7 +23,7 @@ echo "==================================================="
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp05 "$SAMPLES_DIR/not_considering_minSNR/temp05_inference/temp05_inference.npz" \
+    --model temp05 "$SAMPLES_DIR/not_considering_minSNR/temp05_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp05_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
@@ -32,7 +32,7 @@ python medsyn/analysis/ddpm_performance/metrics/fid.py \
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp10 "$SAMPLES_DIR/not_considering_minSNR/temp10_inference/temp10_inference.npz" \
+    --model temp10 "$SAMPLES_DIR/not_considering_minSNR/temp10_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp10_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
@@ -41,7 +41,7 @@ python medsyn/analysis/ddpm_performance/metrics/fid.py \
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp15 "$SAMPLES_DIR/not_considering_minSNR/temp15_inference/temp15_inference.npz" \
+    --model temp15 "$SAMPLES_DIR/not_considering_minSNR/temp15_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp15_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
@@ -50,7 +50,7 @@ python medsyn/analysis/ddpm_performance/metrics/fid.py \
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp20 "$SAMPLES_DIR/not_considering_minSNR/temp20_inference/temp20_inference.npz" \
+    --model temp20 "$SAMPLES_DIR/not_considering_minSNR/temp20_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp20_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
@@ -59,7 +59,7 @@ python medsyn/analysis/ddpm_performance/metrics/fid.py \
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp25 "$SAMPLES_DIR/not_considering_minSNR/temp25_inference/temp25_inference.npz" \
+    --model temp25 "$SAMPLES_DIR/not_considering_minSNR/temp25_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp25_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
@@ -68,7 +68,7 @@ python medsyn/analysis/ddpm_performance/metrics/fid.py \
 
 python medsyn/analysis/ddpm_performance/metrics/fid.py \
     --ground-truth $GT_PATH \
-    --model temp30 "$SAMPLES_DIR/not_considering_minSNR/temp30_inference/temp30_inference.npz" \
+    --model temp30 "$SAMPLES_DIR/not_considering_minSNR/temp30_inference.npz" \
     --output "$OUTPUT_DIR/not_considering_minSNR/fid/temp30_fid.csv" \
     --counts $COUNTS \
     --weights-dir "$WEIGHTS_DIR" \
