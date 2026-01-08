@@ -44,9 +44,6 @@ Usage:
     --verbose \
     --device cuda:1
 
-
-
-
 Output CSV format:
     model_name,class_0_mean,class_0_std,...,average_mean,average_std
 """
