@@ -210,6 +210,7 @@ def create_subsets(
     1. Extracts all samples for the given class
     2. Shuffles them with a fixed seed for reproducibility
     3. Splits into non-overlapping chunks of size subset_size
+    4. Discards remaining samples that don't form a full subset
 
     Args:
         images: All images [N, C, H, W]
@@ -220,7 +221,7 @@ def create_subsets(
 
     Returns:
         List of image tensors, each of shape [subset_size, C, H, W]
-        (last subset may be smaller if not evenly divisible)
+        Only full subsets are returned; partial subsets are discarded.
     """
     # Extract class samples
     mask = labels == class_id
@@ -234,6 +235,11 @@ def create_subsets(
     indices = torch.randperm(len(class_images), generator=generator)
     shuffled_images = class_images[indices]
 
+    # Calculate how many full subsets we can create
+    num_full_subsets = len(shuffled_images) // subset_size
+    samples_used = num_full_subsets * subset_size
+    samples_discarded = len(shuffled_images) - samples_used
+
     # Split into non-overlapping subsets
     subsets = []
     for i in range(0, len(shuffled_images), subset_size):
@@ -241,9 +247,10 @@ def create_subsets(
         if len(subset) == subset_size:  # Only include full subsets
             subsets.append(subset)
 
-    logger.debug(
-        f"Created {len(subsets)} subsets of size {subset_size} "
-        f"for class {class_id} (total samples: {len(class_images)})"
+    logger.info(
+        f"Class {class_id}: {len(class_images)} total samples -> "
+        f"{len(subsets)} subsets × {subset_size} = {samples_used} used, "
+        f"{samples_discarded} discarded"
     )
 
     return subsets

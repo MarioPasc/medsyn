@@ -477,7 +477,16 @@ Example usage:
         "--ground-truth",
         type=Path,
         required=True,
-        help="Path to ground truth NPZ file",
+        help="Path to ground truth NPZ file (merged dataset with real + synthetic)",
+    )
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=["train", "val", "test"],
+        default="train",
+        help="Split to use for real ground truth samples (default: train). "
+             "Synthetic samples are always from train split.",
     )
 
     parser.add_argument(
@@ -570,6 +579,7 @@ def main():
     setup_logging(args.verbose)
     logger.info("Starting FID computation")
     logger.info(f"Device: {args.device}")
+    logger.info(f"Ground truth split: {args.split}")
     logger.info(f"Counts per computation: {args.counts}")
     logger.info(f"Number of classes: {args.num_classes}")
 
@@ -577,9 +587,9 @@ def main():
     if args.weights_dir:
         setup_inception_weights_path(args.weights_dir)
 
-    # Load ground truth
-    logger.info(f"Loading ground truth from: {args.ground_truth}")
-    gt_data = load_npz_data(args.ground_truth, split="train")
+    # Load ground truth from specified split (real samples only)
+    logger.info(f"Loading ground truth from: {args.ground_truth} (split={args.split})")
+    gt_data = load_npz_data(args.ground_truth, split=args.split)
     gt_images = gt_data["images"]
     gt_labels = gt_data["labels"]
     gt_is_synth = gt_data["is_synth"]
@@ -588,7 +598,7 @@ def main():
     real_mask = ~gt_is_synth
     gt_images = gt_images[real_mask]
     gt_labels = gt_labels[real_mask]
-    logger.info(f"Using {len(gt_images)} real ground truth images")
+    logger.info(f"Using {len(gt_images)} real ground truth images from {args.split} split")
 
     # Validate ground truth
     logger.info("Validating ground truth class counts...")

@@ -823,12 +823,12 @@ Examples:
 
   # Balance classes and expand uniformly with remaining synthetic data
   python -m medsyn.utils.merge_synth_with_original \
-    --original /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/PathMNIST.npz \
-    --synthetic /media/mpascual/Sandisk2TB1/research/medsyn/synthetic_samples/AdamW_Batch64_lowt_enhancement_gamma5_generated \
-    --output /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_synth.npz \
+    --original /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/PathMNIST.npz \
+    --synthetic /media/mpascual/Sandisk2TB/research/medsyn/synthetic_samples/not_considering_minSNR/temp10_inference \
+    --output /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_synth.npz \
     --sanity-check \
     --account-for-imbalances \
-    --balancing-csv /media/mpascual/Sandisk2TB1/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_class_counts.csv
+    --balancing-csv /media/mpascual/Sandisk2TB/research/medsyn/PathMNIST/merged_datasets/cfg_medsyn_class_counts.csv
 
   # Merge with a single synthetic NPZ file (already in expected format)
   python -m medsyn.utils.merge_synth_with_original \
