@@ -1,0 +1,56 @@
+# CBDM Configuration for DermaMNIST
+# Class-Balancing Diffusion Models
+#
+# Usage:
+#   cbdm-train config/adapters/cbdm_dermamnist.yaml
+#   cbdm-generate config/adapters/cbdm_dermamnist.yaml --num-samples 1000
+#
+# Environment variables:
+#   DATASET_PATH: Root directory for NPZ datasets
+#   OUTPUT_DIR: Directory for model outputs
+
+data:
+  dataset_name: dermamnist
+  npz_path: "${DATASET_PATH}/dermamnist_64.npz"
+  image_size: 64
+  num_workers: 4
+
+model:
+  ch: 128
+  ch_mult: [1, 2, 2, 2]
+  attn: [1]
+  num_res_blocks: 2
+  dropout: 0.1
+
+diffusion:
+  T: 1000
+  beta_1: 1.0e-4
+  beta_T: 0.02
+
+training:
+  lr: 2.0e-4
+  total_steps: 200000
+  batch_size: 64
+  warmup: 5000
+  ema_decay: 0.9999
+  grad_clip: 1.0
+  # Class-balancing settings
+  cb: true
+  tau: 1.0
+  cfg: true
+  finetune: false
+  # Logging and checkpointing
+  log_interval: 100
+  sample_interval: 10000
+  save_interval: 50000
+  num_classes: 7
+  output_dir: "${OUTPUT_DIR}/cbdm_dermamnist"
+
+generation:
+  omega: 0.0
+  method: cfg
+  num_samples: 64
+  checkpoint_path: null
+
+hardware:
+  device: cuda

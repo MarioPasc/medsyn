@@ -1,0 +1,45 @@
+# DistDiff Guide Model Training Configuration for BloodMNIST
+#
+# This config is for training the guide model (classifier) used for
+# prototype-guided synthetic image generation.
+#
+# Usage:
+#   distdiff-train config/adapters/distdiff_bloodmnist_train.yaml
+#
+# Environment variables:
+#   DATASET_PATH: Root directory for NPZ datasets
+#   OUTPUT_DIR: Directory for model outputs
+#
+# Prerequisites:
+#   pip install -e ".[distdiff]"
+
+data:
+  dataset_name: bloodmnist
+  npz_path: "${DATASET_PATH}/bloodmnist_64.npz"
+  image_size: 64
+  num_workers: 4
+
+model:
+  # Architecture options: open_clip_vit_b32, resnet50, resnext50, mobilenetv2, wideresnet50
+  arch: open_clip_vit_b32
+  pretrained: true
+
+training:
+  epochs: 100
+  train_batch_size: 128
+  val_batch_size: 100
+  # Use lower lr for ViT models (1e-4), higher for ResNet (0.1)
+  lr: 1.0e-4
+  momentum: 0.9
+  weight_decay: 1.0e-4
+  dropout: 0.0
+  train_fc: false
+  schedule: [41, 81]
+  gamma: 0.1
+  output_dir: "${OUTPUT_DIR}/distdiff_bloodmnist_guide"
+  seed: 42
+  num_classes: 8
+
+hardware:
+  # Cache directory for pretrained weights (for offline HPC execution)
+  cache_dir: null

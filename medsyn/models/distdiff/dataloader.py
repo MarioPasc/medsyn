@@ -62,6 +62,9 @@ CUSTOM_TEMPLATES = {
     "pathmnist_npz": "A COLON PATHOLOGICAL IMAGE OF {}.",  # Paper specification: uppercase
     "breastmnist": "a photo of {} ultrasound image.",
     "bloodmnist": "a photo of {}, a type of cell.",
+    "dermamnist": "a dermoscopy image of {}.",
+    "dermamnist_npz": "a dermoscopy image of {}.",
+    "bloodmnist_npz": "a photo of {}, a type of cell.",
 }
 
 DATASET_PATH = './data/{}'

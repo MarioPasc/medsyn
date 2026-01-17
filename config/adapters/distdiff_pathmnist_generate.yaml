@@ -1,0 +1,75 @@
+# DistDiff Synthetic Image Generation Configuration for PathMNIST
+#
+# This config is for generating synthetic images using Stable Diffusion
+# with prototype-guided sampling.
+#
+# Usage:
+#   distdiff-generate config/adapters/distdiff_pathmnist_generate.yaml
+#   distdiff-generate config/adapters/distdiff_pathmnist_generate.yaml --parallel 4
+#
+# Environment variables:
+#   DATASET_PATH: Root directory for NPZ datasets
+#   OUTPUT_DIR: Directory for outputs
+#
+# Prerequisites:
+#   pip install -e ".[distdiff]"
+#   Train guide model first: distdiff-train config/adapters/distdiff_pathmnist_train.yaml
+
+data:
+  dataset_name: pathmnist
+  npz_path: "${DATASET_PATH}/pathmnist_64.npz"
+  image_size: 64
+  num_workers: 0
+
+guide_model:
+  arch: open_clip_vit_b32
+  # Path to the trained guide model checkpoint
+  checkpoint_path: "${OUTPUT_DIR}/distdiff_pathmnist_guide/model_best.pth.tar"
+
+stable_diffusion:
+  pretrained_model_name_or_path: "CompVis/stable-diffusion-v1-4"
+  resolution: 512
+  guidance_scale: 7.5
+
+guidance:
+  # Guidance type: transform_guidance or direct_guidance
+  type: transform_guidance
+  # Optimize targets: global_prototype, local_prototype, or global_prototype-local_prototype
+  optimize_targets: "global_prototype-local_prototype"
+  # Number of local prototypes per class
+  K: 3
+  # Learning rate for optimization
+  rho: 10.0
+  # Scale for global/local scores
+  gs: 1.0
+  ls: 1.0
+  constraint_value: 0.8
+  # Guidance step and period
+  guidance_step: 1
+  guidance_period: 1
+  # Noising/unnoising strength (1.0 = full destruction)
+  strength: 0.9
+
+generation:
+  # Number of synthetic images per original sample
+  num_images_per_sample: 4
+  # Number of diffusion steps
+  steps: 50
+  seed: 42
+  # Split settings for parallel generation
+  total_split: 1
+  split: 0
+  output_dir: "${OUTPUT_DIR}/distdiff_pathmnist_synthetic"
+  num_classes: 9
+
+hardware:
+  train_batch_size: 2
+  val_batch_size: 1
+  # Mixed precision: null, fp16, or bf16
+  mixed_precision: fp16
+  # Cache directory for models (for offline HPC execution)
+  cache_dir: null
+  local_files_only: false
+
+# Language enhancement (use enhanced text prompts)
+language_enhance: false

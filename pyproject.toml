@@ -101,6 +101,29 @@ distdiff = [
     # "cutmix @ git+https://github.com/ildoonet/cutmix",  # Commented out - install manually if needed
 ]
 
+# Optional dependencies for CBDM (Class-Balancing Diffusion Models)
+# Install with: pip install -e ".[cbdm]"
+cbdm = [
+    "absl-py>=1.0.0",
+    "tensorboardX>=2.4",
+]
+
+# Optional dependencies for MedFusion
+# Install with: pip install -e ".[medfusion]"
+medfusion = [
+    "pytorch-lightning>=2.0.0",
+    "monai>=1.0.0",
+    "torchio>=0.18.0",
+]
+
+# Install all competitor model dependencies
+# Install with: pip install -e ".[competitors]"
+competitors = [
+    "medsyn[cbdm]",
+    "medsyn[medfusion]",
+    "medsyn[distdiff]",
+]
+
 [project.urls]
 Homepage = "https://github.com/MarioPasc/medsyn"
 Documentation = "https://github.com/MarioPasc/medsyn#readme"
@@ -118,6 +141,15 @@ ccddpm-audit = "medsyn.analysis.ddpm_performance.audit_ccddpm_privacy:cli_main"
 medsyn-analyze-embeddings = "medsyn.analysis.visualize_embedding_evolution:main"
 train-classifier = "medsyn.cli.train_classifier:main"
 execute-all-classifiers = "medsyn.cli.execute_all_classifiers:main"
+# CBDM (Class-Balancing Diffusion Models) CLI
+cbdm-train = "medsyn.cli.train_cbdm:main"
+cbdm-generate = "medsyn.cli.generate_cbdm:main"
+# MedFusion CLI
+medfusion-train = "medsyn.cli.train_medfusion:main"
+medfusion-generate = "medsyn.cli.generate_medfusion:main"
+# DistDiff CLI
+distdiff-train = "medsyn.cli.train_distdiff:main"
+distdiff-generate = "medsyn.cli.generate_distdiff:main"
 
 [tool.setuptools]
 packages = [
@@ -130,7 +162,11 @@ packages = [
     "medsyn.models.ccDDPM",
     "medsyn.models.ccDDPM.engine",
     "medsyn.utils",
-    "medsyn.analysis"
+    "medsyn.analysis",
+    "medsyn.adapters",
+    "medsyn.adapters.cbdm",
+    "medsyn.adapters.medfusion",
+    "medsyn.adapters.distdiff",
 ]
 
 [tool.setuptools.package-data]

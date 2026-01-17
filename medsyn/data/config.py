@@ -36,8 +36,8 @@ class PostprocessNpzCfg:
 
 @dataclass(frozen=True)
 class DataCfg:
-    """Data configuration for MedMNIST PathMNIST dataset."""
-    flag: Literal["pathmnist"] = "pathmnist"
+    """Data configuration for MedMNIST datasets (PathMNIST, BloodMNIST, DermaMNIST)."""
+    flag: Literal["pathmnist", "bloodmnist", "dermamnist"] = "pathmnist"
     size: int = 28                    # 28 is default MedMNIST size
     download_dir: str = "./data_raw"  # where original .npz will live
     seed: int = 17

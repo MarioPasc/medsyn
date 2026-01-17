@@ -1,0 +1,69 @@
+# MedFusion Configuration for BloodMNIST
+# Medical Diffusion Models with PyTorch Lightning
+#
+# Usage:
+#   medfusion-train config/adapters/medfusion_bloodmnist.yaml
+#   medfusion-generate config/adapters/medfusion_bloodmnist.yaml --num-samples 1000
+#
+# Environment variables:
+#   DATASET_PATH: Root directory for NPZ datasets
+#   OUTPUT_DIR: Directory for model outputs
+#
+# Prerequisites:
+#   pip install -e ".[medfusion]"
+
+data:
+  dataset_name: bloodmnist
+  npz_path: "${DATASET_PATH}/bloodmnist_64.npz"
+  image_size: 64
+
+model:
+  noise_estimator:
+    in_ch: 3
+    out_ch: 3
+    spatial_dims: 2
+    hid_chs: [64, 128, 256, 512]
+    kernel_sizes: [3, 3, 3, 3]
+    strides: [1, 2, 2, 2]
+    num_res_blocks: 2
+    act_name: swish
+    norm_name: group
+    attention_levels: [1]
+    dropout: 0.0
+    use_self_conditioning: false
+    estimate_variance: false
+    num_classes: 8
+
+  noise_scheduler:
+    timesteps: 1000
+    beta_start: 0.002
+    beta_end: 0.02
+    schedule_strategy: scaled_linear
+
+pipeline:
+  estimator_objective: x_T
+  classifier_free_guidance_dropout: 0.5
+  do_input_centering: true
+  clip_x0: true
+  use_ema: true
+  ema_decay: 0.9999
+
+training:
+  max_epochs: 200
+  batch_size: 32
+  num_workers: 8
+  lr: 1.0e-4
+  accelerator: auto
+  precision: "32"
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 50
+  sample_every_n_steps: 1000
+  output_dir: "${OUTPUT_DIR}/medfusion_bloodmnist"
+
+generation:
+  checkpoint_path: null
+  num_samples: 64
+  guidance_scale: 1.0
