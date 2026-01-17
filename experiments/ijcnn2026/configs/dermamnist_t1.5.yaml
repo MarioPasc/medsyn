@@ -1,0 +1,162 @@
+# DermaMNIST ccDDPM Training Configuration - Temperature 1.5
+# IJCNN 2026 Experiments
+
+data:
+  flag: dermamnist
+  size: 64
+  download_dir: ${DATA_RAW_DIR}
+  save_png:
+    enabled: false
+  postprocess_npz:
+    enabled: true
+    npz_path: ${DATASET_PATH}
+  seed: 23102003
+  num_workers: 4
+  reduction:
+    strategy: fraction
+    train: 1.00
+    val: 1.00
+    test: 1.00
+
+ccddpm:
+  dist:
+    enabled: false
+    backend: nccl
+    num_gpus: 1
+    find_unused_parameters: false
+    broadcast_buffers: true
+    grad_accum_steps: 1
+    seed_offset: 0
+
+  logging:
+    embeddings:
+      enabled: false
+
+  dataloader:
+    type: npz
+
+  augmentation:
+    enabled: true
+    probability: 0.5
+    preserve_range: true
+    normalize_after_augment: true
+    transforms:
+      - name: HorizontalFlip
+        p: 0.5
+      - name: VerticalFlip
+        p: 0.5
+      - name: RandomBrightnessContrast
+        p: 0.3
+        brightness_limit: 0.1
+        contrast_limit: 0.1
+
+  denoising_unet:
+    model_channels: 128
+    channel_mult: [1, 2, 2, 4]
+    layers_per_block: 2
+    down_block_types:
+      - DownBlock2D
+      - AttnDownBlock2D
+      - AttnDownBlock2D
+      - AttnDownBlock2D
+    up_block_types:
+      - AttnUpBlock2D
+      - AttnUpBlock2D
+      - AttnUpBlock2D
+      - UpBlock2D
+    add_attention: true
+    attention_head_dim: 32
+    norm_num_groups: 32
+    norm_eps: 1.0e-5
+    dropout: 0.05
+    time_embedding_type: positional
+    resnet_time_scale_shift: scale_shift
+    act_fn: silu
+
+  train:
+    image_size: 64
+    in_channels: 3
+    class_embed_dim: 64
+    num_classes: 7  # DermaMNIST has 7 classes
+    batch_size: 64
+    epochs: 200
+
+    early_stopping:
+      patience: 15
+      metric: "psnr_ssim_composite"
+      psnr_weight: 1.0
+      ssim_weight: 1.0
+      ema_alpha: 0.7
+      use_ema_for_stopping: true
+      min_delta: 0.001
+
+    mixed_precision: true
+    grad_clip_norm: 1.0
+    guidance_p_uncond: 0.1
+
+    ema_use: true
+    ema_decay: 0.9999
+
+    use_min_snr: false
+    min_snr_gamma: 1.0
+    per_class_loss_weighting: true
+    per_class_weight_temperature: 1.5  # Temperature = 1.0
+
+    ckpt_every_epochs: 10
+    use_tqdm: false
+    skip_nonfinite_grads: true
+    output_dir: ${OUTPUT_DIR}
+
+    lr_scheduler:
+      type: "linear_warmup_cosine_annealing_lr"
+      max_lr: 1.0e-4
+      pct_start: 0.3
+      div_factor: 25.0
+      final_div_factor: 1000.0
+      eta_min: 1.0e-7
+      warmup_epochs: 20
+      warmup_start_factor: 0.001
+
+  optimizer:
+    type: "adamw"
+    lr: 1.0e-4
+    wd: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    amsgrad: false
+
+  sched:
+    num_train_timesteps: 1000
+    beta_start: 1.0e-4
+    beta_end: 2.0e-2
+    beta_schedule: squaredcos_cap_v2
+    prediction_type: epsilon
+
+  infer:
+    guidance_scale: 2.0
+    sampler: ddim
+    eta: 0.0
+    num_inference_steps: 100
+    out_dir: ${OUTPUT_DIR}/samples
+
+generate:
+  model_type: ccddpm
+  checkpoint: ${OUTPUT_DIR}/ckpts/best.pt
+  npz_with_synth_images:
+    save_to: ${OUTPUT_DIR}/synth
+    train:
+      classes:
+        0: 10000
+        1: 10000
+        2: 10000
+        3: 10000
+        4: 10000
+        5: 10000
+        6: 10000
+
+fid:
+  enabled: false
+  samples_per_class: 100
+  batch_size: 32
+  min_samples: 50
+  weights_path: ${FID_WEIGHTS_PATH}
